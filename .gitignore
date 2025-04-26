@@ -2,7 +2,7 @@
 Attachments/*
 
 # 保留文件夹结构，但忽略其中的所有文件
-!Attachments/.gitkeep
+.gitkeep
 
 # 忽略所有脚本文件
 *.sh
