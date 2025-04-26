@@ -1,31 +1,76 @@
 # 忽略自定义文件夹及其中所有内容
-Attachments/
+Attachments/*
 
-# 忽略临时文件
+# 保留文件夹结构，但忽略其中的所有文件
+!Attachments/.gitkeep
+
+# 忽略所有脚本文件
+*.sh
+*.bat
+*.ps1
+
+# 忽略备份和临时文件
+*.bak
 *.tmp
 *.temp
-*.bak
 *.swp
 
-# 忽略 macOS 系统生成的文件
-.DS_Store
-
-# 忽略 Windows 系统生成的文件
-Thumbs.db
-desktop.ini
-
-# 忽略日志文件
+# 忽略所有日志文件
 *.log
 
-# 忽略 VSCode 编辑器的配置文件（如果使用 VSCode）
+# 忽略所有数据文件
+*.csv
+*.json
+*.xlsx
+*.xls
+*.xml
+*.db
+*.sqlite
+
+# Windows 系统生成的垃圾文件
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux 系统缓存文件
+*~
+
+# 忽略 macOS/Linux 上的 .DS_Store (有时候拷贝文件会有)
+.DS_Store
+
+# VS Code 编辑器配置文件夹
 .vscode/
 
-# 忽略 Jupyter Notebook 的临时 checkpoints 文件夹
+# Markdown 编辑器生成的缓存（有些编辑器会生成）
+*.preview/
+*.md.cache
+
+# 忽略 LaTeX 编译中间文件
+*.aux
+*.bbl
+*.blg
+*.brf
+*.idx
+*.ilg
+*.ind
+*.lof
+*.log
+*.lot
+*.out
+*.toc
+*.acn
+*.acr
+*.alg
+*.glg
+*.glo
+*.gls
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# Jupyter Notebook 自动生成的检查点
 .ipynb_checkpoints/
 
-# 忽略 Python 虚拟环境（如果用 Python）
+# Python 虚拟环境（如果未来有用）
 venv/
 .env/
-
-# 忽略 Markdown 编辑器生成的预览缓存
-*.preview/
