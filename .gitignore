@@ -1,8 +1,10 @@
 # 忽略自定义文件夹及其中所有内容
 Attachments/*
+.husky/*
 
 # 保留文件夹结构，但忽略其中的所有文件
 .gitkeep
+.husky
 
 # 环境配置
 .env
