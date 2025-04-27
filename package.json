@@ -1,0 +1,40 @@
+{
+  "name": "research-diary",
+  "version": "1.0.0",
+  "description": "This is for recording my daily progress, mistakes, and discoveries since April 2025.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepare": "husky install",
+    "commit": "npx cz",
+    "lint": "eslint . --ext .js,.ts,.jsx,.tsx",
+    "format": "prettier --write ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MySummertime/Research-Diary.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/MySummertime/Research-Diary/issues"
+  },
+  "homepage": "https://github.com/MySummertime/Research-Diary#readme",
+  "devDependencies": {
+    "@commitlint/config-conventional": "^19.8.0",
+    "commitizen": "^4.3.1",
+    "commitlint": "^19.8.0",
+    "cz-customizable": "^7.4.0",
+    "eslint": "^9.25.1",
+    "eslint-plugin-prettier": "^5.2.6",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.1",
+    "prettier": "^3.5.3"
+  },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-customizable"
+    }
+  }
+}
