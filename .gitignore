@@ -82,7 +82,7 @@ __pycache__/
 *$py.class
 
 # Virtual environment
-Projects/**/*env*
+Projects/**/*env*/
 
 # Unit test / coverage reports
 .pytest_cache/
