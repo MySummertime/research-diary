@@ -45,9 +45,6 @@ Desktop.ini
 dist/
 build/
 
-# VS Code 编辑器配置文件夹
-.vscode/
-
 # Markdown 编辑器生成的缓存（有些编辑器会生成）
 *.preview/
 *.md.cache

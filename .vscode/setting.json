@@ -1,0 +1,51 @@
+{
+  "terminal.integrated.automationProfile.windows": {},
+  "terminal.integrated.defaultProfile.windows": "Command Prompt",
+
+  "security.workspace.trust.untrustedFiles": "open",
+
+  "workbench.colorCustomizations": {},
+  "workbench.settings.applyToAllProfiles": ["terminal.integrated.defaultProfile.windows"],
+  "workbench.iconTheme": "vscode-icons",
+
+  "files.eol": "\n",
+  "files.exclude": {
+    "**/.git": true,
+    "**/.DS_Store": true,
+    "**/node_modules": true
+  },
+  "search.exclude": {
+    "**/node_modules": true
+  },
+
+  "python.languageServer": "Pylance",
+  "python.analysis.typeCheckingMode": "standard",
+  "python.analysis.aiCodeActions": {
+    "implementAbstractClasses": true
+  },
+  "python.analysis.exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.venv",
+    "**/env",
+    "**/build",
+    "**/dist"
+  ],
+
+  "editor.formatOnSave": true,
+
+  "python.formatting.provider": "black",
+  "python.formatting.blackEnabled": true,
+  "python.formatting.blackArgs": ["--line-length", "100"],
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+
+  "python.linting.enabled": true,
+  "python.linting.flake8Enabled": true,
+  "python.linting.flake8Args": ["--max-line-length=100", "--ignore=E203,W503"],
+
+  "python.linting.mypyEnabled": true,
+  "python.linting.mypyArgs": ["--strict"],
+  "python.linting.lintOnSave": true
+}
