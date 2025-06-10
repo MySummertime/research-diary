@@ -9,4 +9,8 @@ module.exports = {
   bracketSpacing: true, // 对象大括号内空格
   arrowParens: 'always', // 箭头函数参数总是加括号
   endOfLine: 'lf', // 换行符使用 LF
+
+  plugins: [
+    'prettier-plugin-toml', // 支持 prettier 对 TOML 文件的格式化
+  ],
 };

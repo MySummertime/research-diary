@@ -19,7 +19,7 @@
   },
 
   "python.languageServer": "Pylance",
-  "python.analysis.typeCheckingMode": "standard",
+  "python.analysis.typeCheckingMode": "basic",
   "python.analysis.aiCodeActions": {
     "implementAbstractClasses": true
   },
@@ -28,8 +28,10 @@
     "**/__pycache__",
     "**/.venv",
     "**/env",
+    "**/envs",
     "**/build",
-    "**/dist"
+    "**/dist",
+    "**/data"
   ],
 
   "editor.formatOnSave": true,
@@ -46,6 +48,6 @@
   "python.linting.flake8Args": ["--max-line-length=100", "--ignore=E203,W503"],
 
   "python.linting.mypyEnabled": true,
-  "python.linting.mypyArgs": ["--strict"],
+  "python.linting.mypyArgs": [],
   "python.linting.lintOnSave": true
 }

@@ -1,0 +1,12 @@
+# Projects/VaR/backend/pyproject.toml
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.mypy]
+warn_unused_configs = True
+disallow_untyped_defs = True
+python_version = 3.13
+check_untyped_defs = True
+# no_implicit_optional = True
+# warn_return_any = True
