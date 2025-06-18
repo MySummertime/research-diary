@@ -89,6 +89,7 @@ htmlcov/
 .nox/
 .tox/
 .mypy_cache/
+.ruff_cache/
 .ipynb_checkpoints/
 .ipynb_vendored/
 

@@ -16,38 +16,5 @@
   },
   "search.exclude": {
     "**/node_modules": true
-  },
-
-  "python.languageServer": "Pylance",
-  "python.analysis.typeCheckingMode": "basic",
-  "python.analysis.aiCodeActions": {
-    "implementAbstractClasses": true
-  },
-  "python.analysis.exclude": [
-    "**/node_modules",
-    "**/__pycache__",
-    "**/.venv",
-    "**/env",
-    "**/envs",
-    "**/build",
-    "**/dist",
-    "**/data"
-  ],
-
-  "editor.formatOnSave": true,
-
-  "python.formatting.provider": "black",
-  "python.formatting.blackEnabled": true,
-  "python.formatting.blackArgs": ["--line-length", "100"],
-  "[python]": {
-    "editor.defaultFormatter": "ms-python.black-formatter"
-  },
-
-  "python.linting.enabled": true,
-  "python.linting.flake8Enabled": true,
-  "python.linting.flake8Args": ["--max-line-length=100", "--ignore=E203,W503"],
-
-  "python.linting.mypyEnabled": true,
-  "python.linting.mypyArgs": [],
-  "python.linting.lintOnSave": true
+  }
 }

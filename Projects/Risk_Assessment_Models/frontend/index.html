@@ -1,0 +1,116 @@
+<!---Projects/Risk_Assessment_Models/frontend/index.html-->
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title></title>
+
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📊</text></svg>"
+    />
+
+    <link rel="stylesheet" href="style.css" />
+
+    <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js" defer></script>
+    <script src="https://unpkg.com/popper.js@1.16.1/dist/umd/popper.min.js" defer></script>
+    <script src="https://unpkg.com/tippy.js@6.3.7/dist/tippy-bundle.umd.min.js" defer></script>
+    <script src="https://unpkg.com/cytoscape-popper/cytoscape-popper.js" defer></script>
+  </head>
+  <body>
+    <header class="main-header">
+      <h1 data-i18n-key="headerTitle"></h1>
+      <div class="header-controls">
+        <div class="lang-switch-container">
+          <span>EN</span>
+          <label class="lang-switch">
+            <input type="checkbox" id="language-toggle" />
+            <span class="slider round"></span>
+          </label>
+          <span>中文</span>
+        </div>
+        <button
+          id="select-file-button"
+          class="button-primary"
+          data-i18n-key="selectFileBtn"
+        ></button>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <div class="graph-column">
+        <div id="cy"></div>
+      </div>
+
+      <div class="controls-column">
+        <div class="panel" id="solver-form-panel">
+          <div class="panel-header">
+            <h2 data-i18n-key="controlsTitle"></h2>
+            <button
+              type="submit"
+              class="button-primary"
+              data-i18n-key="calculateBtn"
+              form="solver-form"
+            ></button>
+          </div>
+          <form id="solver-form">
+            <div class="form-group">
+              <label for="src-input" data-i18n-key="sourceNodeLabel"></label>
+              <input type="number" id="src-input" name="src" required />
+            </div>
+            <div class="form-group">
+              <label for="dest-input" data-i18n-key="destNodeLabel"></label>
+              <input type="number" id="dest-input" name="dest" required />
+            </div>
+            <div class="form-group">
+              <label for="alpha-input" data-i18n-key="alphaLabel"></label>
+              <input
+                type="number"
+                id="alpha-input"
+                name="alpha"
+                step="0.00001"
+                min="0"
+                max="1"
+                required
+              />
+            </div>
+          </form>
+        </div>
+        <div class="panel" id="results-panel">
+          <h2 data-i18n-key="resultsTitle"></h2>
+          <div
+            id="results-output"
+            class="results-content"
+            data-i18n-key="resultsInitial"
+            data-i18n-base-text="resultsInitial"
+          ></div>
+        </div>
+      </div>
+    </main>
+
+    <div id="file-modal" class="modal">
+      <div class="modal-content">
+        <h3 data-i18n-key="modalTitle"></h3>
+        <select id="file-select-dropdown"></select>
+        <div class="modal-actions">
+          <button
+            id="submit-file-button"
+            class="button-primary"
+            data-i18n-key="modalConfirmBtn"
+          ></button>
+          <button
+            id="cancel-file-button"
+            class="button-secondary"
+            data-i18n-key="modalCancelBtn"
+          ></button>
+        </div>
+      </div>
+    </div>
+
+    <script src="script.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+// Projects/Risk_Assessment_Models/.vscode/launch.json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI (Uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["backend.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+      // Set the root path of Risk_Assessment_Models as the current workspace
+      "cwd": "${workspaceFolder}",
+      "env": {
+        // set PYTHONPATH as the current workspace，letting Python to find backend packages
+        "PYTHONPATH": "${workspaceFolder}/backend/envs/python.exe"
+      },
+      "justMyCode": true
+    }
+  ]
+}

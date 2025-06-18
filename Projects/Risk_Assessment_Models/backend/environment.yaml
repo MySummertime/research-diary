@@ -1,0 +1,14 @@
+# Projects/Risk Assessment Models/backend/environment.yaml
+
+name: conda_env
+channels:
+  - defaults
+  - conda-forge
+  - anaconda
+dependencies:
+  - python
+  - uvicorn
+  - fastapi
+  - pydantic
+  - ruff
+  - mypy

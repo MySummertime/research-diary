@@ -1,0 +1,29 @@
+# Projects/Risk Assessment Models/backend/pyproject.toml
+# This is a configuration file for MyPy, and Ruff.
+
+[tool.mypy]
+# MyPy is a Linter which only check for static type issues without fixing them.
+# Enforce strict but practical type checking rules.
+mypy_path = "."
+python_version = "3.13"
+warn_unused_configs = true
+disallow_untyped_defs = true
+# Exclude the 'envs' directory from type checking.
+exclude = [".git", "__pycache__", "envs", "dist", "build", ".mypy_cache", ".ruff_cache"]
+
+[tool.ruff]
+# Ruff is a Formatter as well as a Linter which checks for both static type issues and code style issues.
+line-length = 100
+indent-width = 4
+# Select the rules that Flake8 used to check (E for pycodestyle errors, F for pyflakes errors).
+lint.select = ["E", "F"]
+# Ignore the same rules that conflict with Black.
+lint.ignore = ["E203"]
+# Exclude the same folders from linting.
+exclude = [".git", "__pycache__", "envs", "dist", "build", ".mypy_cache", ".ruff_cache"]
+
+# Add a format section to enable Ruff's formatter.
+[tool.ruff.format]
+# Use single quotes for strings where possible.
+quote-style = "single"
+line-ending = "lf"

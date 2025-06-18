@@ -1,0 +1,331 @@
+/* --- Projects/Risk_Assessment_Models/frontend/style.css --- */
+
+/* --- 1. Global Variables & Base Styles --- */
+:root {
+  --primary-color: #007bff; /* A nice, professional blue */
+  --primary-hover-color: #0056b3;
+  --secondary-color: #6c757d;
+  --secondary-hover-color: #5a6268;
+  --background-color: #f8f9fa; /* Page background color */
+  --surface-color: #ffffff; /* Panel background color */
+  --text-color: #343a40; /* Main text color */
+  --text-muted-color: #6c757d; /* Muted text color */
+  --border-color: #dee2e6;
+  --shadow-color: rgba(0, 0, 0, 0.05);
+  --font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --border-radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--background-color);
+  color: var(--text-color);
+  line-height: 1.6;
+  /* Prevent the main body from scrolling on large screens; layout is handled by flexbox */
+  overflow: hidden;
+}
+
+/* --- 2. Main Page Layout --- */
+.main-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background-color: var(--surface-color);
+  border-bottom: 1px solid var(--border-color);
+  height: 70px; /* Fixed header height */
+}
+
+.main-header h1 {
+  font-size: 1.5rem;
+  color: var(--text-color);
+}
+
+.main-content {
+  display: flex;
+  height: calc(100vh - 70px); /* Full viewport height minus header height */
+  padding: 1rem;
+  gap: 1rem;
+}
+
+.graph-column {
+  flex: 2; /* Graph area takes up more space, asking for 2/3 of the space */
+  display: flex;
+  min-width: 0; /* A flexbox fix to prevent overflow */
+}
+
+.controls-column {
+  flex: 1; /* Controls area takes up less space, asking for 1/3 of the space */
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 320px; /* Ensure control panel has a minimum width */
+  max-width: 33.33%; /* Ensure control panel does not exceed 1/3 of the width */
+  min-height: 0; /* A flexbox fix to allow children to shrink properly */
+}
+
+#cy {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--border-color);
+  background-color: var(--surface-color);
+}
+
+/* --- 3. Components (Panels, Forms, Buttons) --- */
+.panel {
+  background-color: var(--surface-color);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 4px 12px var(--shadow-color);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-header {
+  display: flex; /* Use Flexbox for horizontal alignment */
+  justify-content: space-between; /* Push items to opposite ends */
+  align-items: center; /* Vertically align them in the middle */
+  margin-bottom: 1rem; /* Space below the header */
+  border-bottom: 1px solid var(--border-color); /* The line below the header */
+  padding-bottom: 0.5rem;
+}
+
+.panel-header .button-primary {
+  padding: 0.5rem 1rem; /* Make the button a bit smaller */
+  font-size: 0.9rem;
+}
+
+#solver-form-panel {
+  flex-shrink: 0; /* Prevent the control panel from shrinking */
+}
+
+#results-panel {
+  flex-grow: 1; /* Allow the results panel to fill all available vertical space */
+  min-height: 0; /* A flexbox fix to enable internal scrolling */
+}
+
+.panel h2 {
+  font-size: 1.2rem;
+  /* Remove the margin and border from the h2 itself, as they are now on .panel-header */
+  margin-bottom: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.results-content {
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: 'SF Mono', 'Courier New', monospace;
+  font-size: 0.9rem;
+  background-color: #f8f9fa;
+  padding: 1rem;
+  border-radius: calc(var(--border-radius) - 4px);
+  flex-grow: 1; /* Make the content area fill its parent panel */
+  overflow-y: auto; /* This is key: enables scrolling when content is long */
+}
+
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.form-group input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: calc(var(--border-radius) - 4px);
+  font-size: 1rem;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25);
+}
+
+.button-primary,
+.button-secondary {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1rem;
+  transition:
+    background-color 0.2s ease,
+    transform 0.1s ease;
+}
+
+.button-primary {
+  background-color: var(--primary-color);
+  color: white;
+}
+.button-primary:hover {
+  background-color: var(--primary-hover-color);
+}
+.button-primary:active {
+  transform: scale(0.98);
+}
+
+.button-secondary {
+  background-color: var(--secondary-color);
+  color: white;
+}
+.button-secondary:hover {
+  background-color: var(--secondary-hover-color);
+}
+
+/* --- 4. Language Toggle Switch --- */
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.lang-switch-container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-muted-color);
+}
+
+.lang-switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 26px;
+}
+
+.lang-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: 0.4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: '';
+  height: 18px;
+  width: 18px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  transition: 0.4s;
+}
+
+input:checked + .slider {
+  background-color: var(--primary-color);
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px var(--primary-color);
+}
+
+input:checked + .slider:before {
+  transform: translateX(24px);
+}
+
+.slider.round {
+  border-radius: 26px;
+}
+
+.slider.round:before {
+  border-radius: 50%;
+}
+
+/* --- 5. File Selection Modal --- */
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: none; /* Hidden by default */
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.modal.is-visible {
+  display: flex; /* Made visible by adding this class */
+  opacity: 1;
+}
+.modal-content {
+  background: var(--surface-color);
+  padding: 2rem;
+  border-radius: var(--border-radius);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+  width: 90%;
+  max-width: 500px;
+}
+.modal-content h3 {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+}
+#file-select-dropdown {
+  width: 100%;
+  padding: 0.75rem;
+  margin-bottom: 1.5rem;
+  border-radius: calc(var(--border-radius) - 4px);
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+}
+
+/* --- 6. Responsive Design (Media Queries) --- */
+@media (max-width: 992px) {
+  body {
+    overflow: auto; /* Re-enable body scrolling for smaller, vertical layouts */
+  }
+  .main-content {
+    flex-direction: column;
+    height: auto; /* Let height be determined by content */
+    overflow-y: auto; /* Allow the main content area to scroll */
+  }
+  .graph-column {
+    height: 60vh; /* Give the graph a fixed viewport height in vertical layout */
+  }
+  .controls-column {
+    min-width: unset; /* Remove min-width on small screens */
+  }
+}
+@media (max-width: 768px) {
+  .main-header {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+    height: auto;
+  }
+}

@@ -1,6 +1,6 @@
 # 10 classic risk evaluation models
 
-![10 risk models](../Attachments/img/risk%20models.png '10 risk evaluation models')
+![10 risk models](../Attachments/img/risk%20models.png "10 risk evaluation models")
 
 ## 1. 传统风险模型 Traditional Risk (TR)
 
