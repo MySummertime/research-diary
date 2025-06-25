@@ -11,6 +11,12 @@ Source:
 - 由于该模型计算复杂，Jin 等对其进行了近似计算，最终得到表中的 TR 模型。  
   [Jin H，Batta R．Objectives derived from viewing hazmat shipments as a sequence of independent Bernoulli trials［J］．Transportation Science，1997，31(3): 252－261.](https://doi.org/10.1287/trsc.31.3.252)
 
+Feature:
+
+- TR 模型具有 risk neutral 偏好，直接估算出事故后果的期望值。
+- 其精确模型可能单调、非凸，违反了路径单调性原则和属性单调性原则；
+- 其近似模型更易于优化。
+
 ## 2. 事故概率模型 Incident Probability (IP)
 
 Source:
@@ -113,9 +119,11 @@ Source:
 
 Feature:
 
-- 它可以通过改变置信水平 conficence level 来满足 risk unconcered, risk neutral, risk aversion 等不同的风险偏好。
+- VaR 模型可以通过改变 conficence level 来满足 risk unconcered, risk neutral, risk aversion 等偏好。
+- 可作为非离散、非凸的函数衡量风险，一般计算较为复杂。
 - 进行路径决策时，VaR 模型可生成多条路径。
-- 然而，它只关注不超过 VaR 值的风险，无法控制超过 VaR 值的风险。
+- 然而，它只关注不超过 VaR 值的风险，无法控制超过 VaR 值的风险，即尾部风险。
+- 适用于决策者有特定的风险承受水平，且尾部模型不可靠时。
 
 ## 10. 条件风险价值模型 Conditional Value-at-Risk (CVaR)
 
@@ -126,8 +134,7 @@ Source:
 
 Feature:
 
-- CVaR 模型提供灵活性、可扩展性和自适应风险偏好。
-- 它也可以通过改变置来反映 risk neutral, risk aversion 等不同的风险偏好。
+- CVaR 模型天然具有极端的 risk aversion 偏好。
+- 一般是连续的凸函数，通常更容易计算和优化，可转化为线性规划、凸优化等。
 - 进行路径决策时，CVaR 模型可生成多条路径。
-- 然而，它只关注于超过 VaR 值的风险。
-- 鉴于危险品运输的高风险并不会带来高回报，CVaR 被认为更适合这种背景下的风险评估。
+- 适用于估算极端尾部损失，或需要更鲁棒和全面的风险控制时。
