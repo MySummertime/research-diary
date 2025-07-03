@@ -1,0 +1,66 @@
+title: Frances Research Diary
+description: >-
+  A personal blog, knowledge base, and project log.
+url: "https://mysummertime.github.io"
+baseurl: "/research-diary"
+
+remote_theme: mmistakes/minimal-mistakes
+
+plugins:
+  - jekyll-include-cache
+  - jekyll-paginate
+  - jekyll-sitemap
+  - jekyll-feed
+  - jekyll-archives
+  - jekyll-seo-tag
+  - jekyll-remote-theme
+
+paginate: 5
+paginate_path: /page:num/
+
+author:
+  name: Frances
+  avatar: "/assets/avatar.png"
+  bio: Master's Student | Software Engineer | Blogger | Learner
+  location: Earth
+
+defaults:
+  - scope:
+      path: ""
+      type: "posts"
+    values:
+      layout: single
+      author_profile: true
+      read_time: true
+      comments: true
+      share: true
+      related: true
+  - scope:
+      path: "knowledge"
+      type: knowledge
+    values:
+      layout: single
+      author_profile: true
+
+collections:
+  knowledge:
+    output: true
+    permalink: /knowledge/:path/
+
+# Navigation links
+nav:
+  - title: "Home"
+    url: /
+  - title: "Blog"
+    url: /year-archive/
+  - title: "Knowledge"
+    url: /knowledge/
+  - title: "Categories"
+    url: /categories/
+  - title: "Tags"
+    url: /tags/
+  - title: "About"
+    url: /about/
+
+# Activate search
+search: true
