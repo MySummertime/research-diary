@@ -12,8 +12,8 @@ module.exports = {
 
   // --- Python Project 1: Risk_Assessment_Models ---
   // This glob specifically targets only the Python files within this project.
-  'Projects/Risk_Assessment_Models/backend/**/*.py': (filenames) => {
-    const projectPath = 'Projects/Risk_Assessment_Models/backend';
+  'projects/risk-assessment-models/backend/**/*.py': (filenames) => {
+    const projectPath = 'projects/risk-assessment-models/backend';
     const config = {
       condaEnv: `${projectPath}/envs`,
       pyprojectToml: `${projectPath}/pyproject.toml`,

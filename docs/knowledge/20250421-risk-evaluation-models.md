@@ -1,13 +1,21 @@
+---
+layout: default
+title: Risk Evaluation Models
+date: 2025-4-21
+---
+
+<small>{{ page.date | date: "%-d %B %Y" }}</small>
+
 # 10 classic risk evaluation models
 
-![10 risk models](../Attachments/img/risk%20models.png "10 risk evaluation models")
+![10 risk models](../assets/images/risk%20models.png "10 risk evaluation models")
 
 ## 1. 传统风险模型 Traditional Risk (TR)
 
 Source:
 
 - Alp 提出的 TR 模型旨在最小化危险货物卡车沿着路径运输过程中产生不良后果的期望值；  
-   [Alp E. Risk-based transportation planning practice: Overall methodology and a case example［J］．Information Systems and Operational Research，1995，33(1): 4－19．](https://www.researchgate.net/publication/259716076_Risk-Based_Transportation_Planning_Practice_Overall_Methodology_And_A_Case_Example)
+  [Alp E. Risk-based transportation planning practice: Overall methodology and a case example［J］．Information Systems and Operational Research，1995，33(1): 4－19．](https://www.researchgate.net/publication/259716076_Risk-Based_Transportation_Planning_Practice_Overall_Methodology_And_A_Case_Example)
 - 由于该模型计算复杂，Jin 等对其进行了近似计算，最终得到表中的 TR 模型。  
   [Jin H，Batta R．Objectives derived from viewing hazmat shipments as a sequence of independent Bernoulli trials［J］．Transportation Science，1997，31(3): 252－261.](https://doi.org/10.1287/trsc.31.3.252)
 
@@ -39,10 +47,10 @@ Feature:
 
 - PE 模型是 TR 模型的极端情况，只关注运输影响区域内的总后果，后果可以用人口密度和受影响面积的乘积来表示。
 
-> TR, IP, PE 是风险中性模型，因此经常被危险品运输公司所采用。  
-> 然而，在实际场景中，对危险品运输进行规划和决策的风险决策者还包括：政府部门、居民。  
-> 因此，在多决策者情景中，以上 3 种模型并不适用。  
-> PR, MV, DU, MM, CR 都是风险厌恶/规避模型。
+TR, IP, PE 是风险中性模型，因此经常被危险品运输公司所采用。  
+然而，在实际场景中，对危险品运输进行规划和决策的风险决策者还包括：政府部门、居民。  
+因此，在多决策者情景中，以上 3 种模型并不适用。  
+PR, MV, DU, MM, CR 都是风险厌恶/规避模型。
 
 ## 4. 感知风险模型 Perceived Risk (PR)
 
@@ -55,7 +63,7 @@ Feature:
 
 - PR 模型通过添加 **权重参数q** 来反映决策者对风险的偏好，在一定程度上可避免决策者的风险中性问题。
 
-> 以下 3 个模型：MV, DU, MM，均适用于需要避免大灾难的情况。
+以下 3 个模型：MV, DU, MM，均适用于需要避免大灾难的情况。
 
 ## 5. 均值-方差模型 Mean-Variance (MV)
 
@@ -90,7 +98,7 @@ Feature:
 
 - MM 模型旨在通过最小化整个运输过程中的最大风险来避免大灾难。
 
-> 以上 7 个模型都是单一属性的 single attribute，且**目标函数均有可加性**。
+以上 7 个模型都是单一属性的 single attribute，且**目标函数均有可加性**。
 
 ## 8. 条件概率风险模型 Conditional probability Risk (CR)
 
@@ -107,8 +115,8 @@ Feature:
   根据 CR 模型的公式来看，给定路径的总风险是一个比率，具体来说是所有路段上的风险之和的加权平均值，其中权重是所有路段上的事故概率。  
   这种不可加性意味着，如果增加路径中某个环节的事故概率，反而会降低给定路径上的总风险。
 
-> 使用以上 8 个模型进行路径决策时，只能得到一条路径，且没有明确考虑决策者的风险偏好。  
-> 以下 2 个模型：VaR, CVaR，既能满足不同决策者的风险偏好要求，又能解决其他模型的缺点，如缺乏可扩展性和表达性。
+使用以上 8 个模型进行路径决策时，只能得到一条路径，且没有明确考虑决策者的风险偏好。  
+以下 2 个模型：VaR, CVaR，既能满足不同决策者的风险偏好要求，又能解决其他模型的缺点，如缺乏可扩展性和表达性。
 
 ## 9. 风险价值模型 Value-at-Risk (VaR)
 

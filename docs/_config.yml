@@ -1,0 +1,23 @@
+# _config.yml
+
+# --- Basic Site Information ---
+# This is used for the browser tab title and the main heading of your site.
+title: Research Diary Frances
+description: "Knowledge base and research blog."
+url: "https://mysummertime.github.io"
+author: Frances
+baseurl: "/research-diary"
+
+# --- Theme and Plugins ---
+theme: jekyll-theme-minimal
+plugins:
+  - jekyll-feed # Creates an Atom feed (RSS) for your posts.
+
+# --- Markdown Processor Configuration ---
+# Configures how Jekyll processes Markdown files.
+kramdown:
+  # Enables GitHub Flavored Markdown (GFM), allowing features like tables,
+  # strikethroughs, and task lists.
+  input: GFM
+  # Prevents Jekyll from automatically inserting <br> tags at every newline.
+  hard_wrap: false

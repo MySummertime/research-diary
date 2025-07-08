@@ -1,101 +1,80 @@
-# 保留文件夹结构，但忽略其中的所有文件
-.gitkeep
-
-# 环境配置
-.env
-.env.local
-.env.*.local
-.envrc
-.envrc.local
-
-# 忽略所有脚本文件
-*.sh
-*.bat
-*.ps1
-
-# 忽略备份和临时文件
-*.bak
+# --- General ---
+# Ignore all log files.
+*.log
+# Ignore all temporary files.
 *.tmp
 *.temp
+# Ignore all backup files.
+*.bak
 *.swp
+*~
 
-# 忽略所有日志文件
-*.log
-
-# 忽略所有数据文件
-*.csv
-*.xlsx
-*.xls
-*.xml
-*.db
-*.sqlite
-
-# Windows 系统生成的垃圾文件
+# --- System & Editor Specific ---
+# Ignore macOS/Linux folder attributes.
+.DS_Store
+# Ignore Windows thumbnail cache and desktop configuration files.
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+# Ignore VSCode specific settings.
+# .vscode/
 
-# Linux 系统缓存文件
-*~
-
-# 忽略 macOS/Linux 上的 .DS_Store (有时候拷贝文件会有)
-.DS_Store
-
-# 构建目录
-dist/
+# --- Build & Dependency Directories ---
+# Ignore common build output directories.
 build/
+dist/
+# Ignore language-specific dependency directories.
+node_modules/
+.bundle/
+.vendor/
+# Ignore Python virtual environments.
+*env*/
+.venv/
+venv/
 
-# Markdown 编辑器生成的缓存（有些编辑器会生成）
-*.preview/
-*.md.cache
-
-# 忽略 LaTeX 编译中间文件
-*.aux
-*.bbl
-*.blg
-*.brf
-*.idx
-*.ilg
-*.ind
-*.lof
-*.log
-*.lot
-*.out
-*.toc
-*.acn
-*.acr
-*.alg
-*.glg
-*.glo
-*.gls
-*.fls
-*.fdb_latexmk
-*.synctex.gz
-
-# ----------python----------
-# Byte-compiled / optimized / DLL files
+# --- Language & Framework Specific ---
+# Python
+# Ignore Python bytecode, cache, and compiled files.
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual environment
-Projects/**/*env*/
-
-# Unit test / coverage reports
+# Ignore Python testing and linting cache.
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Ignore Jupyter Notebook checkpoints.
+.ipynb_checkpoints/
+.ipynb_vendored/
+# Ignore code coverage reports.
 .coverage
 .coverage.*
 htmlcov/
-.nox/
+# Ignore testing framework cache.
 .tox/
-.mypy_cache/
-.ruff_cache/
-.ipynb_checkpoints/
-.ipynb_vendored/
+.nox/
 
-# ----------Node.js----------
-node_modules/
-pnpm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
+# Jekyll / GitHub Pages
+# Ignore Jekyll build output and cache.
+_site/
+.jekyll-cache/
+
+# --- Configuration & Environment ---
+# Ignore environment variables files.
+.env
+.env.*
+.envrc
+.envrc.local
+
+# --- Data & Assets ---
+# It's generally better to be specific about which data files to ignore.
+# *.csv
+# *.xlsx
+# *.xls
+# *.xml
+# *.db
+# *.sqlite
+
+# --- Miscellaneous ---
+# The .gitkeep rule is for Git to track empty directories and doesn't need to be ignored.
+# The shell script rules (*.sh, *.bat, *.ps1) are too broad and have been removed.
+# It is better to make scripts executable and track them in Git.

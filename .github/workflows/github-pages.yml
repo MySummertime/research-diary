@@ -1,0 +1,56 @@
+# .github/workflows/github-pages.yml
+
+# The name of the workflow, which will be displayed in the Actions tab of your GitHub repository.
+name: Build and Deploy Jekyll site to GitHub Pages
+
+# --- Trigger Conditions ---
+# Controls when the workflow will run.
+on:
+  # Trigger the workflow on push events to the main branch.
+  push:
+    branches:
+      - main
+
+# --- Job Definition ---
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel.
+jobs:
+  # Defines a job named 'build_and_deploy'.
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+    # A sequence of tasks that will be executed as part of the job.
+    steps:
+      # --- Step 1: Checkout Code ---
+      # Checks out your repository's code so the job can access it.
+      - name: Checkout 🛎️
+        uses: actions/checkout@v4
+
+      # --- Step 2: Set up Ruby Environment ---
+      # Sets up a Ruby environment using a specific version and caches dependencies.
+      - name: Setup Ruby 💎
+        uses: ruby/setup-ruby@v1
+        with:
+          # Use a Ruby version that is known to be compatible with GitHub Pages gems.
+          ruby-version: "3.1"
+          # Network fix for local Docker+act testing
+        env:
+          GIT_HTTP_VERSION: "HTTP/1.1"
+
+      # --- Step 3: Install Dependencies ---
+      # Now run 'bundle install' as its own explicit step.
+      - name: Install dependencies 📦
+        run: bundle install
+
+      # --- Step 3: Build the Jekyll Site ---
+      # Runs the Jekyll build command from within the docs/ dorectory to generate the static site.
+      - name: Build site 🔨
+        run: bundle exec jekyll build
+        working-directory: "./docs"
+
+      # --- Step 5: Deploy to gh-pages Branch ---
+      # Uses a popular third-party action to push the built site to the gh-pages branch.
+      - name: Deploy 🚀
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs/_site

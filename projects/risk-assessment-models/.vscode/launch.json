@@ -8,7 +8,7 @@
       "request": "launch",
       "module": "uvicorn",
       "args": ["backend.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
-      // Set the root path of Risk_Assessment_Models as the current workspace
+      // Set the root path of risk-assessment-models as the current workspace
       "cwd": "${workspaceFolder}",
       "env": {
         // set PYTHONPATH as the current workspace，letting Python to find backend packages
