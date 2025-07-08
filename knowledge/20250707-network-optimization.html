@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Applications of Network Optimization | Research Diary Frances</title>
+<meta name="generator" content="Jekyll v4.4.1" />
+<meta property="og:title" content="Applications of Network Optimization" />
+<meta name="author" content="Frances" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="Knowledge base and research blog." />
+<meta property="og:description" content="Knowledge base and research blog." />
+<link rel="canonical" href="https://mysummertime.github.io/research-diary/knowledge/20250707-network-optimization.html" />
+<meta property="og:url" content="https://mysummertime.github.io/research-diary/knowledge/20250707-network-optimization.html" />
+<meta property="og:site_name" content="Research Diary Frances" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2025-07-07T00:00:00+00:00" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Applications of Network Optimization" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Frances"},"dateModified":"2025-07-07T00:00:00+00:00","datePublished":"2025-07-07T00:00:00+00:00","description":"Knowledge base and research blog.","headline":"Applications of Network Optimization","mainEntityOfPage":{"@type":"WebPage","@id":"https://mysummertime.github.io/research-diary/knowledge/20250707-network-optimization.html"},"url":"https://mysummertime.github.io/research-diary/knowledge/20250707-network-optimization.html"}</script>
+<!-- End Jekyll SEO tag -->
+
+    <link rel="stylesheet" href="/research-diary/assets/css/style.css?v=">
+    <!--[if lt IE 9]>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv.min.js"></script>
+    <![endif]-->
+    <!-- custom head start -->
+
+<link rel="shortcut icon" type="image/x-icon" href="/research-diary/assets/favicon.ico" />
+
+<!-- custom head end -->
+
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1><a href="https://mysummertime.github.io/research-diary/">Research Diary Frances</a></h1>
+
+        
+
+        <p>Knowledge base and research blog.</p>
+
+        
+
+        
+
+        
+      </header>
+      <section>
+
+      <p><small>7 July 2025</small></p>
+
+<h1 id="11-applications-of-network-optimization">11 Applications of Network Optimization</h1>
+
+<h2 id="一基础网络流量与路径问题核心子问题">一、基础网络流量与路径问题（核心子问题）</h2>
+
+<p>这类问题是网络优化的基础，不涉及复杂的资源约束或多维度决策，仅关注单一目标（如路径最短、流量最优）。</p>
+
+<ul>
+  <li>
+    <p><strong>Minimum Cost Flows（最小费用流问题）</strong><br />
+这是网络流问题中最为基础和核心的模型，旨在以最低成本在网络中传输流量并满足供需平衡。<br />
+核心是：最小化弧上流量成本函数的总和，同时满足节点上的质量平衡约束、流量界限约束。</p>
+  </li>
+  <li>
+    <p><strong>Shortest Path（最短路径问题）</strong><br />
+这是最小费用流问题的一个特例（源点供给1单位、汇点需求-1单位，且弧容量不小于1），可被转化为最小费用流问题进行建模和求解。<br />
+核心是：在网络中寻找两点间总权重（距离/成本）最小的路径。</p>
+  </li>
+  <li>
+    <p><strong>Maximum Flows（最大流问题）</strong><br />
+这是流量优化的基础模型；也是最小费用流问题的一个特例，可被转化为最小费用流问题进行建模和求解。<br />
+核心是：从汇到源之间引入一条成本为 -1、容量无限的新增弧，找出从汇到源的最大流量，即为从源到汇的最小费用流。</p>
+  </li>
+  <li>
+    <p><strong>Assignment Problem（指派问题）</strong><br />
+这也是最小费用流问题的一个特例。<br />
+核心是：以最小成本将一组实体（如 N1 中的节点）一对一地分配给另一组实体（如 N2 中的节点），通常在加权二分图 weighted bipartite network 中定义。</p>
+  </li>
+</ul>
+
+<h2 id="二带约束的流量与分配问题基础问题的扩展">二、带约束的流量与分配问题（基础问题的扩展）</h2>
+
+<p>这类问题在基础流量/路径问题中加入了额外约束（如复杂成本结构、多商品、流量乘数等），复杂度提升但仍属于结构化问题。</p>
+
+<ul>
+  <li>
+    <p><strong>Convex Cost flows（凸成本流问题）</strong><br />
+这是线性网络流模型的推广，其中弧上的流量成本函数是凸的而非线性的。<br />
+核心是：最小化流量在凸成本弧上的总成本，这能够更好地模拟实际应用中流量与成本之间的非线性关系，如交通网络的拥堵成本、电力网络的功率损耗。</p>
+  </li>
+  <li>
+    <p><strong>Generalized flows（广义流问题）</strong><br />
+这也是线性网络流模型的推广，允许弧上存在流量乘数。
+核心是：过某条弧的流量在离开该弧时可以按一定比例（大于、小于或等于1）发生变化。</p>
+  </li>
+  <li>
+    <p><strong>Multicommodity flows（多商品流问题）</strong><br />
+这是单商品流问题的推广：多种不同类型的商品（例如，不同来源-目的地的交通、通信信息）共享同一网络的容量。<br />
+核心是：在每种商品都有独立的流量平衡约束的前提下，通过共享弧容量来协调多种商品在网络中的传输，以最小化总成本或最大化总流量。</p>
+  </li>
+</ul>
+
+<h2 id="三网络设计与规划问题综合决策问题">三、网络设计与规划问题（综合决策问题）</h2>
+
+<p>这类问题不仅涉及流量分配，还需决策网络本身的物理/逻辑结构（如是否建设弧、扩展容量），包含固定成本和变量成本的权衡，是最复杂的一类。</p>
+
+<ul>
+  <li>
+    <p><strong>Network Design（网络设计问题）</strong><br />
+这是一个宏观的问题范畴，涵盖网络拓扑结构（节点、弧的增减）、容量设置、流量分配等全方面决策，是网络优化的顶层模型。<br />
+这类问题通常涉及选择弧的固定/动态安装成本，并可能考虑网络生存性要求 network survivability。
+核心是：在候选弧集合中做出修建决策，同时规划流量分配，以满足连接需求并最小化总建设及运营成本。</p>
+  </li>
+  <li>
+    <p><strong>Minimum Spanning Trees（最小生成树问题）</strong><br />
+这是网络设计问题的一个特例，即在无容量/拓扑限制下连接所有节点。<br />
+核心是：连接网络中的所有节点，使连接弧的总成本最小且不形成环（形成一个没有环的连通子图/树）。</p>
+  </li>
+  <li>
+    <p><strong>Traveling Salesman Problem - TSP（旅行商问题）</strong><br />
+这也是网络设计问题的一个特例，只要设定合适的固定成本和连接约束。<br />
+核心是：寻找一条访问图中所有节点恰好一次并返回起点的回路（ Hamilton 回路），使其总长度最短。</p>
+  </li>
+</ul>
+
+<h2 id="四具有强网络联系的组合优化问题">四、具有强网络联系的组合优化问题</h2>
+
+<p>这类问题在组合优化领域有其独立的研究价值，但其解决算法或理论分析常常与网络流理论紧密相连：<br />
+利用图论和网络流的理论框架，解决涉及图元素（如节点和边）组合配对或覆盖的离散优化问题。</p>
+
+<ul>
+  <li>
+    <p><strong>Matchings（匹配问题）</strong><br />
+核心是：在网络图中通过弧线将节点进行配对，以实现最大化总收益或最小化总成本。<br />
+这个问题有 2 种分类方式：</p>
+
+    <ul>
+      <li>
+        <table>
+          <tbody>
+            <tr>
+              <td>bipartite matching problems</td>
+              <td>nonbipartite matching problems</td>
+            </tr>
+          </tbody>
+        </table>
+      </li>
+      <li>
+        <table>
+          <tbody>
+            <tr>
+              <td>cardinality matching problems</td>
+              <td>weighted matching problems</td>
+            </tr>
+          </tbody>
+        </table>
+      </li>
+    </ul>
+
+    <blockquote>
+      <p>The weighted matching problem on a bipartite graph is the same as the assignment problem.<br />
+“二分图上的权重匹配问题”本质上是一个分配问题，即最小费用流的一个特例。</p>
+    </blockquote>
+  </li>
+</ul>
+
+
+      </section>
+      <footer>
+        
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
+      </footer>
+    </div>
+    <script src="/research-diary/assets/js/scale.fix.js"></script>
+  </body>
+</html>
