@@ -1,7 +1,7 @@
 # .github/workflows/github-pages.yml
 
-# The name of the workflow, which will be displayed in the Actions tab of your GitHub repository.
-name: Build and Deploy Jekyll site to GitHub Pages
+# The name of the workflow, which will be displayed in the Actions tab of the GitHub repository.
+name: Build and Deploy to GitHub Pages
 
 # --- Trigger Conditions ---
 # Controls when the workflow will run.
@@ -10,12 +10,28 @@ on:
   push:
     branches:
       - main
+  # Allow manual triggering of the workflow from the GitHub Actions tab.
+  workflow_dispatch:
+
+# --- Permissions ---
+# Grant the necessary permissions for the workflow to deploy to GitHub Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# --- Concurrency Control ---
+# Ensure that only one deployment happens at a time.
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 # --- Job Definition ---
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
-  # Defines a job named 'build_and_deploy'.
-  build_and_deploy:
+  # --- Build Job ---
+  # This job handles the Jekyll build process.
+  build:
     runs-on: ubuntu-latest
 
     # A sequence of tasks that will be executed as part of the job.
@@ -27,19 +43,13 @@ jobs:
 
       # --- Step 2: Set up Ruby Environment ---
       # Sets up a Ruby environment using a specific version and caches dependencies.
-      - name: Setup Ruby 💎
+      - name: Setup Ruby and install dependencies 💎
         uses: ruby/setup-ruby@v1
         with:
           # Use a Ruby version that is known to be compatible with GitHub Pages gems.
-          ruby-version: "3.1"
-          # Network fix for local Docker+act testing
-        env:
-          GIT_HTTP_VERSION: "HTTP/1.1"
-
-      # --- Step 3: Install Dependencies ---
-      # Now run 'bundle install' as its own explicit step.
-      - name: Install dependencies 📦
-        run: bundle install
+          ruby-version: "3.4"
+          # This caches gems for faster builds. It runs 'bundle install'.
+          bundler-cache: true
 
       # --- Step 3: Build the Jekyll Site ---
       # Runs the Jekyll build command from within the docs/ dorectory to generate the static site.
@@ -47,10 +57,25 @@ jobs:
         run: bundle exec jekyll build
         working-directory: "./docs"
 
-      # --- Step 5: Deploy to gh-pages Branch ---
-      # Uses a popular third-party action to push the built site to the gh-pages branch.
-      - name: Deploy 🚀
-        uses: peaceiris/actions-gh-pages@v4
+      # --- Step 4: Upload the built site ---
+      - name: Upload artifact 📦
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs/_site
+          # Upload the built site (_site folder) as a deployment artifact.
+          path: ./docs/_site
+
+  # --- Deploy Job ---
+  # This job handles the deployment process.
+  deploy:
+    # It needs the 'build' job to be completed first.
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      # Gets the public URL of the deployed site from the previous job's output.
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages 🚀
+        id: deployment
+        # This is the official GitHub action for deploying to Pages.
+        uses: actions/deploy-pages@v4
