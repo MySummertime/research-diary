@@ -15,9 +15,9 @@ date: 2025-4-21
 Source:
 
 - Alp 提出的 TR 模型旨在最小化危险货物卡车沿着路径运输过程中产生不良后果的期望值；  
-  [Alp E. Risk-based transportation planning practice: Overall methodology and a case example［J］．Information Systems and Operational Research，1995，33(1): 4－19．](https://www.researchgate.net/publication/259716076_Risk-Based_Transportation_Planning_Practice_Overall_Methodology_And_A_Case_Example)
+  [[1] Alp E. Risk-based transportation planning practice: Overall methodology and a case example[J]. Information Systems and Operational Research, 1995, 33(1): 4-19.](https://www.researchgate.net/publication/259716076_Risk-Based_Transportation_Planning_Practice_Overall_Methodology_And_A_Case_Example)
 - 由于该模型计算复杂，Jin 等对其进行了近似计算，最终得到表中的 TR 模型。  
-  [Jin H，Batta R．Objectives derived from viewing hazmat shipments as a sequence of independent Bernoulli trials［J］．Transportation Science，1997，31(3): 252－261.](https://doi.org/10.1287/trsc.31.3.252)
+  [[2] Jin H, Batta R. Objectives derived from viewing hazmat shipments as a sequence of independent Bernoulli trials[J]. Transportation Science, 1997, 31(3): 252-261.](https://doi.org/10.1287/trsc.31.3.252)
 
 Feature:
 
@@ -30,7 +30,7 @@ Feature:
 Source:
 
 - Saccomanno 等提出了 IP 模型。  
-  [Saccomanno F，Chan A．Economic evaluation of routing strategies for hazardous road shipments［J］. Transportation Research Record，1986(1 020):12－18．](https://onlinepubs.trb.org/Onlinepubs/trr/1985/1020/1020-003.pdf)
+  [[3] Saccomanno F, Chan A. Economic evaluation of routing strategies for hazardous road shipments[J]. Transportation Research Record, 1986(1020): 12-18.](https://onlinepubs.trb.org/Onlinepubs/trr/1985/1020/1020-003.pdf)
 
 Feature:
 
@@ -41,7 +41,7 @@ Feature:
 Source:
 
 - ReVelle 等提出了 PE 模型。  
-  [ReVelle C，Cohon J，Shobrys D．Simultaneous sitting and routing in the disposal of hazardous wastes［J］．Transportation Science，1991，25(2): 138－145．](https://pubsonline.informs.org/doi/10.1287/trsc.25.2.138)
+  [[4] ReVelle C, Cohon J, Shobrys D. Simultaneous sitting and routing in the disposal of hazardous wastes[J]. Transportation Science, 1991, 25(2): 138-145.](https://pubsonline.informs.org/doi/10.1287/trsc.25.2.138)
 
 Feature:
 
@@ -57,7 +57,7 @@ PR, MV, DU, MM, CR 都是风险厌恶/规避模型。
 Source:
 
 - Abkowitz 等建立了 PR 模型。  
-  [Abkowitz M，Lepofsky M，Cheng P．Selecting criteria for designating hazardous materials highway routes［J］．Transportation Research Record，1992，1333: 30－35．](https://onlinepubs.trb.org/Onlinepubs/trr/1992/1333/1333-005.pdf)
+  [[5] Abkowitz M, Lepofsky M, Cheng P. Selecting criteria for designating hazardous materials highway routes[J]. Transportation Research Record, 1992, 1333: 30-35.](https://onlinepubs.trb.org/Onlinepubs/trr/1992/1333/1333-005.pdf)
 
 Feature:
 
@@ -70,7 +70,7 @@ Feature:
 Source:
 
 - Erkut 等建立了 MV 模型。  
-  [Erkut E，Ingolfsson A．Catastrophe avoidance models for hazardous materials route planning［J］．Transportation Science，2000，34(2): 165－179．](https://doi.org/10.1287/trsc.34.2.165.12303)
+  [[6] Erkut E, Ingolfsson A. Catastrophe avoidance models for hazardous materials route planning[J]. Transportation Science, 2000, 34(2): 165-179.](https://doi.org/10.1287/trsc.34.2.165.12303)
 
 Feature:
 
@@ -81,7 +81,7 @@ Feature:
 Source:
 
 - Erkut 等建立了 DU 模型。  
-  [Erkut E，Ingolfsson A．Catastrophe avoidance models for hazardous materials route planning［J］．Transportation Science，2000，34(2): 165－179．](https://doi.org/10.1287/trsc.34.2.165.12303)
+  [[6] Erkut E, Ingolfsson A. Catastrophe avoidance models for hazardous materials route planning[J]. Transportation Science, 2000, 34(2): 165-179.](https://doi.org/10.1287/trsc.34.2.165.12303)
 
 Feature:
 
@@ -92,7 +92,7 @@ Feature:
 Source:
 
 - Erkut 等建立了 MM 模型。  
-  [Erkut E，Ingolfsson A．Catastrophe avoidance models for hazardous materials route planning［J］．Transportation Science，2000，34(2): 165－179．](https://doi.org/10.1287/trsc.34.2.165.12303)
+  [[6] Erkut E, Ingolfsson A. Catastrophe avoidance models for hazardous materials route planning[J]. Transportation Science, 2000, 34(2): 165-179.](https://doi.org/10.1287/trsc.34.2.165.12303)
 
 Feature:
 
@@ -105,7 +105,7 @@ Feature:
 Source:
 
 - Sivakumar 等提出了 CR 模型。  
-  [Sivakumar R，Batta R，Karwan M．A multiple route conditional risk model for transporting hazardous materials［J］．Information Systems and Operational Ｒesearch，1995，33(1):20－33．](https://doi.org/10.1080/03155986.1995.11732264)
+  [[7] Sivakumar R, Batta R, Karwan M. A multiple route conditional risk model for transporting hazardous materials[J]. Information Systems and Operational Research, 1995, 33(1): 20-33.](https://doi.org/10.1080/03155986.1995.11732264)
 
 Feature:
 
@@ -123,7 +123,7 @@ Feature:
 Source:
 
 - KANG 等将 VaR 模型引入危险货物运输领域。  
-  [KANG Ying-ying．Value-at-risk models for hazardous materials transportation［D］．New York: State University of New York at Buffalo，2011．](https://www.acsu.buffalo.edu/~batta/hazmatvar.pdf)
+  [[8] ANG Ying-ying. Value-at-risk models for hazardous materials transportation[D]. New York: State University of New York at Buffalo, 2011.](https://www.acsu.buffalo.edu/~batta/hazmatvar.pdf)
 
 Feature:
 
@@ -138,7 +138,7 @@ Feature:
 Source:
 
 - Kwon 等将 CVaR 模型引入危险货物运输领域。  
-  [Kwon C．Conditional value-at-risk model for hazardous materials transportation［C］．Proceedings of the 2011 Winter Simulation Conference，2011: 1703－1709．](https://www.informs-sim.org/wsc11papers/152.pdf)
+  [[9] Kwon C. Conditional value-at-risk model for hazardous materials transportation[C]. Proceedings of the 2011 Winter Simulation Conference, 2011: 1703-1709.](https://www.informs-sim.org/wsc11papers/152.pdf)
 
 Feature:
 
