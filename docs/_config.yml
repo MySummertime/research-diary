@@ -21,3 +21,5 @@ kramdown:
   input: GFM
   # Prevents Jekyll from automatically inserting <br> tags at every newline.
   hard_wrap: false
+  # Specifies the math engine to use for rendering LaTeX.
+  math_engine: mathjax
