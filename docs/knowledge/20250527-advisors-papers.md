@@ -24,7 +24,10 @@ $$
   \min \quad R_k, \\
   \min \quad C_k, \\
   \min \quad T_k \\
-\end{cases} \\
+\end{cases}
+$$
+
+$$
 \text{3 special constraints}
 \begin{cases}
   \text{risk threshold of}
@@ -160,7 +163,10 @@ $$
   \min \quad R, \\
   \min \quad C, \\
   \min \quad T \\
-\end{cases} \\
+\end{cases}
+$$
+
+$$
 \text{4 special constraints}
 \begin{cases}
   \text{risk threshold of paths}, \\
@@ -273,7 +279,10 @@ $$
   \min \quad \sqrt{V[R]}, \\
   \min \quad E[T], \\
   \min \quad \sqrt{V[T]} \\
-\end{cases}\\
+\end{cases}
+$$
+
+$$
 \text{2 special constraints}
 \begin{cases}
   \text{arrival time window}, \\
@@ -551,7 +560,10 @@ $$
   \min \quad \sum d, \\
   \min \quad \sum x, \\
   \min \quad \sum l \\
-\end{cases} \\
+\end{cases}
+$$
+
+$$
 \text{3 special constraints}
 \begin{cases}
   \text{vehicle capacity}, \\
@@ -644,7 +656,10 @@ $$
   f_R(x), \\
   f_C(x), \\
   f_T(x) \\
-\end{cases} \\
+\end{cases}
+$$
+
+$$
 \text{2 special constraints}
 \begin{cases}
   \text{vehicle capacity}, \\
