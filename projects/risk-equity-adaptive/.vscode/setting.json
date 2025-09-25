@@ -1,0 +1,31 @@
+{
+  "terminal.integrated.cwd": "${workspaceFolder}",
+
+  "python.defaultInterpreterPath": "${workspaceFolder}/envs/python.exe",
+
+  "python.languageServer": "Pylance",
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.aiCodeActions": {
+    "implementAbstractClasses": true
+  },
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+
+  "python.linting.enabled": true,
+  "python.linting.mypyEnabled": false,
+
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true,
+    "**/envs": true
+  }
+}

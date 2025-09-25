@@ -1,0 +1,22 @@
+# projects/risk-equity-adaptive/environment.yaml
+
+name: conda_envs
+channels:
+  - defaults
+  - conda-forge
+  - anaconda
+dependencies:
+  # --- Conda packages ---
+  - python
+  - osmnx
+  - pandas
+  - networkx
+  - matplotlib
+  - pydantic
+  - ruff
+  - mypy
+
+  # --- Pip packages ---
+  - pip:
+      - types-networkx
+      - pymoo
