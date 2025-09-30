@@ -16,7 +16,8 @@ class ParetoPlotter:
         # 确保保存目录存在
         os.makedirs(self.save_dir, exist_ok=True)
 
-    def plot(self, objectives: np.ndarray, file_name: str = "pareto_front.png"):
+    def plot(self, objectives: np.ndarray, file_name: str = "pareto_front.png",
+             xlable: str="Objective 1", ylable: str="Objective 2", zlable: str="Objective 3"):
         """
         根据目标值的维度，自动绘制 2D 或 3D 的帕累托前沿。
 
@@ -34,12 +35,12 @@ class ParetoPlotter:
         if n_obj == 2:
             # 建立一个 1x1 的二维子图
             ax = fig.add_subplot(111)   # 使用 fig.add_sublot(1, 1, 1) 也可以
-            self._plot_2d(ax, objectives)
+            self._plot_2d(ax, objectives, xlable, ylable)
         elif n_obj == 3:
             # 建立一个 1x1 的三维子图
             ax = fig.add_subplot(111, projection='3d')
             assert isinstance(ax, Axes3D)   # 确保 ax 是 Axes3D 类型的对象
-            self._plot_3d(ax, objectives)
+            self._plot_3d(ax, objectives, xlable, ylable, zlable)
         else:
             print(f"可视化仅支持2或3个目标，当前目标数为: {n_obj}。")
             plt.close(fig)
@@ -54,20 +55,20 @@ class ParetoPlotter:
         plt.savefig(full_path)
         print(f"帕累托前沿图像已保存至: {full_path}")
         
-        plt.show()
+        # plt.show()
 
-    def _plot_2d(self, ax, objectives: np.ndarray):
+    def _plot_2d(self, ax, objectives: np.ndarray, xlabel: str, ylabel: str):
         """[辅助方法] 绘制二维帕累托前沿。"""
         ax.set_title(self.title)
         ax.scatter(objectives[:, 0], objectives[:, 1], c='r', marker='o', label='Pareto Front')
-        ax.set_xlabel('Objective 1')
-        ax.set_ylabel('Objective 2')
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
 
-    def _plot_3d(self, ax, objectives: np.ndarray):
+    def _plot_3d(self, ax, objectives: np.ndarray, xlabel: str, ylabel: str, zlable: str):
         """[辅助方法] 绘制三维帕累托前沿。"""
         ax.set_title(self.title)
         ax.scatter(objectives[:, 0], objectives[:, 1], objectives[:, 2], c='r', marker='o', label='Pareto Front')
-        ax.set_xlabel('Objective 1')
-        ax.set_ylabel('Objective 2')
-        ax.set_zlabel('Objective 3')
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_zlabel(zlable)
         ax.view_init(elev=30, azim=45)  # elev: 仰角, azim: 方位角

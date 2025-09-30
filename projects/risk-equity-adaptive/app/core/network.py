@@ -1,7 +1,10 @@
 # --- coding: utf-8 ---
 # --- network.py ---
+import os
+import json
 import networkx as nx
 import matplotlib.pyplot as plt
+from typing import Optional, Dict
 
 class Node:
     """
@@ -23,6 +26,17 @@ class Node:
     def __repr__(self):
         role = f", Role={'Emergency Center' if self.is_emergency_center else 'None'}"
         return f"Node(ID={self.id}, Type='{self.type}{role}')"
+    
+    def to_dict(self) -> Dict:
+        """将节点属性转换为字典，方便JSON序列化。"""
+        return {
+            "node_id": self.id,
+            "node_type": self.type,
+            "is_emergency_center": self.is_emergency_center,
+            "transshipment_cost": self.transshipment_cost,
+            "capacity": self.capacity,
+            "population_density": self.population_density
+        }
 
 class Arc:
     """
@@ -50,6 +64,20 @@ class Arc:
 
     def __repr__(self):
         return f"Arc({self.start.id}->{self.end.id}, Mode='{self.mode}', Len={self.length}km)"
+    
+    def to_dict(self) -> Dict:
+        """将弧段属性转换为字典。"""
+        return {
+            "start_node_id": self.start.id,
+            "end_node_id": self.end.id,
+            "mode": self.mode,
+            "length": self.length,
+            "capacity": self.capacity,
+            "population_density": self.population_density,
+            "cost_per_km": self.cost_per_km,
+            "carbon_cost_per_ton": self.carbon_cost_per_ton,
+            "accident_prob_per_km": self.accident_prob_per_km
+        }
 
 class TransportTask:
     """
@@ -65,6 +93,14 @@ class TransportTask:
 
     def __repr__(self):
         return f"Task(ID={self.id}, O={self.origin.id}, D={self.destination.id})"
+    
+    def to_dict(self) -> Dict:
+        """将任务属性转换为字典。"""
+        return {
+            "task_id": self.id,
+            "origin_node_id": self.origin.id,
+            "destination_node_id": self.destination.id
+        }
 
 class TransportNetwork:
     """
@@ -78,6 +114,26 @@ class TransportNetwork:
         # 为了方便查找，增加字典来存储节点对象
         self._nodes_dict = {}
         self._arcs_dict = {}
+    
+    def save_to_json(self, file_path: str):
+        """
+        将当前网络的所有信息（节点、弧段、任务）保存到一个JSON文件中。
+
+        Args:
+            file_path (str): 保存JSON文件的完整路径。
+        """
+        network_data = {
+            "nodes": [node.to_dict() for node in self.nodes],
+            "arcs": [arc.to_dict() for arc in self.arcs],
+            "tasks": [task.to_dict() for task in self.tasks]
+        }
+        
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(network_data, f, ensure_ascii=False, indent=4)
+            print(f"网络数据已成功保存至: {file_path}")
+        except Exception as e:
+            print(f"错误：保存网络数据到JSON文件时失败: {e}")
 
     # --- 增加功能 ---
 
@@ -147,9 +203,13 @@ class TransportNetwork:
 
     # --- 可视化功能 ---
 
-    def visualize(self, layout_func_name: str = 'spring'):
+    def visualize(self, layout_func_name: str = 'spring', save_path: Optional[str] = None):
         """
         使用 networkx 和 matplotlib 可视化网络拓扑.
+
+        Args:
+            layout_func_name (str, optional): 布局算法名称。默认为 'spring'。
+            save_path (Optional[str], optional): 图片保存路径。如果提供，则会将图片保存到该路径。
         """
         # 步骤 1: 获取样式配置和准备好的绘图数据
         style = self._get_style_config()
@@ -189,7 +249,13 @@ class TransportNetwork:
         plt.legend(handles=legend_elements, loc='upper right', fontsize=12)
         plt.title("Topology of transport network", fontsize=20)
         plt.box(False)  # 移除外边框
-        plt.show()
+
+        if save_path:
+            # 确保保存路径的目录存在
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            plt.savefig(save_path)
+            print(f"网络拓扑图已保存至: {save_path}")
+        # plt.show()
 
     def _prepare_graph_data(self):
         """

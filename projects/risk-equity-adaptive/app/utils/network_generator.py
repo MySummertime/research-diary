@@ -1,9 +1,10 @@
 # --- coding: utf-8 ---
 # --- network_generator.py ---
 import random
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from core.network import Node, TransportTask, TransportNetwork
 
 # --- 网络生成器：抽象基类（由所有的具体网络生成器继承） ---
@@ -52,8 +53,19 @@ class HaSNetworkGenerator(AbstractNetworkGenerator):
         super().__init__()
         self.config = config
 
-    def generate(self) -> TransportNetwork:
-        """实现 generate 方法，完成网络构建。"""
+    def generate(self, seed: int = None) -> TransportNetwork:
+        """
+        实现 generate 方法，完成网络构建.
+
+        Args:
+            seed (int, optional): 随机种子，用于保证网络拓扑的可复现性。
+        """
+        # === 在所有随机操作之前设置种子 ===
+        if seed is not None:
+            random.seed(seed)
+            print(f"网络生成器已设置随机种子: {seed}，本次拓扑将可复现。")
+        # ===================================
+        
         print("开始使用 Hub-and-Spoke 生成器构建网络...")
         self._create_nodes()
         self._create_arcs()
@@ -197,3 +209,71 @@ class HaSNetworkGenerator(AbstractNetworkGenerator):
                     self.network.add_task(TransportTask(f"T{task_count+1}", origin, destination))
                     generated_pairs.add((origin.id, destination.id))
                     task_count += 1
+
+
+class HaSNetworkGeneratorDeterministic:
+    """
+    一个从确定的数据文件（JSON格式）创建网络的生成器。
+    它不再使用任何随机化，保证了网络拓扑和参数的完全可复现性。
+    """
+    def __init__(self, data_file_path: str):
+        """
+        初始化生成器。
+
+        Args:
+            data_file_path (str): 包含网络数据的JSON文件的路径。
+        """
+        self.network = TransportNetwork()
+        self.data_file_path = data_file_path
+        self.data: Dict = {}
+
+    def _load_data_from_json(self):
+        """[辅助方法] 从JSON文件中加载网络数据。"""
+        try:
+            with open(self.data_file_path, 'r', encoding='utf-8') as f:
+                self.data = json.load(f)
+            print(f"成功从 {self.data_file_path} 加载网络数据。")
+        except FileNotFoundError:
+            print(f"错误：找不到网络数据文件: {self.data_file_path}")
+            raise
+        except json.JSONDecodeError:
+            print(f"错误：网络数据文件 {self.data_file_path} 格式无效。")
+            raise
+
+    def generate(self) -> TransportNetwork:
+        """
+        实现 generate 方法，从加载的数据中完成网络构建。
+        """
+        self._load_data_from_json()
+        
+        print("开始使用确定性数据文件构建网络...")
+        
+        # 1. 根据数据创建节点
+        for node_data in self.data.get("nodes", []):
+            self.network.add_node(Node(**node_data))
+            
+        # 2. 根据数据创建弧段
+        for arc_data in self.data.get("arcs", []):
+            # 注意：这里的 oneway=True 是因为我们假设JSON中已定义了所有需要的单向弧段
+            self.network.add_arc(
+                start_node_id=arc_data.pop("start_node_id"), 
+                end_node_id=arc_data.pop("end_node_id"),
+                oneway=True,
+                **arc_data
+            )
+            
+        # 3. 根据数据创建运输任务
+        for task_data in self.data.get("tasks", []):
+            origin_node = self.network._nodes_dict.get(task_data["origin_node_id"])
+            dest_node = self.network._nodes_dict.get(task_data["destination_node_id"])
+            if origin_node and dest_node:
+                self.network.add_task(TransportTask(
+                    task_id=task_data["task_id"],
+                    origin_node=origin_node,
+                    destination_node=dest_node
+                ))
+            else:
+                print(f"警告：任务 {task_data['task_id']} 的起点或终点不存在，已跳过。")
+        
+        print("使用确定性数据文件构建网络完成！🎉")
+        return self.network
