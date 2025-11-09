@@ -2,7 +2,9 @@
 # --- app/utils/result_keeper.py ---
 # 负责实验目录创建和日志管理。
 import os
+import sys
 import time
+import csv
 import json
 import logging
 from typing import List
@@ -31,65 +33,60 @@ def create_experiment_directory(base_dir: str = "results") -> str:
 # 2. 高级日志系统
 # ----------------------------------------
 
-# === 全局变量，用于存储处理器和格式化器 ===
-_file_handler = None
-_console_handler = None
-_verbose_formatter = None
-_clean_formatter = None
+# 全局常量
+VERBOSE_FORMATTER = logging.Formatter(
+    "%(asctime)s [%(levelname)-5.5s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+CLEAN_FORMATTER = logging.Formatter("%(message)s")
 
-def setup_logging(log_dir: str, log_name: str = "experiment_log.txt"):
+def setup_logging(log_dir: str, log_name: str = "experiment.log"):
     """
-    配置一个全局的根日志记录器，设置两种格式，并同时输出到文件和控制台。
+    配置一个全局的根日志记录器.
+    根据分级，选择性输出到 文件 和/或 控制台.
     """
-    global _file_handler, _console_handler, _verbose_formatter, _clean_formatter
-    
-    log_file_path = os.path.join(log_dir, log_name)
-    
-    # 创建两种格式化器
-    _verbose_formatter = logging.Formatter(
-        '%(asctime)s [%(levelname)-8s] %(message)s', 
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    _clean_formatter = logging.Formatter('%(message)s')
-
-    # --- 创建处理器 ---
-    
-    # 1. 文件处理器
-    _file_handler = logging.FileHandler(log_file_path, mode='w', encoding='utf-8')
-    _file_handler.setLevel(logging.INFO)
-    _file_handler.setFormatter(_verbose_formatter)  # 默认使用带时间戳的格式
-
-    # 2. 控制台处理器
-    _console_handler = logging.StreamHandler()
-    _console_handler.setLevel(logging.INFO)
-    _console_handler.setFormatter(_verbose_formatter)   # 默认也使用带时间戳的格式
-
-    # --- 配置根记录器 ---
+    log_path = os.path.join(log_dir, log_name)
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
     
-    # 清除在 main.py 中可能已被设置的旧 handlers
+    # 清除任何旧的logging处理器
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
         
-    root_logger.addHandler(_file_handler)
-    root_logger.addHandler(_console_handler)
+    # 1. 根(Root)设置为“最低”级别
+    root_logger.setLevel(logging.DEBUG) 
+
+    # 2. 文件处理器 (FileHandler) - “啰嗦”模式
+    file_handler = logging.FileHandler(log_path, encoding='utf-8')
+    # 使用 VERBOSE_FORMATTER
+    file_handler.setFormatter(VERBOSE_FORMATTER) 
+    file_handler.setLevel(logging.DEBUG) 
+    root_logger.addHandler(file_handler)
+
+    # 3. 控制台处理器 (StreamHandler) - “安静”模式
+    console_handler = logging.StreamHandler(sys.stdout)
+    # 使用 VERBOSE_FORMATTER
+    console_handler.setFormatter(VERBOSE_FORMATTER) 
+    console_handler.setLevel(logging.INFO) 
+    root_logger.addHandler(console_handler)
+    
+    logging.info("日志系统已启动。(文件日志级别: DEBUG, 控制台日志级别: INFO)")
+    logging.info(f"日志将保存至: {log_path}")
 
 
 @contextmanager
 def log_section(clean: bool = False):
     """
     一个上下文管理器，用于临时切换 *所有* 处理器 (文件+控制台) 的日志格式。
+    动态地从 root_logger 查找处理器
     
     Args:
         clean (bool, optional): 是否切换到不带时间戳的纯净格式。默认为 False。
     """
-    global _file_handler, _console_handler, _verbose_formatter, _clean_formatter
     
-    handlers = [_file_handler, _console_handler]
-    handlers = [h for h in handlers if h is not None]   # 过滤掉 None
+    root_logger = logging.getLogger()
+    handlers = root_logger.handlers
     
-    if not handlers or _verbose_formatter is None or _clean_formatter is None:
+    if not handlers:
         yield
         return
 
@@ -98,10 +95,10 @@ def log_section(clean: bool = False):
     try:
         if clean:
             for h in handlers:
-                h.setFormatter(_clean_formatter)
+                h.setFormatter(CLEAN_FORMATTER)
         else:
             for h in handlers:
-                h.setFormatter(_verbose_formatter)
+                h.setFormatter(VERBOSE_FORMATTER)
         yield
     finally:
         # 无论 'with' 代码块内部发生什么，最终都会恢复原始的格式
@@ -142,3 +139,54 @@ def save_results_json(solutions: List[Solution], output_path: str):
         logging.info("JSON 结果保存成功。")
     except Exception as e:
         logging.error(f"保存 JSON 结果时失败: {e}")
+
+def save_solutions_csv(rank_0_solutions: List[Solution], save_dir: str):
+    """
+    将所有 Rank 0 的解的详细路径保存到 'PF_solutions.csv'。
+    """
+    file_path = os.path.join(save_dir, "PF_solutions.csv")
+    logging.info(f"正在将 Rank 0 解的详细路径保存到: {file_path}")
+    
+    # 定义 CSV 表头
+    headers = [
+        "solution_index", # 解的编号 (e.g., 1, 2, 3...)
+        "task_id",        # 任务 ID (e.g., "T1")
+        "origin_id",      # 任务起点
+        "destination_id", # 任务终点
+        "f1_risk_total",  # (该解的) 总风险
+        "f2_cost_total",  # (该解的) 总成本
+        "path_nodes",     # 路径节点
+        "path_arcs_mode"  # 路径弧段(模式)
+    ]
+    
+    try:
+        with open(file_path, "w", newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            
+            # 遍历传入的 Rank 0 解列表
+            for i, sol in enumerate(rank_0_solutions):
+                sol_index = i + 1
+                
+                # 遍历该解中的每一条路径 (每一个任务)
+                for task_id, path in sol.path_selections.items():
+                    if not path.task:
+                        continue
+                    
+                    # 提取路径信息
+                    nodes_str = " -> ".join([node.id for node in path.nodes])
+                    arcs_str = " -> ".join([f"({arc.start.id},{arc.end.id})({arc.mode})" for arc in path.arcs])
+                    
+                    writer.writerow([
+                        sol_index,
+                        task_id,
+                        path.task.origin.id,
+                        path.task.destination.id,
+                        f"{sol.f1_risk:.4f}",   # 记录该解的总目标值
+                        f"{sol.f2_cost:.4f}",   # 记录该解的总目标值
+                        nodes_str,
+                        arcs_str
+                    ])
+                    
+    except Exception as e:
+        logging.error(f"保存 PF_solutions.csv 失败: {e}")

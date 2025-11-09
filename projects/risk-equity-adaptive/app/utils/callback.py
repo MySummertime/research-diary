@@ -1,6 +1,8 @@
 # --- coding: utf-8 ---
 # --- app/utils/callback.py ---
 import os
+import csv
+import logging
 import numpy as np
 from typing import Dict, List
 from app.core.nsga2 import Callback
@@ -41,7 +43,6 @@ class GenerationalLogger(Callback):
             self.logs["cv_avg"].append(0.0)
 
         # --- 步骤 2: 仅计算 *可行解* 的目标函数统计 ---
-        # (这部分逻辑与 V1 相同)
         risks = [s.f1_risk for s in population if s.is_feasible and s.f1_risk != float('inf')]
         costs = [s.f2_cost for s in population if s.is_feasible and s.f2_cost != float('inf')]
         
@@ -79,72 +80,83 @@ class GenerationalLogger(Callback):
         self.logs["cost_mean"].append(last_cost_mean)
         self.logs["cost_median"].append(last_cost_median)
 
-# 回调 2: 用于文件日志 (生成 generations.txt)
+# 回调 2: 用于文件日志 (生成 generations.csv)
 class GenerationalFileLogger(Callback):
     """
-    一个自定义的回调类，用于在每一代结束时，
-    将 *专业的代际统计数据* 写入 'generations.txt' 文件。
+    一个自定义的回调类.
+    将 *每一代* 的摘要统计信息实时写入 "generations.csv".
     """
-    def __init__(self, save_dir: str, file_name: str = "generations.txt"):
+    def __init__(self, save_dir: str, file_name: str = "generations.csv"):
         super().__init__()
-        self.log_file_path = os.path.join(save_dir, file_name)
-        self._initialize_file()
-
-    def _initialize_file(self):
-        """创建日志文件并写入表头。"""
-        header = (
-            "===============================================================================\n"
-            " n_gen | n_eval | n_nds  |      cv_min       |       cv_avg      |   risk_min     \n"
-            "===============================================================================\n"
-        )
+        self.csv_file_path = os.path.join(save_dir, file_name)
+        self.headers = [
+            "generation", "n_total", "n_feasible", "n_nds",
+            "cv_min", "cv_mean", "cv_median",
+            "risk_min", "risk_mean", "risk_median",
+            "cost_min", "cost_mean", "cost_median"
+        ]
+        self.csv_file = None
+        self.csv_writer = None
         try:
-            with open(self.log_file_path, 'w', encoding='utf-8') as f:
-                f.write(header)
+            # 立即创建并写入表头
+            with open(self.csv_file_path, "w", newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(self.headers)
+            # 2. 重新打开文件准备“追加”
+            self.csv_file = open(self.csv_file_path, "a", newline='', encoding='utf-8')
+            self.csv_writer = csv.writer(self.csv_file)
+            logging.info(f"代际收敛日志将保存至: {self.csv_file_path}")
         except Exception as e:
-            print(f"警告: 无法初始化日志文件 {self.log_file_path}: {e}")
+            logging.error(f"GenerationalFileLogger 无法初始化 CSV: {e}")
+            # 如果打开文件出错，也要尝试关闭它
+            if self.csv_file:
+                self.csv_file.close()
+            self.csv_writer = None
 
     def on_generation_end(self, generation: int, population: List[Solution]):
-        """
-        [接口] 在每代结束时，计算统计数据并写入文件。
-        """
-        if not population:
+        if not self.csv_writer:
             return
 
-        pop_size = len(population)
-        # (P_0 + Q_t)
-        n_eval = pop_size + generation * pop_size 
-        
-        # 1. 计算非支配解 (Non-Dominated Solutions) 的数量
-        n_nds = sum(1 for s in population if s.rank == 0)
-        
-        # 2. 计算约束违反度 (Constraint Violation)
-        violations = [s.constraint_violation for s in population if s.constraint_violation != float('inf')]
-        if violations:
-            cv_min = np.min(violations)
-            cv_avg = np.mean(violations)
-        else:
-            cv_min = 0.0
-            cv_avg = 0.0
-            
-        # 3. 计算 Pareto前沿 上的最小风险 (V2 加固逻辑)
-        rank_0_risks = [s.f1_risk for s in population if s.rank == 0 and s.is_feasible and s.f1_risk != float('inf')]
-        if rank_0_risks:
-            risk_min = np.min(rank_0_risks)
-        else:
-            # 如果 Rank 0 上没有可行解，就从 *所有* 可行解中找
-            all_feasible_risks = [s.f1_risk for s in population if s.is_feasible and s.f1_risk != float('inf')]
-            if all_feasible_risks:
-                risk_min = np.min(all_feasible_risks)
-            else:
-                risk_min = 0.0  # 或者 np.nan
-
-        # 格式化输出
-        log_line = (
-            f" {generation:>5} | {n_eval:>6} | {n_nds:>6} | {cv_min:17.10E} | {cv_avg:17.10E} | {risk_min:10.2f}\n"
-        )
-        
         try:
-            with open(self.log_file_path, 'a', encoding='utf-8') as f:
-                f.write(log_line)
+            # 与 GenerationalLogger 相同的统计逻辑
+            n_total = len(population)
+            if n_total == 0:
+                return
+
+            feasible_sols = [s for s in population if s.is_feasible]
+            n_feasible = len(feasible_sols)
+            
+            cvs = [s.constraint_violation for s in population if not s.is_feasible]
+            cv_min = np.min(cvs) if cvs else 0.0
+            cv_mean = np.mean(cvs) if cvs else 0.0
+            cv_median = np.median(cvs) if cvs else 0.0
+            
+            if feasible_sols:
+                risks = [s.f1_risk for s in feasible_sols]
+                costs = [s.f2_cost for s in feasible_sols]
+                n_nds = sum(1 for s in feasible_sols if s.rank == 0)
+                
+                risk_min, risk_mean, risk_median = np.min(risks), np.mean(risks), np.median(risks)
+                cost_min, cost_mean, cost_median = np.min(costs), np.mean(costs), np.median(costs)
+            else:
+                n_nds = 0
+                risk_min, risk_mean, risk_median = 0.0, 0.0, 0.0
+                cost_min, cost_mean, cost_median = 0.0, 0.0, 0.0
+            
+            # 写入 CSV 行
+            self.csv_writer.writerow([
+                generation, n_total, n_feasible, n_nds,
+                f"{cv_min:.4f}", f"{cv_mean:.4f}", f"{cv_median:.4f}",
+                f"{risk_min:.4f}", f"{risk_mean:.4f}", f"{risk_median:.4f}",
+                f"{cost_min:.4f}", f"{cost_mean:.4f}", f"{cost_median:.4f}"
+            ])
+            # 增加 flush 确保实时写入
+            self.csv_file.flush()
+            
         except Exception as e:
-            print(f"警告: 无法写入日志行到 {self.log_file_path}: {e}")
+            logging.warning(f"GenerationalFileLogger 写入 CSV 失败: {e}")
+    
+    def __del__(self):
+        # 在对象被销毁时关闭文件
+        if hasattr(self, 'csv_file') and self.csv_file:
+            self.csv_file.close()

@@ -11,15 +11,15 @@ from app.core.network import TransportNetwork
 # --- 网络可视化功能 ---
 
 def visualize_network(
-    network: TransportNetwork,  # 接收 network 对象
-    layout_func_name: str = 'spring', 
+    network: TransportNetwork,
+    layout_func_name: str = 'kamada-kawai',   #布局函数名词
     save_path: Optional[str] = None
 ):
     """
     使用 networkx 和 matplotlib 可视化网络拓扑（支持有向图）。
     """
     # 步骤 1: 获取样式配置和准备好的绘图数据
-    style = _get_style_config() # [修复] 直接调用，没有 'self'
+    style = _get_style_config()
     
     # 把 network 和 style 传递给辅助函数
     graph_data = _prepare_graph_data(network, style) 
@@ -47,7 +47,7 @@ def visualize_network(
                            arrows=True,
                            arrowstyle='-|>',
                            arrowsize=15,
-                           connectionstyle=connection_style
+                        #    connectionstyle=connection_style
                            )
     # 绘制 Rail 边
     nx.draw_networkx_edges(G, pos, 
@@ -59,7 +59,7 @@ def visualize_network(
                            arrows=True,
                            arrowstyle='-|>',
                            arrowsize=15,
-                           connectionstyle=connection_style
+                        #    connectionstyle=connection_style
                            )
     
     # 绘制节点
@@ -68,7 +68,7 @@ def visualize_network(
                            node_size=style['node_size'],
                            edgecolors=graph_data['node_border_colors'],
                            linewidths=style['emergency_border_width']
-    )
+                           )
     
     # 绘制节点标签
     nx.draw_networkx_labels(G, pos, font_size=style['font_size'], font_color=style['font_color'])
@@ -137,7 +137,7 @@ def _get_style_config() -> Dict[str, Any]:
     [辅助方法] 返回一个包含所有绘图样式的配置字典。
     """
     return {
-        "figure_size": (16, 12),
+        "figure_size": (20, 15),
         "node_size": 600,
         "font_size": 10,
         "font_color": 'black',

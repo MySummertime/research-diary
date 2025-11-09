@@ -131,7 +131,7 @@ class NSGA2:
             self._trigger_callbacks(gen + 1, self.archive, callbacks)
             
             if (gen + 1) % 10 == 0:
-                logging.info(f"--- Generation {gen + 1}/{self.max_generations} --- Archive Size: {len(self.archive)}")
+                logging.debug(f"--- Generation {gen + 1}/{self.max_generations} --- Archive Size: {len(self.archive)}")
             
         # 循环结束，返回最终的精英存档
         logging.info("\n--- 进化完成 ---")

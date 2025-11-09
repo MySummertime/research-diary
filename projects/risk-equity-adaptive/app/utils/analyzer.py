@@ -71,12 +71,12 @@ def plot_evolution(logs: Dict[str, List[float]], save_dir: str = "results", file
 
         # --- 2. 绘制风险演化图 (可行解) ---
         plt.figure(figsize=(12, 6))
-        plt.plot(gens, logs["risk_min"], label="Minimum Risk (of feasible)", color='green')
-        plt.plot(gens, logs["risk_mean"], label="Mean Risk (of feasible)", color='blue', linestyle='--')
-        plt.plot(gens, logs["risk_median"], label="Median Risk (of feasible)", color='orange', linestyle=':')
+        plt.plot(gens, logs["risk_min"], label="Minimum Risk", color='green')
+        plt.plot(gens, logs["risk_mean"], label="Mean Risk", color='blue', linestyle='--')
+        plt.plot(gens, logs["risk_median"], label="Median Risk", color='orange', linestyle=':')
         plt.xlabel("Generation")
         plt.ylabel("Risk (f1)")
-        plt.title("Risk Evolution (Feasible Solutions Only)")
+        plt.title("Risk Evolution")
         plt.legend()
         plt.grid(True)
         risk_file_path = os.path.join(save_dir, f"{file_name_prefix}_risk.png")
@@ -86,12 +86,12 @@ def plot_evolution(logs: Dict[str, List[float]], save_dir: str = "results", file
 
         # --- 3. 绘制成本演化图 (可行解) ---
         plt.figure(figsize=(12, 6))
-        plt.plot(gens, logs["cost_min"], label="Minimum Cost (of feasible)", color='green')
-        plt.plot(gens, logs["cost_mean"], label="Mean Cost (of feasible)", color='blue', linestyle='--')
-        plt.plot(gens, logs["cost_median"], label="Median Cost (of feasible)", color='orange', linestyle=':')
+        plt.plot(gens, logs["cost_min"], label="Minimum Cost", color='green')
+        plt.plot(gens, logs["cost_mean"], label="Mean Cost", color='blue', linestyle='--')
+        plt.plot(gens, logs["cost_median"], label="Median Cost", color='orange', linestyle=':')
         plt.xlabel("Generation")
         plt.ylabel("Cost (f2)")
-        plt.title("Cost Evolution (Feasible Solutions Only)")
+        plt.title("Cost Evolution")
         plt.legend()
         plt.grid(True)
         cost_file_path = os.path.join(save_dir, f"{file_name_prefix}_cost.png")
