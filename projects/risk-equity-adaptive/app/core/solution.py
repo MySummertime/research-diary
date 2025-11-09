@@ -17,13 +17,12 @@ class Solution:
         # 遗传算法需要 *进化* 的决策变量。
         # 这是论文模型的核心。
         
-        # 基因A: 路径选择 (离散变量)
+        # 基因: 路径选择 (离散变量)
         # 字典: { "task_id_1": Path_obj_A, "task_id_2": Path_obj_B, ... }
         self.path_selections: Dict[str, Path] = {}
         
-        # 基因B: CVaR辅助变量 (连续变量)
+        # eta 是一个“评估结果”的缓存，由 Evaluator 填充
         # 字典: { "task_id_1": 25000.0, "task_id_2": 31000.0, ... }
-        # 对应论文中的辅助决策变量 η_v 
         self.eta_values: Dict[str, float] = {}
 
         # --- 2. 适应度 (Fitness) ---

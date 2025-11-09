@@ -44,9 +44,8 @@ def plot_risk_histogram(solutions: List[Solution], save_dir: str = "results", fi
 
 def plot_evolution(logs: Dict[str, List[float]], save_dir: str = "results", file_name_prefix: str = "evolution"):
     """
-    绘制风险、成本 *和* 约束违反度(CV)的进化轨迹。
+    绘制风险、成本和约束违反度(CV)的进化轨迹。
     """
-    # 检查 'cv_avg'，这是我们 V2 callback 里的新数据
     if not logs.get("cv_avg"):
         logging.warning("Analyzer: 日志数据不完整 (缺少 'cv_avg')，无法绘制进化图。")
         return
@@ -104,17 +103,14 @@ def plot_evolution(logs: Dict[str, List[float]], save_dir: str = "results", file
 
 def analyze_operator_contribution(log: Dict[str, int]):
     """
-    [V2 改进] 打印并记录 *混合* 算子的调用次数。
+    打印并记录 *混合* 算子的调用次数。
     """
     logging.info("--- [附加分析] 算子贡献度日志 ---")
     
     crossover_calls = log.get("crossover_calls", 0)
-    # 正确汇总两个变异键
     mut_path_calls = log.get("mutation_path_calls", 0)
-    mut_eta_calls = log.get("mutation_eta_calls", 0)
-    total_mutations = mut_path_calls + mut_eta_calls
-    
-    total_calls = crossover_calls + total_mutations
+
+    total_calls = crossover_calls + mut_path_calls
     
     if total_calls == 0:
         logging.warning("\n未记录到算子调用信息。")
@@ -122,12 +118,10 @@ def analyze_operator_contribution(log: Dict[str, int]):
 
     logging.info("\n算子调用次数及占比分析:")
     crossover_pct = (crossover_calls / total_calls) * 100 if total_calls > 0 else 0
-    mutation_pct = (total_mutations / total_calls) * 100 if total_calls > 0 else 0
+    mutation_pct = (mut_path_calls / total_calls) * 100 if total_calls > 0 else 0
     
     logging.info(f"  - 交叉 (Crossover) 总调用: {crossover_calls:<6} 次, 占比 {crossover_pct:.2f}%")
-    logging.info(f"  - 变异 (Mutation)  总调用: {total_mutations:<6} 次, 占比 {mutation_pct:.2f}%")
-    logging.info(f"      ↳ (路径变异): {mut_path_calls:<6} 次")
-    logging.info(f"      ↳ (Eta 变异): {mut_eta_calls:<6} 次")
+    logging.info(f"  - 变异 (Mutation)  总调用: {mut_path_calls:<6} 次, 占比 {mutation_pct:.2f}%")
 
 def plot_sensitivity_boxplot(all_deltas: List[List[float]], save_dir: str = "results", file_name: str = "sensitivity_boxplot.png"):
     """

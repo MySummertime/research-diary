@@ -2,7 +2,7 @@
 # --- app/core/evaluator.py ---
 import math
 import networkx as nx
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 from .network import TransportNetwork, Node, Arc
 from .solution import Solution
 
@@ -17,7 +17,7 @@ class Evaluator:
         适配嵌套的 config 字典。
         """
         self.network = network
-        self.config = config    # 存储完整的 V3 config
+        self.config = config    # 存储完整的 config
         
         # 提取各自关心的配置分组，提高内聚性
         self.risk_config = self.config.get("risk_model_f1", {})
@@ -36,6 +36,7 @@ class Evaluator:
         solution.f2_cost = self._calculate_f2_expected_cost(solution)
         
         # 2. 计算目标函数 f1 (CVaR 风险)
+        # 这个函数会计算并填充 solution.eta_values
         solution.f1_risk = self._calculate_f1_cvar_risk(solution)
         
         # 3. 检查所有约束 (容量 + 模糊成本预算)
@@ -79,44 +80,112 @@ class Evaluator:
     def _calculate_f1_cvar_risk(self, solution: Solution) -> float:
         """
         计算 f1: 所有任务的 CVaR 风险之和。
-        从 self.risk_config 读取。
+        [逻辑]
+        1. 遍历每个任务。
+        2. 收集该任务路径上所有的 (p, c) 事件对。
+        3. 为该任务计算最优的 eta* (即 VaR_alpha)。
+        4. 使用该 eta* 计算 CVaR_alpha。
+        5. 将 eta* 存回 solution.eta_values 以供日志记录。
         """
         total_risk = 0.0
         alpha = self.risk_config.get("cvar_alpha", 0.95)
         
-        if alpha >= 1.0:
+        if alpha >= 1.0 or alpha <= 0.0:
             return float('inf') 
             
-        risk_multiplier = 1.0 / (1.0 - alpha)
+        one_minus_alpha = 1.0 - alpha
         
+        # 清空旧的计算结果
+        solution.eta_values = {}
+
         for task_id, path in solution.path_selections.items():
-            eta_v = solution.eta_values.get(task_id)
-            if eta_v is None:
-                continue
             
-            task_z_sum = 0.0 # (Σ p*z)
+            # 1. 收集 (p, c) 事件对
+            p_c_pairs: List[Tuple[float, float]] = []
             
-            # 2. 累加弧段风险
+            # 1a. 收集弧段风险
             for arc in path.arcs:
                 p_ijm = arc.accident_prob_per_km * arc.length
                 c_ijm = self._get_dynamic_consequence(arc)
-                z_ijm = max(0.0, c_ijm - eta_v)
-                task_z_sum += p_ijm * z_ijm
+                if p_ijm > 0 and c_ijm > 0:
+                    p_c_pairs.append((p_ijm, c_ijm))
                 
-            # 3. 累加枢纽风险
+            # 1b. 收集枢纽风险
             for hub in path.transfer_hubs:
                 p_k = hub.accident_prob
                 c_k = self._get_dynamic_consequence(hub)
-                z_k = max(0.0, c_k - eta_v)
-                task_z_sum += p_k * z_k
+                if p_k > 0 and c_k > 0:
+                    p_c_pairs.append((p_k, c_k))
+
+            # 2. 计算此任务的最优 eta* 和 CVaR
+            if not p_c_pairs:
+                # 这条路径没有风险
+                optimal_eta_v = 0.0
+                task_cvar = 0.0
+            else:
+                optimal_eta_v, task_cvar = self._find_optimal_eta_and_cvar(p_c_pairs, alpha, one_minus_alpha)
             
-            # 4. 计算此任务的 CVaR
-            task_cvar = eta_v + risk_multiplier * task_z_sum
+            # 3. 存回 solution 作为“计算结果”
+            solution.eta_values[task_id] = optimal_eta_v
             
-            # 5. 累加到总风险
+            # 4. 累加到总风险
             total_risk += task_cvar
             
         return total_risk
+    
+    def _find_optimal_eta_and_cvar(self, 
+                                 p_c_pairs: List[Tuple[float, float]], 
+                                 alpha: float, 
+                                 one_minus_alpha: float) -> Tuple[float, float]:
+        """
+        [辅助函数]
+        为一条路径（由 (p, c) 对列表表示）计算最优的 eta* (即 VaR) 和 CVaR。
+        CVaR(X) = VaR_alpha(X) + (1 / (1-alpha)) * E[ (X - VaR_alpha(X))^+ ]
+        最优的 eta* 就是 VaR_alpha(X)。
+        """
+        
+        # 步骤 1: 按后果 c 升序排序
+        # (p, c) -> (c, p)
+        sorted_c_p_pairs = sorted([(c, p) for p, c in p_c_pairs])
+        
+        # 步骤 2: 找到 VaR (最优的 eta)
+        # 需要找到最小的 c_i，使得 "超过它的概率" <= (1 - alpha)
+        
+        total_prob = sum(p for c, p in sorted_c_p_pairs)
+        if total_prob <= one_minus_alpha:
+            # 极端情况：所有事故概率之和都小于 (1-alpha)
+            # 这意味着 VaR(alpha) 为 0 (因为 P(X > 0) <= 1-alpha)
+            optimal_eta_v = 0.0
+        else:
+            prob_sum = 0.0
+            optimal_eta_v = sorted_c_p_pairs[-1][0] # 默认为最大后果
+            
+            for i in range(len(sorted_c_p_pairs)):
+                c_i, p_i = sorted_c_p_pairs[i]
+                
+                # prob_sum 是 P(X <= c_i)
+                prob_sum += p_i
+                
+                # P(X > c_i) = total_prob - prob_sum
+                prob_exceeding = total_prob - prob_sum
+                
+                if prob_exceeding <= one_minus_alpha:
+                    # 找到的 c_i 就是第一个满足条件的 VaR(alpha)
+                    optimal_eta_v = c_i
+                    break
+        
+        # 步骤 3: 计算 CVaR
+        # CVaR = eta* + (1 / (1-alpha)) * E[ (X - eta*)^+ ]
+        # E[ (X - eta*)^+ ] = Σ p_i * max(0, c_i - eta*)
+        
+        expected_loss_over_eta = 0.0
+        for p_i, c_i in p_c_pairs:
+            loss = max(0.0, c_i - optimal_eta_v)
+            expected_loss_over_eta += p_i * loss
+            
+        task_cvar = optimal_eta_v + (expected_loss_over_eta / one_minus_alpha)
+        
+        return optimal_eta_v, task_cvar
 
     def _get_dynamic_consequence(self, entity: Arc | Node) -> float:
         """
@@ -235,7 +304,7 @@ class Evaluator:
         print("开始预计算应急响应时间...")
         
         road_graph = nx.DiGraph()
-        speed_v = self.risk_config.get("emergency_vehicle_speed", 60.0)
+        speed_v = self.risk_config.get("emergency_vehicle_speed", 45.0)
         
         for arc in self.network.arcs:
             if arc.mode == 'road':

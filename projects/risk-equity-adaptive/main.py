@@ -49,7 +49,7 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
 # ----------------------------------------
 # 2. 准备实验
 # ----------------------------------------
-def setup_experiment(config: Dict[str, Any]) -> Tuple[TransportNetwork, PathFinder, Evaluator, Dict[str, List[Path]]]:
+def setup_experiment(config: Dict[str, Any], seed: int) -> Tuple[TransportNetwork, PathFinder, Evaluator, Dict[str, List[Path]]]:
     """
     执行所有“运行前”的准备工作：
     从 config["experiment"] 中读取。
@@ -59,9 +59,12 @@ def setup_experiment(config: Dict[str, Any]) -> Tuple[TransportNetwork, PathFind
     exp_config = config["experiment"] 
     
     # 1. 设置随机种子
-    random.seed(exp_config["seed"])
-    np.random.seed(exp_config["seed"])
-    logging.info(f"随机种子已设置为: {exp_config['seed']}")
+    # random.seed(exp_config["seed"])
+    # np.random.seed(exp_config["seed"])
+    # logging.info(f"随机种子已设置为: {exp_config['seed']}")
+    random.seed(seed)
+    np.random.seed(seed)
+    logging.info(f"随机种子已设置为: {seed}")
 
     # 2. 加载网络
     logging.info("--- [2/5] 正在加载运输网络... ---")
@@ -109,12 +112,11 @@ def setup_experiment(config: Dict[str, Any]) -> Tuple[TransportNetwork, PathFind
 # ----------------------------------------
 # 3. 运行并分析
 # ----------------------------------------
-def run_and_analyze_experiment(
-    network: TransportNetwork, 
-    evaluator: Evaluator,
-    candidate_paths_map: Dict[str, List[Path]],
-    config: Dict[str, Any],
-    save_dir: str):
+def run_and_analyze_experiment(network: TransportNetwork,
+                               evaluator: Evaluator,
+                               candidate_paths_map: Dict[str, List[Path]],
+                               config: Dict[str, Any],
+                               save_dir: str) -> List[Solution]:
     """
     执行所有“运行中”和“运行后”的任务：
     (注意: NSGA2 内部将负责访问 config["algorithm"])
@@ -133,12 +135,12 @@ def run_and_analyze_experiment(
         logging.error(f"\n !!! 算法运行时发生致命错误: {e} !!!")
         import traceback
         logging.error(traceback.format_exc())
-        return
+        return []
 
     logging.info("--- [5/5] 正在分析并可视化结果... ---")
     if not final_pareto_front:
         logging.warning("未找到任何非支配解，无法进行后续分析。")
-        return
+        return []
     
     # 1. 保存 JSON
     save_results_json(final_pareto_front, os.path.join(save_dir, "final_pareto_front.json"))
@@ -179,6 +181,7 @@ def run_and_analyze_experiment(
             candidate_paths_map=candidate_paths_map, 
             config=config   # 传递整个 config
         )
+    return final_pareto_front
 
 def run_full_analysis(
     final_solutions: List[Solution], 
@@ -233,8 +236,12 @@ def main():
         logging.info("--- [1/5] 正在加载配置... ---")
         config = load_config("config.json") # 加载嵌套字典
         
+        # 使用 config 中的 seed 运行一次
+        seed = config.get("experiment", {}).get("seed", 42)
+        logging.info(f"--- 正在开始单次运行 (Seed: {seed}) ---")
+
         # === 步骤 2: 准备实验 (加载网络, 搜索路径, 预计算) ===
-        network, path_finder, evaluator, candidate_paths_map = setup_experiment(config)
+        network, path_finder, evaluator, candidate_paths_map = setup_experiment(config, seed=seed)
         
         # (可选) 可视化网络拓扑
         try:

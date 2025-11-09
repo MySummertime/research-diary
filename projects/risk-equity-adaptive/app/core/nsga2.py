@@ -49,26 +49,22 @@ class NSGA2:
         self.max_generations = self.algo_config.get("max_generations", 200)
         # 交叉概率
         self.crossover_prob = self.algo_config.get("crossover_prob", 0.9)
-        
         # 变异参数
         self.prob_mut_path = self.op_config.get("mutation_prob_path", 0.05) 
-        self.prob_mut_eta = self.op_config.get("mutation_prob_eta", 0.1)  
-        self.pm_eta = self.op_config.get("polynomial_mutation_eta", 20)  
-        self.eta_min = self.op_config.get("eta_min_bound", 0)       
-        self.eta_max = self.op_config.get("eta_max_bound", 100000)      
+        # 存档混合概率
+        self.mix_ratio = self.op_config.get("mix_ratio", 0.5)
 
-        # 精英存档
+        # 精英存档，代表当前种群，即P(t)
         self.archive: List[Solution] = []
 
         self.operator_log = {
             "crossover_calls": 0,
             "mutation_path_calls": 0,
-            "mutation_eta_calls": 0
         }
 
     # --- 1. 主运行方法 (Public) ---
 
-    def run(self, callbacks: Optional[List[Callback]] = None) -> List[Solution]:
+    def run(self, callbacks: Optional[List[Callback]] = None, initial_population: Optional[List[Solution]] = None) -> List[Solution]:
         """
         [主方法] 运行完整的NSGA-II进化过程。
         使用精英存档 (SPEA2-like) 流程。
@@ -77,22 +73,48 @@ class NSGA2:
             callbacks = []
 
         # 步骤 1: (P_0) 创建并评估初始种群
-        logging.info("开始初始化种群 (P_0)...")
-        population = self._initialize_population()
-        self._evaluate_population(population)
+        # logging.info("开始初始化种群 (P_0)...")
+        # initial_population = self._initialize_population()
+        # self._evaluate_population(initial_population)
         
         # 步骤 2: (A_0) 用初始种群填充精英存档
-        self.archive = self._update_archive([], population)
-        self._assign_ranks_and_crowding(self.archive) # 为存档个体分配适应度
+        # self.archive = self._update_archive([], initial_population)
+        
+        if initial_population is None:
+            logging.info("开始初始化种群 (P_0)...")
+            population = self._initialize_population()
+            self._evaluate_population(population)
+            self.archive = self._update_archive([], population)
+        else:
+            logging.info("--------------------------------")
+            logging.info("--- 正在从一个已提供的种群重启 ---")
+            logging.info("--------------------------------")
+            # 假设传入的 population 已经被评估过了
+            self.archive = self._update_archive([], initial_population)
+        
+        # 为存档个体分配适应度等级和拥挤度
+        self._assign_ranks_and_crowding(self.archive)
         
         # --- [回调] 触发第0代 (初始存档) ---
         self._trigger_callbacks(0, self.archive, callbacks)
         
         # 步骤 3: (P_t -> Q_t -> R_t -> P_{t+1}) 开始迭代
         for gen in range(self.max_generations):
-            # (Q_t) 从 *存档* 中选择父代来创建子代种群
-            # mating_pool = self._selection(self.archive)
-            mating_pool = self.archive
+            # 1. 计算需要“注入”的 *全新* 随机解的数量
+            num_immigrants = int(self.mix_ratio * self.population_size)
+            
+            if num_immigrants > 0:
+                # 2. 创建并评估这些 "随机移民" (Immigrants)
+                immigrants = self._create_random_solutions(num_immigrants)
+                self._evaluate_population(immigrants)
+            else:
+                immigrants = []
+
+            # 3. 创建繁殖池 (Mating Pool)
+            # 繁殖池 = (当前种群 A_t) + (新注入的随机移民)
+            mating_pool = self.archive + immigrants
+
+            # (Q_t) 从 *混合后* 的 Mating Pool 中选择父代来创建子代种群
             offspring = self._create_offspring_population(mating_pool)
             
             # (Q_t) 评估子代种群
@@ -100,18 +122,24 @@ class NSGA2:
             
             # (A_{t+1}) 合并 (存档 + 子代)，并选出新的存档
             self.archive = self._update_archive(self.archive, offspring)
-            self._assign_ranks_and_crowding(self.archive) # 重新计算新存档的适应度
+
+            # (A_{t+1}) 重新计算新种群的 Ranks 和 Crowding
+            self._assign_ranks_and_crowding(self.archive)
 
             # --- [回调] 触发本代结束 ---
             # 回调函数接收的是当前最优解集 (存档)
             self._trigger_callbacks(gen + 1, self.archive, callbacks)
             
             if (gen + 1) % 10 == 0:
-                logging.debug(f"--- Generation {gen + 1}/{self.max_generations} --- Archive Size: {len(self.archive)}")
+                logging.info(f"--- Generation {gen + 1}/{self.max_generations} --- Archive Size: {len(self.archive)}")
             
         # 循环结束，返回最终的精英存档
         logging.info("\n--- 进化完成 ---")
-        logging.info(f"最终在存档中找到 {len(self.archive)} 个最优解。")
+        
+        # 统计 Rank 0 的解
+        rank_0_solutions = [s for s in self.archive if s.rank == 0 and s.is_feasible]
+        logging.info(f"最终在 {len(self.archive)} 个存档解中，找到了 {len(rank_0_solutions)} 个可行的最优解 (Rank 0)。")
+        
         logging.info(f"算子统计: {self.operator_log}")
         
         return self.archive
@@ -120,7 +148,7 @@ class NSGA2:
 
     def _initialize_population(self) -> List[Solution]:
         """
-        创建随机初始种群 (P_0)。
+        创建随机初始种群 (P_0)
         """
         population = []
         for _ in range(self.population_size):
@@ -137,13 +165,35 @@ class NSGA2:
                     else:
                         logging.warning(f"警告: 任务 {task_id} 没有任何候选路径！")
                 
-                # 随机初始化 η_v (基因B)
-                random_eta = random.uniform(self.eta_min, self.eta_max)
-                solution.eta_values[task_id] = random_eta
-                
             population.append(solution)
             
         return population
+    
+    def _create_random_solutions(self, num_solutions: int) -> List[Solution]:
+        """
+        创建 'num_solutions' 个随机解
+        """
+        new_solutions = []
+        for _ in range(num_solutions):
+            solution = Solution()
+            for task in self.network.tasks:
+                task_id = task.task_id
+                
+                if task_id in self.candidate_paths_map:
+                    all_paths = self.candidate_paths_map[task_id]
+                    if all_paths: 
+                        chosen_path = random.choice(all_paths)
+                        solution.path_selections[task_id] = chosen_path
+                    else:
+                        # 第一次初始化时警告，后续 "移民" 不再警告
+                        if hasattr(self, 'archive'):    # 检查是否已初始化
+                            pass 
+                        else:
+                            logging.warning(f"警告: 任务 {task_id} 没有任何候选路径！")
+                
+            new_solutions.append(solution)
+            
+        return new_solutions
 
     def _create_offspring_population(self, mating_pool: List[Solution]) -> List[Solution]:
         """
@@ -151,7 +201,7 @@ class NSGA2:
         """
         offspring_pop = []
         while len(offspring_pop) < self.population_size:
-            # 从 mating_pool (即存档) 中选择
+            # 从 mating pool 中选择
             parent1 = self._selection(mating_pool)
             parent2 = self._selection(mating_pool)
             
@@ -208,26 +258,12 @@ class NSGA2:
             if task_id not in c1.path_selections or task_id not in c2.path_selections:
                 continue
 
-            # --- 基因A: 路径交叉 (均匀交叉) ---
+            # --- 基因：路径交叉 (均匀交叉) ---
             if random.random() < 0.5:
                 # 交换路径
                 c1.path_selections[task_id] = p2.path_selections[task_id]
                 c2.path_selections[task_id] = p1.path_selections[task_id]
             
-            # --- 基因B: Eta值交叉 (算术交叉) ---
-            if task_id in p1.eta_values and task_id in p2.eta_values:
-                eta1 = p1.eta_values[task_id]
-                eta2 = p2.eta_values[task_id]
-                
-                # 使用标准BLX-0.5
-                alpha = random.random() # 0.0 到 1.0
-                c1.eta_values[task_id] = alpha * eta1 + (1.0 - alpha) * eta2
-                c2.eta_values[task_id] = (1.0 - alpha) * eta1 + alpha * eta2
-                
-                # 确保交叉后的值仍在边界内
-                c1.eta_values[task_id] = max(self.eta_min, min(self.eta_max, c1.eta_values[task_id]))
-                c2.eta_values[task_id] = max(self.eta_min, min(self.eta_max, c2.eta_values[task_id]))
-
         return c1, c2
 
     def _mutation(self, solution: Solution):
@@ -238,7 +274,7 @@ class NSGA2:
         for task in self.network.tasks:
             task_id = task.task_id 
 
-            # 基因A (路径): 使用 "随机重置变异"
+            # 基因：(路径): 使用 "随机重置变异"
             if random.random() < self.prob_mut_path:
                 if task_id in self.candidate_paths_map: 
                     all_paths = self.candidate_paths_map[task_id]
@@ -255,17 +291,8 @@ class NSGA2:
                         if new_path != current_path:
                             solution.path_selections[task_id] = new_path
                             self.operator_log["mutation_path_calls"] += 1
-            
-            # 基因B (eta): 使用 "多项式变异" (Polynomial Mutation)
-            if random.random() < self.prob_mut_eta:
-                if task_id in solution.eta_values: 
-                    old_eta = solution.eta_values[task_id]
-                    new_eta = self._polynomial_mutation(old_eta, self.eta_min, self.eta_max, self.pm_eta)
-                    solution.eta_values[task_id] = new_eta
-                    if old_eta != new_eta:
-                        self.operator_log["mutation_eta_calls"] += 1
 
-    # --- 3. [V3 新增] 存档管理 ---
+    # --- 3. 存档更新 ---
 
     def _update_archive(self, archive: List[Solution], population: List[Solution]) -> List[Solution]:
         """
@@ -280,25 +307,27 @@ class NSGA2:
         fronts = self._fast_non_dominated_sort(combined_pop)
         
         if not fronts:
-            return [] # 如果没有解，返回空列表
+            return []   # 如果没有解，返回空列表
 
-        new_archive = fronts[0] # Rank 0 是新的精英存档
+        new_archive = []
+        for front in fronts:
+            # 存档未满，直接添加整个前沿
+            if len(new_archive) + len(front) <= self.archive_size:
+                new_archive.extend(front)
+            else:
+                # 存档已满，需要“截断”(Truncation)
+                # 使用 NSGA-II 的拥挤度排序来保留多样性
+                self._calculate_crowding_distance(front)
 
-        # 2. 检查存档大小
-        if len(new_archive) <= self.archive_size:
-            # 存档未满，直接返回所有非支配解
-            return new_archive
-        else:
-            # 3. 存档已满，需要“截断”(Truncation)
-            # 使用 NSGA-II 的拥挤度排序来保留多样性
-            self._calculate_crowding_distance(new_archive)
-            
-            # 按拥挤度从高到低排序 (最不拥挤的解排在前面)
-            new_archive.sort(key=lambda s: s.crowding_distance, reverse=True)
-            
-            # 截断存档，只保留 archive_size 个最优且最分散的解
-            return new_archive[:self.archive_size]
-
+                # 按拥挤度从高到低排序 (最不拥挤的解排在前面)
+                front.sort(key=lambda s: s.crowding_distance, reverse=True)
+                
+                # 截断存档，只保留 archive_size 个最优且最分散的解
+                remaining = self.archive_size - len(new_archive)
+                new_archive.extend(front[:remaining])
+                break
+        
+        return new_archive
 
     # --- 4. 标准 NSGA-II 辅助方法 (现在也用于存档管理) ---
 
@@ -370,7 +399,6 @@ class NSGA2:
         if not front:
             return
 
-        num_sols = len(front)
         for sol in front:
             sol.crowding_distance = 0.0 # 初始化
 
@@ -379,49 +407,41 @@ class NSGA2:
         infeasible_sols = [s for s in front if not s.is_feasible]
 
         if not feasible_sols:
-            # 如果全是不可行解，则基于约束违反度进行排序
+            # 归一化约束违反度 (值越小越好)
+            max_v = max(s.constraint_violation for s in infeasible_sols) or 1.0
             for sol in infeasible_sols:
-                sol.crowding_distance = sol.constraint_violation
+                sol.crowding_distance = 1.0 - (sol.constraint_violation / max_v)
             return
-
+        
         # --- 只对可行解进行计算 ---
-        num_feasible = len(feasible_sols)
-        if num_feasible <= 2:
+        if len(feasible_sols) <= 2:
             for s in feasible_sols:
                 s.crowding_distance = float('inf')  # 边界点
             return
+        
+        # 归一化 f1,f2 后计算 crowding
+        f1_vals = [s.f1_risk for s in feasible_sols]
+        f2_vals = [s.f2_cost for s in feasible_sols]
 
-        objectives = {
-            'f1_risk': [s.f1_risk for s in feasible_sols],
-            'f2_cost': [s.f2_cost for s in feasible_sols]
-        }
+        f1_min, f1_max = min(f1_vals), max(f1_vals)
+        f2_min, f2_max = min(f2_vals), max(f2_vals)
 
-        for key in objectives:
-            sorted_indices = sorted(range(num_feasible), key=lambda k: objectives[key][k])
-            
-            # 边界点总是被保留
+        # 避免除以零
+        f1_range = f1_max - f1_min or 1.0
+        f2_range = f2_max - f2_min or 1.0
+
+        norm_f1 = [(v - f1_min) / f1_range for v in f1_vals]
+        norm_f2 = [(v - f2_min) / f2_range for v in f2_vals]
+
+        for obj_key, values in zip(['f1_risk', 'f2_cost'], [norm_f1, norm_f2]):
+            sorted_indices = sorted(range(len(values)), key=lambda i: values[i])
             feasible_sols[sorted_indices[0]].crowding_distance = float('inf')
             feasible_sols[sorted_indices[-1]].crowding_distance = float('inf')
-            
-            obj_min = objectives[key][sorted_indices[0]]
-            obj_max = objectives[key][sorted_indices[-1]]
-            obj_range = obj_max - obj_min
-            if obj_range == 0:
-                obj_range = 1.0 # 避免除以零
 
-            for i in range(1, num_feasible - 1):
-                idx = sorted_indices[i]
-                prev_idx = sorted_indices[i-1]
-                next_idx = sorted_indices[i+1]
-                
-                distance = (objectives[key][next_idx] - objectives[key][prev_idx]) / obj_range
-                feasible_sols[idx].crowding_distance += distance
-
-    def _create_next_population(self, fronts: List[List[Solution]]) -> List[Solution]:
-        """[标准] 从 R_t 中选出 P_{t+1}。"""
-        # 这个函数不再使用，但保留它以备后用
-        # 真正的“下一代”选择在 _update_archive 中完成
-        pass
+            for i in range(1, len(values) - 1):
+                prev_idx, next_idx = sorted_indices[i - 1], sorted_indices[i + 1]
+                dist = values[next_idx] - values[prev_idx]
+                feasible_sols[sorted_indices[i]].crowding_distance += dist
 
     def _assign_ranks_and_crowding(self, population: List[Solution]):
         """[辅助] 评估后，为给定种群分配rank和crowding"""
@@ -468,26 +488,3 @@ class NSGA2:
         else:
             # 两个都可行，使用标准支配
             return self._dominates(p, q)
-
-    # --- 6. 数学辅助方法 ---
-
-    def _polynomial_mutation(self, value: float, low: float, high: float, eta: float) -> float:
-        """
-        [数学] 执行实数的多项式变异。
-        """
-        if eta < 0:
-            eta = 0 
-            
-        u = random.random()
-        delta = 0.0
-        
-        if u < 0.5:
-            delta = (2.0 * u)**(1.0 / (eta + 1.0)) - 1.0
-        else:
-            delta = 1.0 - (2.0 * (1.0 - u))**(1.0 / (eta + 1.0))
-            
-        new_value = value + delta * (high - low)
-        
-        new_value = max(low, min(high, new_value))
-        
-        return new_value
