@@ -150,7 +150,6 @@ class Evaluator:
         
         # 步骤 2: 找到 VaR (最优的 eta)
         # 需要找到最小的 c_i，使得 "超过它的概率" <= (1 - alpha)
-        
         total_prob = sum(p for c, p in sorted_c_p_pairs)
         if total_prob <= one_minus_alpha:
             # 极端情况：所有事故概率之和都小于 (1-alpha)

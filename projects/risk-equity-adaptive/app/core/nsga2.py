@@ -246,9 +246,7 @@ class NSGA2:
     def _crossover(self, p1: Solution, p2: Solution) -> tuple[Solution, Solution]:
         """
         混合交叉算子。
-        基因A (路径) 使用均匀交叉。
-        基因B (eta) 使用模拟二进制交叉 (SBX) 或简单的算术交叉。
-        这里使用简单的算术交叉。
+        基因 (路径) 使用均匀交叉。
         """
         c1 = p1.clone()
         c2 = p2.clone()
