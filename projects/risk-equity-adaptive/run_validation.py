@@ -136,7 +136,10 @@ def run_task_2(all_objectives_list: List[np.ndarray], config: Dict, save_dir: st
     header = f"    {'指标':<10} |"
     divider = "--------------------"
     for i in range(len(all_objectives_list)):
-        header += f" Run {i+1} (S{SEEDS[i]}) |"
+        # 如果 SEEDS 的长度小于 all_objectives_list (例如只修改了config的task 1)
+        # 用 'N/A' 作为种子ID来防止崩溃
+        seed_str = f"S{SEEDS[i]}" if i < len(SEEDS) else "S(N/A)"
+        header += f" Run {i+1} ({seed_str}) |"
         divider += "-----------------"
     header += "   Mean    |   StdDev  "
     divider += "-------------------"
@@ -170,8 +173,9 @@ def run_task_2(all_objectives_list: List[np.ndarray], config: Dict, save_dir: st
             writer = csv.writer(f)
             # 写入表头
             csv_headers = ["Indicator"]
-            for i, seed in enumerate(SEEDS):
-                csv_headers.append(f"Run_{i+1}_(Seed_{seed})")
+            for i in range(len(all_objectives_list)):
+                seed_str = f"S{SEEDS[i]}" if i < len(SEEDS) else "S(N/A)"
+                csv_headers.append(f"Run_{i+1}_({seed_str})")
             csv_headers.extend(["Mean", "StdDev", "Var_Pct (%)"])
             writer.writerow(csv_headers)
             
