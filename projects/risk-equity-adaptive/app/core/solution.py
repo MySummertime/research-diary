@@ -1,6 +1,5 @@
 # --- coding: utf-8 ---
 # --- app/core/solution.py ---
-import copy
 from typing import Dict
 from app.core.path import Path
 
@@ -58,12 +57,27 @@ class Solution:
 
     def clone(self) -> "Solution":
         """
-        创建一个与当前解完全一样的深拷贝 (Deep Copy)。
-        这在遗传算法的交叉和变异中至关重要，
-        以防止父代被子代的操作意外修改。
+        创建一个高效的克隆。
+        手动复制关键数据结构，避免 copy.deepcopy 带来的巨大开销。
         """
-        # 使用 deepcopy 来确保所有字典和 Path 对象都被完全复制
-        return copy.deepcopy(self)
+        new_sol = Solution()
+        
+        # 1. 浅拷贝路径选择字典 (Dict[str, Path])
+        # Path 对象本身是只读/共享的，不需要深拷贝
+        new_sol.path_selections = self.path_selections.copy()
+        
+        # 2. 复制 eta 缓存
+        new_sol.eta_values = self.eta_values.copy()
+        
+        # 3. 复制标量属性
+        new_sol.f1_risk = self.f1_risk
+        new_sol.f2_cost = self.f2_cost
+        new_sol.is_feasible = self.is_feasible
+        new_sol.constraint_violation = self.constraint_violation
+        new_sol.rank = self.rank
+        new_sol.crowding_distance = self.crowding_distance
+        
+        return new_sol
 
     def __repr__(self):
         """

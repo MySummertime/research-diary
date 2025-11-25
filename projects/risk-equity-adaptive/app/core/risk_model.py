@@ -114,6 +114,9 @@ class DynamicRiskModel:
         # 5. 存储弧段响应时间 (关键点法)
         center_coords = [(n.x, n.y) for n in centers]
 
+        # 路网非直线系数 (默认 1.3，表示实际路程通常是直线距离的 1.3 倍)
+        tortuosity_factor = self.config.get("tortuosity_factor", 1.3)
+
         for arc in self.network.arcs:
             t_i = node_travel_times.get(arc.start.id, float("inf"))
             t_j = node_travel_times.get(arc.end.id, float("inf"))
@@ -129,8 +132,14 @@ class DynamicRiskModel:
             # 计算 t_mid (欧氏距离近似)
             min_mid_time = float("inf")
             for cx, cy in center_coords:
-                dist = math.sqrt((mid_x - cx) ** 2 + (mid_y - cy) ** 2)
-                time = dist / speed_v if speed_v > 0 else float("inf")
+                # dist = math.sqrt((mid_x - cx) ** 2 + (mid_y - cy) ** 2)
+                # time = dist / speed_v if speed_v > 0 else float("inf")
+                # 1. 计算平面直线距离 (数学上正确)
+                euclidean_dist = math.sqrt((mid_x - cx) ** 2 + (mid_y - cy) ** 2)
+                # 2. 修正为估计的路网距离 (物理上更真实)
+                estimated_road_dist = euclidean_dist * tortuosity_factor
+                # 3. 计算时间（x,y 单位为 km, speed_v 单位为 km/h）
+                time = estimated_road_dist / speed_v if speed_v > 0 else float("inf")
                 if time < min_mid_time:
                     min_mid_time = time
 
