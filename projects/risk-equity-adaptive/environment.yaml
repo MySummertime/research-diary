@@ -8,7 +8,6 @@ channels:
 dependencies:
   # --- Conda packages ---
   - python
-  - osmnx
   - pandas
   - networkx
   - matplotlib
@@ -18,5 +17,6 @@ dependencies:
 
   # --- Pip packages ---
   - pip:
-      - types-networkx
-      - pymoo
+      - contextily
+      - geopandas
+      - shapely

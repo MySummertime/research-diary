@@ -11,6 +11,7 @@ from typing import List
 from contextlib import contextmanager
 from app.core.solution import Solution
 
+
 # ----------------------------------------
 # 1. 目录创建器
 # ----------------------------------------
@@ -21,13 +22,14 @@ def create_experiment_directory(base_dir: str = "results") -> str:
     timestamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
     exp_dir = os.path.join(base_dir, f"experiment_{timestamp}")
     os.makedirs(exp_dir, exist_ok=True)
-    
+
     # 使用更清晰的打印
     print("=================================================")
     print(f" 本次实验结果将保存至: {exp_dir}")
     print("=================================================")
-    
+
     return exp_dir
+
 
 # ----------------------------------------
 # 2. 高级日志系统
@@ -35,10 +37,10 @@ def create_experiment_directory(base_dir: str = "results") -> str:
 
 # 全局常量
 VERBOSE_FORMATTER = logging.Formatter(
-    "%(asctime)s [%(levelname)-5.5s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    "%(asctime)s [%(levelname)-5.5s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 )
 CLEAN_FORMATTER = logging.Formatter("%(message)s")
+
 
 def setup_logging(log_dir: str, log_name: str = "experiment.log"):
     """
@@ -47,29 +49,29 @@ def setup_logging(log_dir: str, log_name: str = "experiment.log"):
     """
     log_path = os.path.join(log_dir, log_name)
     root_logger = logging.getLogger()
-    
+
     # 清除任何旧的logging处理器
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
-        
+
     # 1. 根(Root)设置为“最低”级别
-    root_logger.setLevel(logging.DEBUG) 
+    root_logger.setLevel(logging.DEBUG)
 
     # 2. 文件处理器 (FileHandler) - “啰嗦”模式
-    file_handler = logging.FileHandler(log_path, encoding='utf-8')
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
     # 使用 VERBOSE_FORMATTER
-    file_handler.setFormatter(VERBOSE_FORMATTER) 
-    file_handler.setLevel(logging.DEBUG) 
+    file_handler.setFormatter(VERBOSE_FORMATTER)
+    file_handler.setLevel(logging.DEBUG)
     root_logger.addHandler(file_handler)
 
     # 3. 控制台处理器 (StreamHandler) - “安静”模式
     console_handler = logging.StreamHandler(sys.stdout)
     # 使用 VERBOSE_FORMATTER
-    console_handler.setFormatter(VERBOSE_FORMATTER) 
-    console_handler.setLevel(logging.INFO) 
+    console_handler.setFormatter(VERBOSE_FORMATTER)
+    console_handler.setLevel(logging.INFO)
     root_logger.addHandler(console_handler)
-    
-    logging.info("日志系统已启动。(文件日志级别: DEBUG, 控制台日志级别: INFO)")
+
+    logging.info("日志系统已启动。(文件日志级别: INFO, 控制台日志级别: INFO)")
     logging.info(f"日志将保存至: {log_path}")
 
 
@@ -78,20 +80,20 @@ def log_section(clean: bool = False):
     """
     一个上下文管理器，用于临时切换 *所有* 处理器 (文件+控制台) 的日志格式。
     动态地从 root_logger 查找处理器
-    
+
     Args:
         clean (bool, optional): 是否切换到不带时间戳的纯净格式。默认为 False。
     """
-    
+
     root_logger = logging.getLogger()
     handlers = root_logger.handlers
-    
+
     if not handlers:
         yield
         return
 
     original_formatters = [h.formatter for h in handlers]
-    
+
     try:
         if clean:
             for h in handlers:
@@ -106,6 +108,7 @@ def log_section(clean: bool = False):
             if original_formatter:
                 h.setFormatter(original_formatter)
 
+
 # ----------------------------------------
 # 3. 结果保存器
 # ----------------------------------------
@@ -117,28 +120,36 @@ def save_results_json(solutions: List[Solution], output_path: str):
     results = []
     for sol in solutions:
         # if sol.is_feasible:
-        paths_str_map = {task_id: " -> ".join([n.id for n in p.nodes]) for task_id, p in sol.path_selections.items()}
-        results.append({
-            "is_feasible": sol.is_feasible,
-            "constraint_violation": round(sol.constraint_violation, 4), 
-            "rank": sol.rank,
-            "f1_risk": sol.f1_risk,
-            "f2_cost": sol.f2_cost,
-            "paths": paths_str_map,
-            "eta_values": sol.eta_values
-        })
-    
+        paths_str_map = {
+            task_id: " -> ".join([n.id for n in p.nodes])
+            for task_id, p in sol.path_selections.items()
+        }
+        results.append(
+            {
+                "is_feasible": sol.is_feasible,
+                "constraint_violation": round(sol.constraint_violation, 4),
+                "rank": sol.rank,
+                "f1_risk": sol.f1_risk,
+                "f2_cost": sol.f2_cost,
+                "paths": paths_str_map,
+                "eta_values": sol.eta_values,
+            }
+        )
+
     # 按 f1 (Risk) 排序
     # results.sort(key=lambda x: x["f1_risk"])
     # 按可信性、约束违反度、风险排序
-    results.sort(key=lambda x: (not x["is_feasible"], x["constraint_violation"], x["f1_risk"]))
+    results.sort(
+        key=lambda x: (not x["is_feasible"], x["constraint_violation"], x["f1_risk"])
+    )
 
     try:
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=4, ensure_ascii=False)
         logging.info("JSON 结果保存成功。")
     except Exception as e:
         logging.error(f"保存 JSON 结果时失败: {e}")
+
 
 def save_solutions_csv(rank_0_solutions: List[Solution], save_dir: str):
     """
@@ -146,47 +157,54 @@ def save_solutions_csv(rank_0_solutions: List[Solution], save_dir: str):
     """
     file_path = os.path.join(save_dir, "PF_solutions.csv")
     logging.info(f"正在将 Rank 0 解的详细路径保存到: {file_path}")
-    
+
     # 定义 CSV 表头
     headers = [
-        "solution_index", # 解的编号 (e.g., 1, 2, 3...)
-        "task_id",        # 任务 ID (e.g., "T1")
-        "origin_id",      # 任务起点
-        "destination_id", # 任务终点
+        "solution_index",  # 解的编号 (e.g., 1, 2, 3...)
+        "task_id",  # 任务 ID (e.g., "T1")
+        "origin_id",  # 任务起点
+        "destination_id",  # 任务终点
         "f1_risk_total",  # (该解的) 总风险
         "f2_cost_total",  # (该解的) 总成本
-        "path_nodes",     # 路径节点
-        "path_arcs_mode"  # 路径弧段(模式)
+        "path_nodes",  # 路径节点
+        "path_arcs_mode",  # 路径弧段(模式)
     ]
-    
+
     try:
-        with open(file_path, "w", newline='', encoding='utf-8') as f:
+        with open(file_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
-            
+
             # 遍历传入的 Rank 0 解列表
             for i, sol in enumerate(rank_0_solutions):
                 sol_index = i + 1
-                
+
                 # 遍历该解中的每一条路径 (每一个任务)
                 for task_id, path in sol.path_selections.items():
                     if not path.task:
                         continue
-                    
+
                     # 提取路径信息
                     nodes_str = " -> ".join([node.id for node in path.nodes])
-                    arcs_str = " -> ".join([f"({arc.start.id},{arc.end.id})({arc.mode})" for arc in path.arcs])
-                    
-                    writer.writerow([
-                        sol_index,
-                        task_id,
-                        path.task.origin.id,
-                        path.task.destination.id,
-                        f"{sol.f1_risk:.4f}",   # 记录该解的总目标值
-                        f"{sol.f2_cost:.4f}",   # 记录该解的总目标值
-                        nodes_str,
-                        arcs_str
-                    ])
-                    
+                    arcs_str = " -> ".join(
+                        [
+                            f"({arc.start.id},{arc.end.id})({arc.mode})"
+                            for arc in path.arcs
+                        ]
+                    )
+
+                    writer.writerow(
+                        [
+                            sol_index,
+                            task_id,
+                            path.task.origin.id,
+                            path.task.destination.id,
+                            f"{sol.f1_risk:.4f}",  # 记录该解的总目标值
+                            f"{sol.f2_cost:.4f}",  # 记录该解的总目标值
+                            nodes_str,
+                            arcs_str,
+                        ]
+                    )
+
     except Exception as e:
         logging.error(f"保存 PF_solutions.csv 失败: {e}")
