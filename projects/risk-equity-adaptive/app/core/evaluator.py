@@ -283,16 +283,18 @@ class Evaluator:
 
             # 累加弧段流量
             for arc in path.arcs:
-                arc_key = (arc.start.id, arc.end.id)
+                arc_key = (arc.start.node_id, arc.end.node_id)
                 arc_flow[arc_key] = arc_flow.get(arc_key, 0.0) + demand
 
             # 累加枢纽流量
             for hub in path.transfer_hubs:
-                node_flow[hub.id] = node_flow.get(hub.id, 0.0) + demand
+                node_flow[hub.node_id] = node_flow.get(hub.node_id, 0.0) + demand
 
         # 检查弧段容量
-        for arc_key, flow in arc_flow.items():
-            arc = self.network._arcs_dict.get(arc_key)
+        for (u_id, v_id), flow in arc_flow.items():
+            # 使用 public method get_arc(u, v) 而非私有属性访问
+            arc = self.network.get_arc(u_id, v_id)
+            
             if arc and flow > arc.capacity:
                 violation = (
                     (flow - arc.capacity) / arc.capacity if arc.capacity > 0 else flow
@@ -301,7 +303,9 @@ class Evaluator:
 
         # 检查枢纽容量
         for node_id, flow in node_flow.items():
-            node = self.network._nodes_dict.get(node_id)
+            # 使用 public method get_node(id) 而非私有属性访问
+            node = self.network.get_node(node_id)
+            
             if node and flow > node.capacity:
                 violation = (
                     (flow - node.capacity) / node.capacity

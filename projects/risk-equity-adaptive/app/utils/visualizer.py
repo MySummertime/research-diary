@@ -1,303 +1,468 @@
 # --- coding: utf-8 ---
 # --- app/utils/visualizer.py ---
 import os
-import logging
 import math
 import networkx as nx
+import contextily as ctx  # type: ignore
 import matplotlib.pyplot as plt
-import contextily as ctx
-from typing import List, Optional, Dict, Any
+from typing import Dict, List, Tuple
 from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
 from app.core.network import TransportNetwork
+from app.core.solution import Solution
 
 HAS_CTX = True
 
-# --- 网络可视化功能 ---
 
-
-def visualize_network(
-    network: TransportNetwork,
-    layout_func_name: str = "spring",  # 布局函数名词
-    save_path: Optional[str] = None,
-    add_basemap: bool = True,  # 是否添加真实地图底图
-    export_svg: bool = True,  # 是否同时导出svg图
-):
+class NetworkVisualizer:
     """
-    可视化网络拓扑，使用 networkx 和 matplotlib，支持有向图。
-    1. 优先读取 Node.x 和 Node.y（经纬度）。
-    2. 如果未提供经纬度 (即全为 0.0)，则回退到 layout_func_name 指定的算法布局。
-    3. 自动添加 OpenStreetMap 底图 (如果安装了 contextily)。
-    4. 导出 SVG 矢量图。
+    [View Layer] 网络可视化器 (最终修正版)
+    职责：负责将 Network 对象和 Solution 对象转换为 SVG 图像。
+    特性：自动投影、动态曲线避让、严格的形状/线型区分、节点标签显示。
     """
-    # 1. 获取样式配置和准备好的绘图数据
-    style = _get_style_config()
-    graph_data = _prepare_graph_data(network, style)
-    G = graph_data["graph"]
 
-    # 2. 处理坐标 (Coordinates)
-    # 输入的是 x=Lon, y=Lat (WGS84)
-    raw_pos = {}
-    has_valid_coords = False
-    for node in network.nodes:
-        # 检查是否有非零坐标
-        if node.x != 0.0 or node.y != 0.0:
-            has_valid_coords = True
-        raw_pos[node.id] = (node.x, node.y)  # (Lon, Lat)
+    def __init__(self, network: TransportNetwork):
+        self.network = network
+        self.raw_pos = self._extract_raw_positions()
 
-    # 3. 投影转换 (Projection)
-    # 如果要加底图，必须把 (Lon, Lat) 转成 Web Mercator (EPSG:3857)
-    final_pos = {}
-    use_geo_layout = has_valid_coords
+        # --- 统一视觉风格配置 ---
+        self.styles = {
+            "figure_size": (14, 12),
+            "node": {
+                "hub": {"color": "#E74C3C", "shape": "^", "size": 500, "alpha": 1.0},
+                "non-hub": {
+                    "color": "#3498DB",
+                    "shape": "o",
+                    "size": 250,
+                    "alpha": 1.0,
+                },
+                "emergency_overlay": {
+                    "edgecolor": "#F1C40F",
+                    "linewidth": 2.5,
+                    "linestyle": "--",
+                    "facecolor": "none",
+                },
+            },
+            "edge": {
+                # Road 实线, Railway 点划线
+                "road": {"color": "#95A5A6", "width": 2.0, "style": "-", "alpha": 0.7},
+                "railway": {
+                    "color": "#2C3E50",
+                    "width": 2.5,
+                    "style": "-.",
+                    "alpha": 0.8,
+                },
+            },
+            "font": {"size": 9, "color": "#2C3E50", "weight": "bold"},
+        }
 
-    if use_geo_layout:
-        print("Visualizer: 使用真实地理坐标 (Geo-Spatial Layout)。")
-        # 仅当 contextily 可用且需要底图时，才进行 Mercator 投影
-        if HAS_CTX and add_basemap:
-            # 如果有底图库，必须投影到 EPSG:3857 墨卡托投影转换 (Web Mercator)
-            final_pos = _project_to_web_mercator(raw_pos)
-        else:
-            # 如果没有底图库，直接画经纬度也行 (会稍微压扁，但拓扑是对的)
-            final_pos = raw_pos
-    else:
-        print(f"Visualizer: 无有效坐标，回退到自动布局 ({layout_func_name})。")
-        if layout_func_name == "spring":
-            final_pos = nx.spring_layout(G, k=0.8, iterations=50, seed=42)
-        elif layout_func_name == "circular":
-            final_pos = nx.circular_layout(G)
-        else:
-            # 默认 Kamada-Kawai，适合一般网络拓扑
-            final_pos = nx.kamada_kawai_layout(G)
+    def visualize_topology(
+        self,
+        save_dir: str,
+        filename: str = "network_topology.svg",
+        add_basemap: bool = True,
+        title: str = "Network Topology",
+    ):
+        """
+        [Topology] 绘制基础拓扑结构。
+        """
+        use_projection = HAS_CTX and add_basemap and self._is_geo_coords()
+        plot_pos = self._get_plot_positions(use_projection)
 
-    # 4. 开始绘图
-    fig, ax = plt.subplots(figsize=style["figure_size"])
+        # 使用有向图来区分 A->B 和 B->A
+        G = self.network.graph
 
-    # 绘制 Road 边（虚线）
-    nx.draw_networkx_edges(
-        G,
-        final_pos,
-        edgelist=graph_data["road_edges"],
-        style=style["road_style"],
-        alpha=style["road_alpha"],
-        edge_color=style["road_color"],
-        arrows=True,
-        arrowstyle="-|>",
-        arrowsize=15,
-    )
-    # 绘制 Rail 边（实线）
-    nx.draw_networkx_edges(
-        G,
-        final_pos,
-        edgelist=graph_data["rail_edges"],
-        style=style["rail_style"],
-        alpha=style["rail_alpha"],
-        edge_color=style["rail_color"],
-        width=style["rail_width"],
-        arrows=True,
-        arrowstyle="-|>",
-        arrowsize=15,
-    )
+        fig, ax = plt.subplots(figsize=self.styles["figure_size"])
 
-    # 绘制节点
-    nx.draw_networkx_nodes(
-        G,
-        final_pos,
-        node_color=graph_data["node_colors"],
-        node_size=style["node_size"],
-        edgecolors=graph_data["node_border_colors"],
-        linewidths=style["emergency_border_width"],
-    )
+        # 1. 绘制边 (动态计算曲率以避免重叠)
+        self._draw_topology_edges_no_overlap(G, plot_pos, ax)
 
-    # 绘制标签 (Labels)
-    # 为了防止标签和点重叠，稍微偏移一点 y
-    label_pos = {k: (v[0], v[1]) for k, v in final_pos.items()}
-    nx.draw_networkx_labels(
-        G,
-        label_pos,
-        font_size=style["font_size"],
-        font_color=style["font_color"],
-        font_weight="bold",
-        ax=ax,
-    )
+        # 2. 绘制节点 和 标签
+        self._draw_nodes(G, plot_pos, ax)
+        self._draw_labels(G, plot_pos, ax)
 
-    # 5. 添加底图 (Basemap)
-    if use_geo_layout and HAS_CTX and add_basemap:
-        try:
-            # add_basemap 会自动根据 ax 的 extent (数据范围) 下载对应的瓦片
-            # source 可以选 ctx.providers.OpenStreetMap.Mapnik, Stamen.TonerLite 等
-            # crs='EPSG:3857' 是默认值，这要求前面的 final_pos 必须是墨卡托坐标(投影)
-            ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron)
-            print("Visualizer: 已添加地理底图 (CartoDB Positron)。")
-        except Exception as e:
-            print(f"Visualizer: 添加底图失败: {e}")
+        # 3. 添加底图
+        if use_projection:
+            self._add_basemap(ax)
 
-    # 6. 创建并显示图例和标题
-    legend_elements = _create_legend(style)
-    ax.legend(handles=legend_elements, loc="upper right", fontsize=12, framealpha=0.9)
+        # 4. 图例与保存
+        self._add_topology_legend(ax)
+        self._save_plot(save_dir, filename, title)
 
-    title_suffix = ""
-    if use_geo_layout:
-        title_suffix = "(Geo-Spatial)" + (
-            " + Basemap" if HAS_CTX and add_basemap else ""
+    def visualize_routes(
+        self,
+        solution: Solution,
+        task_colors: Dict[str, str],
+        save_dir: str,
+        filename: str,
+        title: str,
+    ):
+        """
+        [Routes] 绘制特定解的路线图 (带箭头、曲线、线型区分)。
+        """
+        use_projection = HAS_CTX and self._is_geo_coords()
+        plot_pos = self._get_plot_positions(use_projection)
+
+        # 底图用无向图淡化显示
+        G_bg = self.network.graph.to_undirected()
+        # 前景用有向图绘制特定路线
+        G_raw = self.network.graph
+
+        fig, ax = plt.subplots(figsize=self.styles["figure_size"])
+
+        # 1. 绘制淡化背景 (简单曲线)
+        nx.draw_networkx_edges(
+            G_bg,
+            plot_pos,
+            ax=ax,
+            edge_color="#ECF0F1",
+            width=1.0,
+            alpha=0.4,
+            arrows=True,
+            arrowsize="-",
+            connectionstyle="arc3,rad=0.05",
         )
-    else:
-        title_suffix = f"(Auto: {layout_func_name})"
-    ax.set_title(f"Transport Network Topology {title_suffix}", fontsize=18)
+        nx.draw_networkx_nodes(
+            G_bg, plot_pos, ax=ax, node_size=100, node_color="#BDC3C7", alpha=0.3
+        )
 
-    # 如果有底图，通常要把坐标轴关掉，或者显示经纬度（比较麻烦）
-    # 简单起见，有底图就关掉轴
-    if HAS_CTX and add_basemap and use_geo_layout:
-        ax.axis("off")
-    else:
-        ax.axis("on")
-        ax.grid(True, linestyle=":", alpha=0.3)
-        if use_geo_layout:
-            ax.set_xlabel("Longitude / X")
-            ax.set_ylabel("Latitude / Y")
+        # 2. 绘制前景 Task 路线 (核心逻辑)
+        legend_handles = []
+        drawn_tasks = set()
 
-    # 7. 保存 (PNG & SVG)
-    if save_path:
-        # 确保目录存在
-        save_dir = os.path.dirname(save_path)
-        if save_dir:
-            os.makedirs(save_dir, exist_ok=True)
+        # 收集所有需要绘制的任务边
+        all_task_edges = []
+        for path in solution.path_selections.values():
+            if not path.task:
+                continue
+            for arc in path.arcs:
+                all_task_edges.append(
+                    (arc.start.node_id, arc.end.node_id, path.task.task_id, arc.mode)
+                )
 
-        # 保存 PNG
-        # plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        # logging.info(f"Visualizer: PNG 保存至: {save_path}")
+        # 计算动态曲率样式
+        edge_styles = self._calculate_edge_styles(
+            [(u, v) for u, v, _, _ in all_task_edges]
+        )
 
-        # 保存 SVG (矢量图，用于投稿)
-        if export_svg:
-            svg_path = os.path.splitext(save_path)[0] + ".svg"
-            plt.savefig(svg_path, format="svg", bbox_inches="tight")
-            logging.info(f"Visualizer: SVG 保存至: {svg_path}")
+        # 逐条绘制
+        for i, (u, v, task_id, mode) in enumerate(all_task_edges):
+            color = task_colors.get(task_id, "#333333")
+            linestyle = (
+                self.styles["edge"]["road"]["style"]
+                if mode == "road"
+                else self.styles["edge"]["railway"]["style"]
+            )
 
-    # plt.close(fig)
+            nx.draw_networkx_edges(
+                G_raw,
+                plot_pos,
+                ax=ax,
+                edgelist=[(u, v)],
+                edge_color=color,
+                width=2.5,
+                alpha=0.9,
+                arrows=True,
+                arrowstyle="-|>",
+                arrowsize=18,  # 箭头
+                style=linestyle,  # 线型
+                connectionstyle=edge_styles[i],  # 曲率
+            )
 
+            if task_id not in drawn_tasks:
+                legend_handles.append(
+                    Line2D([0], [0], color=color, lw=2.5, label=f"Task {task_id}")
+                )
+                drawn_tasks.add(task_id)
 
-def _project_to_web_mercator(lonlat_pos: Dict[str, tuple]) -> Dict[str, tuple]:
-    """
-    [辅助] 将 (Lon, Lat) 转换为 Web Mercator (EPSG:3857) 坐标。
-    用于配合 contextily 底图。
-    公式：
-    x = lon * 20037508.34 / 180
-    y = log(tan((90 + lat) * PI / 360)) / (PI / 180) * 20037508.34 / 180
-    """
-    mercator_pos = {}
-    r_major = 6378137.000
+        # 3. 重新绘制关键节点
+        self._draw_nodes(G_bg, plot_pos, ax, alpha=0.9, scale=0.8)
 
-    for node_id, (lon, lat) in lonlat_pos.items():
-        x = r_major * math.radians(lon)
-        # 限制纬度范围，防止 tan(90) 爆炸
-        lat = max(min(lat, 89.5), -89.5)
-        temp = math.tan(math.pi / 4.0 + math.radians(lat) / 2.0)
-        y = r_major * math.log(temp)
-        mercator_pos[node_id] = (x, y)
+        # 绘制节点标签
+        self._draw_labels(G_bg, plot_pos, ax)
 
-    return mercator_pos
+        if use_projection:
+            self._add_basemap(ax)
 
+        # 添加图例 (路线图专有)
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color="gray",
+                lw=2,
+                linestyle=self.styles["edge"]["road"]["style"],
+                label="Road Path",
+            )
+        )
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color="gray",
+                lw=2,
+                linestyle=self.styles["edge"]["railway"]["style"],
+                label="Rail Path",
+            )
+        )
 
-def _prepare_graph_data(
-    network: TransportNetwork, style_config: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    [辅助方法] 从网络数据中准备 NetworkX 绘图所需的数据（支持有向图）
-    """
-    G: nx.DiGraph = nx.DiGraph()
+        ax.legend(
+            handles=legend_handles,
+            loc="upper right",
+            fancybox=True,
+            shadow=True,
+            title="Legend",
+        )
+        self._save_plot(save_dir, filename, title)
 
-    # 确保添加所有节点，即使它们没有连接边
-    node_ids = [node.id for node in network.nodes]
-    G.add_nodes_from(node_ids)
+    # --- 核心逻辑：动态曲率计算器 ---
 
-    node_colors = []
-    node_border_colors = []
+    def _calculate_edge_styles(self, edgelist: List[Tuple[str, str]]) -> List[str]:
+        """
+        [核心算法] 计算每条边的 connectionstyle，确保它们弯曲且不重叠。
+        """
+        styles = []
+        pair_tracker = {}  # 记录 (u, v) 无序对出现的次数
 
-    for node in network.nodes:
-        # 填充颜色
-        node_colors.append(style_config["color_map"].get(node.type, "gray"))
-        # 边框颜色（应急中心高亮）
-        if node.is_emergency_center:
-            node_border_colors.append(style_config["emergency_border_color"])
-        # 非应急中心，边框同填充色
-        else:
-            node_border_colors.append(style_config["color_map"].get(node.type, "gray"))
+        for u, v in edgelist:
+            pair_key = tuple(sorted((u, v)))
+            count = pair_tracker.get(pair_key, 0)
 
-    road_edges_list = []
-    rail_edges_list = []
+            # 基础半径 0.1，每多一对边增加 0.1
+            base_rad = 0.1 + (count // 2) * 0.1
+            # 交替正负
+            rad = base_rad if count % 2 == 0 else -base_rad
 
-    for arc in network.arcs:
-        edge_tuple = (arc.start.id, arc.end.id)
-        G.add_edge(*edge_tuple)
+            styles.append(f"arc3,rad={rad}")
+            pair_tracker[pair_key] = count + 1
 
-        if arc.mode == "road":
-            road_edges_list.append(edge_tuple)
-        elif arc.mode == "railway":
-            rail_edges_list.append(edge_tuple)
+        return styles
 
-    return {
-        "graph": G,
-        "node_colors": node_colors,
-        "node_border_colors": node_border_colors,
-        "road_edges": road_edges_list,
-        "rail_edges": rail_edges_list,
-    }
+    # --- 绘图辅助逻辑 ---
 
+    def _draw_topology_edges_no_overlap(self, G, pos, ax):
+        road_edges = [
+            (u, v) for u, v, d in G.edges(data=True) if d.get("mode") == "road"
+        ]
+        rail_edges = [
+            (u, v) for u, v, d in G.edges(data=True) if d.get("mode") == "railway"
+        ]
 
-def _get_style_config() -> Dict[str, Any]:
-    """
-    [辅助方法] 返回一个包含所有绘图样式的配置字典。
-    """
-    return {
-        "figure_size": (16, 12),
-        "node_size": 300,
-        "font_size": 8,
-        "font_color": "black",
-        "color_map": {"hub": "#ff4757", "non-hub": "#54a0ff"},
-        "emergency_border_color": "#ffd700",
-        "emergency_border_width": 2.5,
-        "road_style": "dashed",
-        "road_color": "#555555",
-        "road_width": 1.5,
-        "road_alpha": 0.7,
-        "rail_style": "solid",
-        "rail_color": "#000000",
-        "rail_width": 1.9,
-        "rail_alpha": 0.9,
-    }
+        all_edges_ordered = road_edges + rail_edges
+        all_styles = self._calculate_edge_styles(all_edges_ordered)
 
+        road_styles = all_styles[: len(road_edges)]
+        rail_styles = all_styles[len(road_edges) :]
 
-def _create_legend(style_config: Dict[str, Any]) -> List:
-    """
-    [辅助方法] 这个模块只创建一个清晰的图例。
-    """
-    return [
-        Patch(
-            facecolor=style_config["color_map"]["hub"], edgecolor="none", label="Hub"
-        ),
-        Patch(
-            facecolor=style_config["color_map"]["non-hub"],
-            edgecolor="none",
-            label="Non-Hub",
-        ),
-        Patch(
-            facecolor="white",
-            edgecolor=style_config["emergency_border_color"],
-            linewidth=2,
-            label="Emergency Center",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=style_config["rail_color"],
-            lw=style_config["rail_width"],
-            label="Railway",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=style_config["road_color"],
-            linestyle=style_config["road_style"],
-            lw=style_config["road_width"],
-            label="Road",
-        ),
-    ]
+        style_road = self.styles["edge"]["road"]
+        for i, edge in enumerate(road_edges):
+            nx.draw_networkx_edges(
+                G,
+                pos,
+                ax=ax,
+                edgelist=[edge],
+                edge_color=style_road["color"],
+                width=style_road["width"],
+                style=style_road["style"],
+                alpha=style_road["alpha"],
+                arrows=True,
+                arrowstyle="-",
+                connectionstyle=road_styles[i],
+            )
+
+        style_rail = self.styles["edge"]["railway"]
+        for i, edge in enumerate(rail_edges):
+            nx.draw_networkx_edges(
+                G,
+                pos,
+                ax=ax,
+                edgelist=[edge],
+                edge_color=style_rail["color"],
+                width=style_rail["width"],
+                style=style_rail["style"],
+                alpha=style_rail["alpha"],
+                arrows=True,
+                arrowstyle="-",
+                connectionstyle=rail_styles[i],
+            )
+
+    def _draw_nodes(self, G, pos, ax, alpha=1.0, scale=1.0):
+        hubs = [n for n, d in G.nodes(data=True) if d.get("type") == "hub"]
+        non_hubs = [n for n, d in G.nodes(data=True) if d.get("type") != "hub"]
+        emergency_nodes = [n for n, d in G.nodes(data=True) if d.get("is_emergency")]
+
+        # 1. 绘制基础层
+        style_hub = self.styles["node"]["hub"]
+        nx.draw_networkx_nodes(
+            G,
+            pos,
+            ax=ax,
+            nodelist=hubs,
+            node_color=style_hub["color"],
+            node_shape=style_hub["shape"],
+            node_size=style_hub["size"] * scale,
+            alpha=alpha,
+        )
+
+        style_non = self.styles["node"]["non-hub"]
+        nx.draw_networkx_nodes(
+            G,
+            pos,
+            ax=ax,
+            nodelist=non_hubs,
+            node_color=style_non["color"],
+            node_shape=style_non["shape"],
+            node_size=style_non["size"] * scale,
+            alpha=alpha,
+        )
+
+        # 2. 绘制应急叠加层
+        em_hubs = [n for n in emergency_nodes if n in hubs]
+        em_non_hubs = [n for n in emergency_nodes if n in non_hubs]
+        style_ov = self.styles["node"]["emergency_overlay"]
+
+        if em_hubs:
+            nodes_h = nx.draw_networkx_nodes(
+                G,
+                pos,
+                ax=ax,
+                nodelist=em_hubs,
+                node_color="none",
+                edgecolors=style_ov["edgecolor"],
+                linewidths=style_ov["linewidth"],
+                node_shape=style_hub["shape"],
+                node_size=style_hub["size"] * scale * 1.4,
+            )
+            nodes_h.set_linestyle(style_ov["linestyle"])
+
+        if em_non_hubs:
+            nodes_n = nx.draw_networkx_nodes(
+                G,
+                pos,
+                ax=ax,
+                nodelist=em_non_hubs,
+                node_color="none",
+                edgecolors=style_ov["edgecolor"],
+                linewidths=style_ov["linewidth"],
+                node_shape=style_non["shape"],
+                node_size=style_non["size"] * scale * 1.4,
+            )
+            nodes_n.set_linestyle(style_ov["linestyle"])
+
+    def _draw_labels(self, G, pos, ax):
+        offset = 2000 if any(abs(y) > 1000 for x, y in pos.values()) else 0.0002
+        label_pos = {k: (v[0], v[1] - offset) for k, v in pos.items()}
+        nx.draw_networkx_labels(
+            G,
+            label_pos,
+            ax=ax,
+            font_size=self.styles["font"]["size"],
+            font_color=self.styles["font"]["color"],
+            font_weight=self.styles["font"]["weight"],
+        )
+
+    def _add_basemap(self, ax):
+        if HAS_CTX:
+            try:
+                ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron)
+            except Exception:
+                pass
+
+    def _add_topology_legend(self, ax):
+        legend_elements = [
+            Line2D(
+                [0],
+                [0],
+                marker="^",
+                color="w",
+                label="Hub",
+                markerfacecolor=self.styles["node"]["hub"]["color"],
+                markersize=12,
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                label="Non-Hub",
+                markerfacecolor=self.styles["node"]["non-hub"]["color"],
+                markersize=10,
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="^",
+                color="w",
+                label="Emergency Center",
+                markerfacecolor="none",
+                markeredgecolor=self.styles["node"]["emergency_overlay"]["edgecolor"],
+                markeredgewidth=2,
+                markersize=14,
+                linestyle="--",
+            ),
+            Line2D(
+                [0],
+                [0],
+                color=self.styles["edge"]["road"]["color"],
+                lw=2,
+                linestyle=self.styles["edge"]["road"]["style"],
+                label="Road",
+            ),
+            Line2D(
+                [0],
+                [0],
+                color=self.styles["edge"]["railway"]["color"],
+                lw=2,
+                linestyle=self.styles["edge"]["railway"]["style"],
+                label="Railway",
+            ),
+        ]
+        ax.legend(
+            handles=legend_elements,
+            loc="upper right",
+            frameon=True,
+            fancybox=True,
+            shadow=True,
+        )
+
+    def _save_plot(self, save_dir, filename, title):
+        ax = plt.gca()
+        ax.set_title(title, fontsize=16, pad=20)
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, filename), format="svg", bbox_inches="tight")
+        plt.close()
+
+    def _extract_raw_positions(self):
+        G = self.network.graph
+        return {n: (data["x"], data["y"]) for n, data in G.nodes(data=True)}
+
+    def _is_geo_coords(self) -> bool:
+        for x, y in self.raw_pos.values():
+            if not (-180 <= x <= 180 and -90 <= y <= 90):
+                return False
+            if x == 0 and y == 0:
+                continue
+        return True
+
+    def _get_plot_positions(self, use_projection: bool) -> Dict[str, tuple]:
+        return (
+            self._project_to_web_mercator(self.raw_pos)
+            if use_projection
+            else self.raw_pos
+        )
+
+    def _project_to_web_mercator(
+        self, lonlat_pos: Dict[str, tuple]
+    ) -> Dict[str, tuple]:
+        mercator_pos = {}
+        r_major = 6378137.000
+        for nid, (lon, lat) in lonlat_pos.items():
+            if lon == 0 and lat == 0:
+                mercator_pos[nid] = (0, 0)
+                continue
+            x = r_major * math.radians(lon)
+            lat = max(min(lat, 89.5), -89.5)
+            temp = math.tan(math.pi / 4.0 + math.radians(lat) / 2.0)
+            y = r_major * math.log(temp)
+            mercator_pos[nid] = (x, y)
+        return mercator_pos

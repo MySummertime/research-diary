@@ -76,7 +76,6 @@ class MOEAUtils:
         if not front:
             return
 
-        n = len(front)
         for s in front:
             s.crowding_distance = 0.0
 

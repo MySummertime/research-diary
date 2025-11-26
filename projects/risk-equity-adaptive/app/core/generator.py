@@ -51,11 +51,12 @@ class JSONNetworkGenerator(AbstractNetworkGenerator):
         logging.info("正在从 JSON 文件构建网络...")
 
         # 1. Nodes
+        # 假设 JSON 键名与 Node dataclass 字段完全匹配 (node_id, node_type 等)
         node_data_list = self._load_json_file(self.nodes_file_path)
         for data in node_data_list:
-            # 转换 ID 为字符串以统一格式
+            # 确保 ID 是字符串
             data["node_id"] = str(data["node_id"])
-            # 这里的 **data 会自动映射到 Node.__init__ 的参数
+            # 利用 **kwargs 自动解包
             self.network.add_node(Node(**data))
 
         logging.info(f"  - 已加载节点: {len(self.network.nodes)}")
@@ -63,12 +64,16 @@ class JSONNetworkGenerator(AbstractNetworkGenerator):
         # 2. Arcs
         arc_data_list = self._load_json_file(self.arcs_file_path)
         for data in arc_data_list:
+            # 提取必须的位置参数
             start_id = str(data.pop("start_node_id"))
             end_id = str(data.pop("end_node_id"))
 
             try:
+                # [修复2] 这里的 data 剩余部分包含 mode, length 等，通过 **data 传递
+                # 注意：add_arc 可能会抛出 KeyError (如果节点不存在)
                 self.network.add_arc(start_id, end_id, **data)
-            except ValueError as e:
+            except (KeyError, ValueError) as e:
+                # [修复2] 同时捕获 KeyError 和 ValueError，确保程序稳健
                 logging.warning(f"    跳过无效弧段 ({start_id}->{end_id}): {e}")
 
         logging.info(f"  - 已加载弧段: {len(self.network.arcs)}")
@@ -82,8 +87,9 @@ class JSONNetworkGenerator(AbstractNetworkGenerator):
             d_id = str(data["destination_node_id"])
             demand = data.get("demand", 0.0)
 
-            origin = self.network._nodes_dict.get(o_id)
-            dest = self.network._nodes_dict.get(d_id)
+            # [修复1] 使用公开方法 get_node() 替代访问私有属性 _nodes_dict
+            origin = self.network.get_node(o_id)
+            dest = self.network.get_node(d_id)
 
             if origin and dest:
                 try:

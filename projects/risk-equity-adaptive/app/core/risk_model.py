@@ -42,10 +42,10 @@ class DynamicRiskModel:
         # 1. 获取响应时间
         if isinstance(entity, Arc):
             t_e = self._response_time_cache.get(
-                (entity.start.id, entity.end.id), float("inf")
+                (entity.start.node_id, entity.end.node_id), float("inf")
             )
         else:
-            t_e = self._response_time_cache.get(entity.id, float("inf"))
+            t_e = self._response_time_cache.get(entity.node_id, float("inf"))
 
         if t_e == float("inf"):
             return float("inf")  # 无法救援，后果无限大
@@ -84,11 +84,11 @@ class DynamicRiskModel:
         for arc in self.network.arcs:
             if arc.mode == "road":
                 t_travel = float("inf") if speed_v <= 0 else (arc.length / speed_v)
-                road_graph.add_edge(arc.start.id, arc.end.id, weight=t_travel)
+                road_graph.add_edge(arc.start.node_id, arc.end.node_id, weight=t_travel)
 
         # 2. 识别应急中心
         centers = self.network.get_emergency_centers()
-        center_ids = [n.id for n in centers]
+        center_ids = [n.node_id for n in centers]
 
         # 3. 计算节点响应时间 t_k^travel (Multi-source Dijkstra)
         node_travel_times = {}
@@ -105,11 +105,11 @@ class DynamicRiskModel:
 
         # 4. 存储节点最终响应时间 t_k = t0 + t_k^travel
         for node in self.network.nodes:
-            t_travel = node_travel_times.get(node.id, float("inf"))
+            t_travel = node_travel_times.get(node.node_id, float("inf"))
             final_time = (
                 t_travel + setup_time if t_travel != float("inf") else float("inf")
             )
-            self._response_time_cache[node.id] = final_time
+            self._response_time_cache[node.node_id] = final_time
 
         # 5. 存储弧段响应时间 (关键点法)
         center_coords = [(n.x, n.y) for n in centers]
@@ -118,11 +118,11 @@ class DynamicRiskModel:
         tortuosity_factor = self.config.get("tortuosity_factor", 1.3)
 
         for arc in self.network.arcs:
-            t_i = node_travel_times.get(arc.start.id, float("inf"))
-            t_j = node_travel_times.get(arc.end.id, float("inf"))
+            t_i = node_travel_times.get(arc.start.node_id, float("inf"))
+            t_j = node_travel_times.get(arc.end.node_id, float("inf"))
 
             if t_i == float("inf") or t_j == float("inf") or not center_coords:
-                self._response_time_cache[(arc.start.id, arc.end.id)] = float("inf")
+                self._response_time_cache[(arc.start.node_id, arc.end.node_id)] = float("inf")
                 continue
 
             # 计算中点坐标
@@ -145,7 +145,7 @@ class DynamicRiskModel:
 
             # 应用积分公式
             t_integrated = (t_i + 2 * min_mid_time + t_j) / 4.0
-            self._response_time_cache[(arc.start.id, arc.end.id)] = (
+            self._response_time_cache[(arc.start.node_id, arc.end.node_id)] = (
                 setup_time + t_integrated
             )
 

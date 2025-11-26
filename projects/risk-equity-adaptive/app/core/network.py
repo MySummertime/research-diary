@@ -2,260 +2,289 @@
 # --- app/core/network.py ---
 import json
 import logging
-from typing import Dict
+import networkx as nx
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass, asdict
+
+# ==========================================
+# 1. 基础数据结构 (Data Classes)
+# ==========================================
 
 
+@dataclass
 class Node:
     """
-    定义网络中的一个节点。
+    [数据类] 网络节点
+    职责：存储节点的物理属性和风险属性。
     """
 
-    def __init__(
-        self,
-        node_id: str,
-        node_name: str = "",
-        node_type: str = "non-hub",
-        x: float = 0.0,
-        y: float = 0.0,
-        is_emergency_center: bool = False,
-        capacity: float = 10000,
-        population_density: float = 0.01,
-        accident_prob: float = 1e-7,
-        actual_flow: float = 0.0,
-        fuzzy_transshipment_time: tuple[float, float, float, float] = (
-            0.8,
-            1.0,
-            1.2,
-            1.5,
-        ),
-        **kwargs,
-    ):
-        # 基础标识
-        self.id: str = node_id
-        self.name: str = node_name if node_name else self.id
-        self.type: str = node_type  # hub, non-hub
+    node_id: str
+    name: str = ""
+    node_type: str = "non-hub"  # hub, non-hub
 
-        # 几何属性（用于物理模型计算）
-        self.x: float = x
-        self.y: float = y
+    # 几何属性
+    x: float = 0.0
+    y: float = 0.0
 
-        # 节点角色与属性
-        self.is_emergency_center: bool = is_emergency_center
-        self.capacity: float = capacity  # t
+    # 业务属性
+    is_emergency_center: bool = False
+    capacity: float = 10000.0
+    population_density: float = 0.01
+    accident_prob: float = 1e-7
 
-        # 风险相关
-        self.population_density: float = population_density  # p/m^2
-        self.accident_prob: float = accident_prob
+    # 模糊属性
+    # (a, b, c, d) 梯形模糊数
+    fuzzy_transshipment_time: Tuple[float, float, float, float] = (0.8, 1.0, 1.2, 1.5)
 
-        # 状态与不确定性
-        self.actual_flow: float = actual_flow  # demand (t)
-        self.fuzzy_transshipment_time: tuple[float, float, float, float] = (
-            fuzzy_transshipment_time
-        )
+    def __post_init__(self):
+        if not self.name:
+            self.name = self.node_id
 
-    def __repr__(self):
-        role = f", Role={'Emergency Center' if self.is_emergency_center else 'None'}"
-        return f"Node(ID={self.id}, Name={self.name}, Type='{self.type}{role}', Pos=({self.x},{self.y}))"
-
-    def to_dict(self) -> Dict:
-        """
-        [辅助方法]将节点属性转换为字典，方便JSON序列化。
-        """
-        return {
-            "node_id": self.id,
-            "name": self.name,
-            "node_type": self.type,
-            "x": self.x,
-            "y": self.y,
-            "capacity": self.capacity,
-            "population_density": self.population_density,
-            "is_emergency_center": self.is_emergency_center,
-            "accident_prob": self.accident_prob,
-            "actual_flow": self.actual_flow,
-            "fuzzy_transshipment_time": self.fuzzy_transshipment_time,
-        }
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
+@dataclass
 class Arc:
     """
-    定义连接两个节点的弧段。
+    [数据类] 网络弧段 (有向边)
+    职责：存储链路的物理属性、风险属性和模糊时间。
+    注意：即便是双向路，在模型中也表示为两条相反方向的 Arc。
     """
 
-    def __init__(
-        self,
-        start_node: Node,
-        end_node: Node,
-        oneway: bool,
-        mode: str,
-        length: float = 150,
-        capacity: float = 10000,
-        population_density: float = 0.008,
-        accident_prob_per_km: float = 1e-7,
-        actual_flow: float = 0.0,
-        fuzzy_transport_time: tuple[float, float, float] = (2.5, 3.0, 3.5),
-    ):
-        self.start: Node = start_node
-        self.end: Node = end_node
-        self.oneway: bool = oneway
-        self.mode: str = mode  # 'road' or 'railway'
-        self.length: float = length  # km
+    start: Node
+    end: Node
+    mode: str  # 'road', 'railway'
 
-        self.capacity: float = capacity  # t
-        self.population_density: float = population_density  # p/m^2
-        self.accident_prob_per_km: float = accident_prob_per_km
+    length: float = 150.0  # km
+    capacity: float = 10000.0
 
-        self.actual_flow: float = actual_flow  # demand (t)
-        self.fuzzy_transport_time: tuple[float, float, float] = fuzzy_transport_time
+    # 风险属性
+    population_density: float = 0.008
+    accident_prob_per_km: float = 1e-7
 
-    def __repr__(self):
-        return f"Arc({self.start.id}->{self.end.id}, Mode='{self.mode}', Len={self.length}km)"
+    # 模糊属性
+    # (a, b, c) 三角模糊数
+    fuzzy_transport_time: Tuple[float, float, float] = (2.5, 3.0, 3.5)
 
-    def to_dict(self) -> Dict:
-        """将弧段属性转换为字典。"""
-        return {
-            "start_node_id": self.start.id,
-            "end_node_id": self.end.id,
-            "oneway": self.oneway,
-            "mode": self.mode,
-            "length": self.length,
-            "capacity": self.capacity,
-            "population_density": self.population_density,
-            "accident_prob_per_km": self.accident_prob_per_km,
-            "actual_flow": self.actual_flow,
-            "fuzzy_transport_time": self.fuzzy_transport_time,
-        }
+    @property
+    def id(self) -> Tuple[str, str]:
+        """弧段唯一标识符 (起点ID, 终点ID)"""
+        return (self.start.node_id, self.end.node_id)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        # 序列化时只需存储 ID
+        d["start_node_id"] = self.start.node_id
+        d["end_node_id"] = self.end.node_id
+        del d["start"]
+        del d["end"]
+        return d
 
 
+@dataclass
 class TransportTask:
     """
-    运输任务（OD Pair）
+    [数据类] 运输任务 (OD Pair)
     """
 
-    def __init__(
-        self,
-        task_id: str,
-        origin_node: Node,
-        destination_node: Node,
-        demand: float = 0.0,
-    ):
-        self.task_id: str = task_id
-        self.origin: Node = origin_node
-        self.destination: Node = destination_node
-        self.demand: float = demand
+    task_id: str
+    origin: Node
+    destination: Node
+    demand: float = 0.0
 
-        # 确保OD点都是non-hub
-        if self.origin.type != "non-hub" or self.destination.type != "non-hub":
-            raise ValueError(f"Task {task_id}: Origin/Dest must be 'non-hub' nodes.")
+    def __post_init__(self):
+        # 简单校验
+        if (
+            self.origin.node_type != "non-hub"
+            or self.destination.node_type != "non-hub"
+        ):
+            logging.warning(
+                f"Task {self.task_id}: Origin/Dest are recommended to be 'non-hub'."
+            )
 
-    def __repr__(self):
-        return f"Task({self.task_id}: {self.origin.id}->{self.destination.id}, d={self.demand})"
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        # 序列化时只需存储 ID
+        d["origin_node_id"] = self.origin.node_id
+        d["destination_node_id"] = self.destination.node_id
+        del d["origin"]
+        del d["destination"]
+        return d
 
-    def to_dict(self) -> Dict:
-        """将任务属性转换为字典。"""
-        return {
-            "task_id": self.task_id,
-            "origin_node_id": self.origin.id,
-            "destination_node_id": self.destination.id,
-            "demand": self.demand,
-        }
+
+# ==========================================
+# 2. 网络逻辑核心 (Logic Class)
+# ==========================================
 
 
 class TransportNetwork:
     """
-    一个通用的运输网络数据容器。
-    它只负责存储节点、弧段和任务，不关心它们是如何被创建的。
+    [核心类] 运输网络容器
+    职责：
+    1. 管理节点、弧段、任务的增删改查。
+    2. 维护 NetworkX 图对象 (Graph Topology)。
+    3. 提供数据的序列化与反序列化。
     """
 
     def __init__(self):
-        self.nodes = []
-        self.arcs = []
-        self.tasks = []
-        # 为了方便查找，增加字典来存储节点对象
-        self._nodes_dict = {}
-        self._arcs_dict = {}
+        # 核心数据存储
+        self.nodes: List[Node] = []
+        self.arcs: List[Arc] = []
+        self.tasks: List[TransportTask] = []
 
-    # --- 增加功能 ---
+        # 快速查找索引
+        self._nodes_map: Dict[str, Node] = {}
+        self._arcs_map: Dict[Tuple[str, str], Arc] = {}
+
+        # 拓扑缓存 (Lazy Loading)
+        self._graph_cache: Optional[nx.DiGraph] = None
+
+    # --- 核心操作：增 ---
 
     def add_node(self, node: Node):
-        """向网络中添加一个节点。"""
-        if node.id not in self._nodes_dict:
+        """添加节点并建立索引。"""
+        if node.node_id in self._nodes_map:
+            logging.warning(f"Node {node.node_id} updated/overwritten.")
+        else:
             self.nodes.append(node)
-            self._nodes_dict[node.id] = node
+
+        self._nodes_map[node.node_id] = node
+        self._invalidate_cache()
 
     def add_arc(
-        self, start_node_id: str, end_node_id: str, oneway: bool = False, **kwargs
+        self,
+        start_id: str,
+        end_id: str,
+        mode: str = "road",
+        length: float = 100,
+        bidirectional: bool = True,
+        **kwargs,
     ):
         """
-        向网络中添加一条弧段。
+        添加弧段。
 
         Args:
-            start_node_id (str): 起点节点ID。
-            end_node_id (str): 终点节点ID。
-            oneway (bool, optional): 是否为单向。默认为 true.
-            **kwargs: 其他传递给 Arc 构造函数的参数 (mode, length 等)。
+            start_id: 起点ID
+            end_id: 终点ID
+            mode: 运输模式 ('road', 'railway')
+            distance: 距离 (km)
+            bidirectional: 是否自动创建反向弧段 (默认 True)
+            **kwargs: 其他 Arc 属性 (如 fuzzy_transport_time, capacity 等)
         """
-        if start_node_id not in self._nodes_dict or end_node_id not in self._nodes_dict:
-            raise ValueError(f"Unknown nodes in arc: {start_node_id}->{end_node_id}")
+        if start_id not in self._nodes_map or end_id not in self._nodes_map:
+            raise KeyError(f"Cannot add arc: Node {start_id} or {end_id} not found.")
 
-        start_node = self._nodes_dict[start_node_id]
-        end_node = self._nodes_dict[end_node_id]
+        u_node = self._nodes_map[start_id]
+        v_node = self._nodes_map[end_id]
 
-        # 创建并添加 A -> B 这条弧段
-        arc_forward = Arc(start_node, end_node, oneway=oneway, **kwargs)
-        self.arcs.append(arc_forward)
-        self._arcs_dict[(start_node_id, end_node_id)] = arc_forward
+        # 1. 创建正向弧 A -> B
+        forward_arc = Arc(start=u_node, end=v_node, mode=mode, length=length, **kwargs)
+        self._add_arc_internal(forward_arc)
 
-        # 如果是双向弧，则添加反向弧段 B -> A
-        if not oneway:
-            arc_backward = Arc(end_node, start_node, oneway=oneway, **kwargs)
-            self.arcs.append(arc_backward)
-            # 同时更新查找字典
-            self._arcs_dict[(end_node_id, start_node_id)] = arc_backward
+        # 2. 如果是双向，创建反向弧 B -> A
+        if bidirectional:
+            backward_arc = Arc(
+                start=v_node, end=u_node, mode=mode, length=length, **kwargs
+            )
+            self._add_arc_internal(backward_arc)
+
+        self._invalidate_cache()
 
     def add_task(self, task: TransportTask):
-        """向网络中添加一个运输任务。"""
         self.tasks.append(task)
 
-    # --- 查询功能 ---
+    def _add_arc_internal(self, arc: Arc):
+        """内部方法：将弧段加入列表和索引。"""
+        self.arcs.append(arc)
+        self._arcs_map[arc.id] = arc
 
-    def get_hubs(self):
-        """获取所有枢纽节点。"""
-        return [node for node in self.nodes if node.type == "hub"]
+    # --- 核心属性：图拓扑 ---
 
-    def get_non_hubs(self):
-        """获取所有非枢纽节点。"""
-        return [node for node in self.nodes if node.type == "non-hub"]
-
-    def get_emergency_centers(self):
-        """获取所有应急中心节点。"""
-        return [node for node in self.nodes if node.is_emergency_center]
-
-    def save_to_json(self, file_path: str):
+    @property
+    def graph(self) -> nx.DiGraph:
         """
-        Dump Network to JSON.
+        [Lazy Property] 获取 NetworkX 有向图对象。
+        该对象包含完整的拓扑结构和关键属性，可直接用于 visualizer 和 path finding。
 
-        Args:
-            file_path (str): 保存JSON文件的完整路径。
+        Returns:
+            nx.DiGraph: 带有节点属性 (type, x, y) 和 边属性 (mode, length) 的图。
         """
-        network_data = {
-            "nodes": [node.to_dict() for node in self.nodes],
-            "arcs": [arc.to_dict() for arc in self.arcs],
-            "tasks": [task.to_dict() for task in self.tasks],
-        }
+        if self._graph_cache is None:
+            self._graph_cache = self._build_graph()
+        return self._graph_cache
 
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(network_data, f, ensure_ascii=False, indent=4)
-            logging.info(f"网络数据已导出至: {file_path}")
-        except Exception as e:
-            logging.warning(f"网络数据到JSON导出失败: {e}")
+    def _build_graph(self) -> nx.DiGraph:
+        """构建图的实际逻辑。"""
+        G = nx.DiGraph()
+
+        # 添加节点 (附带可视化和算法所需的关键属性)
+        for node in self.nodes:
+            G.add_node(
+                node.node_id,
+                type=node.node_type,
+                is_emergency=node.is_emergency_center,
+                x=node.x,
+                y=node.y,
+            )
+
+        # 添加边 (附带属性)
+        for arc in self.arcs:
+            G.add_edge(
+                arc.start.node_id,
+                arc.end.node_id,
+                mode=arc.mode,
+                length=arc.length,
+                # 可以根据需要添加更多属性供 path finder 使用
+                capacity=arc.capacity,
+            )
+
+        return G
+
+    def _invalidate_cache(self):
+        """当网络结构发生变化时，清空缓存。"""
+        self._graph_cache = None
+
+    # --- 查询与工具 ---
+
+    def get_node(self, node_id: str) -> Optional[Node]:
+        return self._nodes_map.get(node_id)
+
+    def get_arc(self, u: str, v: str) -> Optional[Arc]:
+        return self._arcs_map.get((u, v))
+
+    def get_hubs(self) -> List[Node]:
+        """获取所有枢纽节点"""
+        return [n for n in self.nodes if n.node_type == "hub"]
+
+    def get_non_hubs(self) -> List[Node]:
+        """获取所有非枢纽节点"""
+        return [n for n in self.nodes if n.node_type == "non-hub"]
+
+    def get_emergency_centers(self) -> List[Node]:
+        """获取所有应急中心节点"""
+        return [n for n in self.nodes if n.is_emergency_center]
+
+    # --- 序列化与摘要 ---
 
     def summary(self):
-        """打印网络摘要信息。"""
-        logging.info("--- 网络摘要 ---")
-        logging.info(f"总节点数: {len(self.nodes)}")
-        logging.info(f"  - 枢纽: {len(self.get_hubs())}")
-        logging.info(f"  - 非枢纽: {len(self.get_non_hubs())}")
-        logging.info(f"总弧段数: {len(self.arcs)}")
-        logging.info(f"总任务数: {len(self.tasks)}")
-        logging.info("------------------")
+        logging.info("=== Network Summary ===")
+        logging.info(
+            f"Nodes: {len(self.nodes)} (Hubs: {len([n for n in self.nodes if n.node_type == 'hub'])})"
+        )
+        logging.info(f"Arcs : {len(self.arcs)} (Bidirectional logic applied)")
+        logging.info(f"Tasks: {len(self.tasks)}")
+        logging.info("=======================")
+
+    def save_to_json(self, file_path: str):
+        data = {
+            "nodes": [n.to_dict() for n in self.nodes],
+            "arcs": [a.to_dict() for a in self.arcs],
+            "tasks": [t.to_dict() for t in self.tasks],
+        }
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+            logging.info(f"Network exported to {file_path}")
+        except IOError as e:
+            logging.error(f"Failed to export network: {e}")

@@ -45,7 +45,7 @@ class Path:
             if arc.start != current_node:
                 task_id = task.task_id if task else "N/A"
                 raise ValueError(
-                    f"[PathFactory] 任务 {task_id} 路径构建失败: 弧段 {arc.start.id}->{arc.end.id} 与前序节点 {current_node.id} 不匹配"
+                    f"[PathFactory] 任务 {task_id} 路径构建失败: 弧段 {arc.start.node_id}->{arc.end.node_id} 与前序节点 {current_node.node_id} 不匹配"
                 )
             current_node = arc.end
             new_path.nodes.append(current_node)
@@ -60,21 +60,21 @@ class Path:
 
             # 检查 H1 (road -> rail)
             if arc1.mode == "road" and arc2.mode == "railway":
-                if arc1.end.type == "hub":
-                    unique_transfer_hubs[arc1.end.id] = arc1.end
+                if arc1.end.node_type == "hub":
+                    unique_transfer_hubs[arc1.end.node_id] = arc1.end
 
             # 检查 H2 (rail -> road)
             elif arc1.mode == "railway" and arc2.mode == "road":
-                if arc1.end.type == "hub":
-                    unique_transfer_hubs[arc1.end.id] = arc1.end
+                if arc1.end.node_type == "hub":
+                    unique_transfer_hubs[arc1.end.node_id] = arc1.end
 
         new_path.transfer_hubs = list(unique_transfer_hubs.values())
 
         # 3. 查找路径上 *所有* 途经的枢纽 (用于日志)
         unique_all_hubs = {}
         for node in new_path.nodes:
-            if node.type == "hub":
-                unique_all_hubs[node.id] = node
+            if node.node_type == "hub":
+                unique_all_hubs[node.node_id] = node
         new_path.all_hubs_on_path = list(unique_all_hubs.values())
 
         return new_path
@@ -83,7 +83,7 @@ class Path:
         task_id = self.task.task_id if self.task else "None"
         if not self.nodes:
             return f"Path(Task={task_id}, Path=Empty)"
-        path_str = " -> ".join([node.id for node in self.nodes])
+        path_str = " -> ".join([node.node_id for node in self.nodes])
         return f"Path(Task={task_id}, Path={path_str})"
 
 
@@ -104,11 +104,11 @@ class PathFinder:
         [辅助方法] 构建邻接表以便快速搜索。
         """
         for node in self.network.nodes:
-            self.adj["road"][node.id] = []
-            self.adj["railway"][node.id] = []
+            self.adj["road"][node.node_id] = []
+            self.adj["railway"][node.node_id] = []
 
         for arc in self.network.arcs:
-            self.adj[arc.mode][arc.start.id].append(arc)
+            self.adj[arc.mode][arc.start.node_id].append(arc)
 
     def find_all_candidate_paths(self) -> Dict[str, List[Path]]:
         """
@@ -183,14 +183,14 @@ class PathFinder:
         def dfs_recursive(
             current_node: Node, current_path_arcs: List[Arc], visited_nodes: Set[str]
         ):
-            visited_nodes.add(current_node.id)
+            visited_nodes.add(current_node.node_id)
 
             is_end_node = False
             if isinstance(end_type, Node):
-                if current_node.id == end_type.id:
+                if current_node.node_id == end_type.node_id:
                     is_end_node = True
             elif isinstance(end_type, str):
-                if current_node.type == end_type:
+                if current_node.node_type == end_type:
                     is_end_node = True
 
             if is_end_node:
@@ -198,30 +198,30 @@ class PathFinder:
                     all_found_arc_lists.append(list(current_path_arcs))
 
                 if allowed_intermediate_type != "hub":
-                    visited_nodes.remove(current_node.id)
+                    visited_nodes.remove(current_node.node_id)
                     return
 
-            for arc in self.adj[mode][current_node.id]:
+            for arc in self.adj[mode][current_node.node_id]:
                 neighbor_node = arc.end
 
-                if neighbor_node.id not in visited_nodes:
+                if neighbor_node.node_id not in visited_nodes:
                     is_neighbor_end_node = False
                     if isinstance(end_type, Node):
-                        if neighbor_node.id == end_type.id:
+                        if neighbor_node.node_id == end_type.node_id:
                             is_neighbor_end_node = True
                     elif isinstance(end_type, str):
-                        if neighbor_node.type == end_type:
+                        if neighbor_node.node_type == end_type:
                             is_neighbor_end_node = True
 
                     if (
                         is_neighbor_end_node
-                        or neighbor_node.type == allowed_intermediate_type
+                        or neighbor_node.node_type == allowed_intermediate_type
                     ):
                         current_path_arcs.append(arc)
                         dfs_recursive(neighbor_node, current_path_arcs, visited_nodes)
                         current_path_arcs.pop()
 
-            visited_nodes.remove(current_node.id)
+            visited_nodes.remove(current_node.node_id)
 
         dfs_recursive(start_node, [], set())
 
