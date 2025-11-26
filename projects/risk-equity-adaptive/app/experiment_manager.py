@@ -19,7 +19,7 @@ from app.core.generator import JSONNetworkGenerator
 from app.utils.callback import GenerationalLogger, GenerationalFileLogger
 from app.utils.plotter import ParetoPlotter
 from app.utils.visualizer import NetworkVisualizer
-from app.utils.result_keeper import create_experiment_directory, setup_logging
+from app.utils.result_keeper import create_experiment_directory, setup_logging, save_rank0_solutions_csv
 
 
 class Experiment:
@@ -92,6 +92,9 @@ class Experiment:
             logging.error(f"Optimization failed: {e}", exc_info=True)
 
     def analyze_and_report(self):
+        """
+        执行运行后的任务：分析、绘图和保存
+        """
         logging.info("--- Generating Report & Charts ---")
         if not self.final_front:
             logging.warning("No solutions found.")
@@ -99,14 +102,16 @@ class Experiment:
 
         # 筛选出 Rank 0 用于保存 CSV 和生成路线图 (只需要最优解)
         rank_0 = [s for s in self.final_front if s.rank == 0 and s.is_feasible]
-        
-        # 1. 绘制 Pareto 前沿 (传入所有解 self.final_front)
-        # 这样 Plotter 才能画出 Rank 1, Rank 2...
-        self.plotter.plot(self.final_front, file_name="pareto_frontier.svg")
-
         if not rank_0:
             logging.warning("No feasible Rank 0 solutions.")
             return
+
+        # 保存 Rank 0 的解
+        save_rank0_solutions_csv(rank_0, self.save_dir)
+
+        # 1. 绘制 Pareto 前沿 (传入所有解 self.final_front)
+        # 这样 Plotter 才能画出 Rank 1, Rank 2...
+        self.plotter.plot(self.final_front, file_name="pareto_frontier.svg")
 
         # 2. 生成路线对比图 (Figure 2) (只画 Rank 0 的极端解)
         self._generate_route_maps(rank_0)

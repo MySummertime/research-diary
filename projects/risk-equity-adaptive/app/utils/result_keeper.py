@@ -5,7 +5,6 @@ import os
 import sys
 import time
 import csv
-import json
 import logging
 from typing import List
 from contextlib import contextmanager
@@ -112,51 +111,12 @@ def log_section(clean: bool = False):
 # ----------------------------------------
 # 3. 结果保存器
 # ----------------------------------------
-def save_results_json(solutions: List[Solution], output_path: str):
+def save_rank0_solutions_csv(rank_0_solutions: List[Solution], save_dir: str):
     """
-    将最终的Pareto前沿 (f1, f2, 路径) 保存为 JSON 文件。
+    将所有 Rank 0 的解的详细路径保存到 'optimal_solutions.csv'。
     """
-    logging.info(f"正在保存 {len(solutions)} 个解到 {output_path}...")
-    results = []
-    for sol in solutions:
-        # if sol.is_feasible:
-        paths_str_map = {
-            task_id: " -> ".join([n.id for n in p.nodes])
-            for task_id, p in sol.path_selections.items()
-        }
-        results.append(
-            {
-                "is_feasible": sol.is_feasible,
-                "constraint_violation": round(sol.constraint_violation, 4),
-                "rank": sol.rank,
-                "f1_risk": sol.f1_risk,
-                "f2_cost": sol.f2_cost,
-                "paths": paths_str_map,
-                "eta_values": sol.eta_values,
-            }
-        )
-
-    # 按 f1 (Risk) 排序
-    # results.sort(key=lambda x: x["f1_risk"])
-    # 按可信性、约束违反度、风险排序
-    results.sort(
-        key=lambda x: (not x["is_feasible"], x["constraint_violation"], x["f1_risk"])
-    )
-
-    try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=4, ensure_ascii=False)
-        logging.info("JSON 结果保存成功。")
-    except Exception as e:
-        logging.error(f"保存 JSON 结果时失败: {e}")
-
-
-def save_solutions_csv(rank_0_solutions: List[Solution], save_dir: str):
-    """
-    将所有 Rank 0 的解的详细路径保存到 'PF_solutions.csv'。
-    """
-    file_path = os.path.join(save_dir, "PF_solutions.csv")
-    logging.info(f"正在将 Rank 0 解的详细路径保存到: {file_path}")
+    file_path = os.path.join(save_dir, "optimal_solutions.csv")
+    logging.info(f"Pareto Optimal solutions saved to: {file_path}")
 
     # 定义 CSV 表头
     headers = [
@@ -185,10 +145,10 @@ def save_solutions_csv(rank_0_solutions: List[Solution], save_dir: str):
                         continue
 
                     # 提取路径信息
-                    nodes_str = " -> ".join([node.id for node in path.nodes])
+                    nodes_str = " -> ".join([node.node_id for node in path.nodes])
                     arcs_str = " -> ".join(
                         [
-                            f"({arc.start.id},{arc.end.id})({arc.mode})"
+                            f"({arc.start.node_id},{arc.end.node_id})({arc.mode})"
                             for arc in path.arcs
                         ]
                     )
@@ -197,8 +157,8 @@ def save_solutions_csv(rank_0_solutions: List[Solution], save_dir: str):
                         [
                             sol_index,
                             task_id,
-                            path.task.origin.id,
-                            path.task.destination.id,
+                            path.task.origin.node_id,
+                            path.task.destination.node_id,
                             f"{sol.f1_risk:.4f}",  # 记录该解的总目标值
                             f"{sol.f2_cost:.4f}",  # 记录该解的总目标值
                             nodes_str,
