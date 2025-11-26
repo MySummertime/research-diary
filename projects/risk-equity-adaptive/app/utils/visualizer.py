@@ -109,21 +109,8 @@ class NetworkVisualizer:
 
         fig, ax = plt.subplots(figsize=self.styles["figure_size"])
 
-        # 1. 绘制淡化背景 (简单曲线)
-        nx.draw_networkx_edges(
-            G_bg,
-            plot_pos,
-            ax=ax,
-            edge_color="#ECF0F1",
-            width=1.0,
-            alpha=0.4,
-            arrows=True,
-            arrowsize="-",
-            connectionstyle="arc3,rad=0.05",
-        )
-        nx.draw_networkx_nodes(
-            G_bg, plot_pos, ax=ax, node_size=100, node_color="#BDC3C7", alpha=0.3
-        )
+        # 1. 绘制淡化的背景节点，作为空间参考
+        nx.draw_networkx_nodes(G_bg, plot_pos, ax=ax, node_size=100, node_color="#BDC3C7", alpha=0.3)
 
         # 2. 绘制前景 Task 路线 (核心逻辑)
         legend_handles = []
@@ -174,12 +161,13 @@ class NetworkVisualizer:
                 )
                 drawn_tasks.add(task_id)
 
-        # 3. 重新绘制关键节点
+        # 3. 重新绘制关键节点（前景）
         self._draw_nodes(G_bg, plot_pos, ax, alpha=0.9, scale=0.8)
 
         # 绘制节点标签
         self._draw_labels(G_bg, plot_pos, ax)
-
+        
+        # 添加底图
         if use_projection:
             self._add_basemap(ax)
 
@@ -363,7 +351,8 @@ class NetworkVisualizer:
     def _add_basemap(self, ax):
         if HAS_CTX:
             try:
-                ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron)
+                # CartoDB.Voyager 通常比 Positron 更清晰，适合做导航背景
+                ctx.add_basemap(ax, source=ctx.providers.CartoDB.Voyager)
             except Exception:
                 pass
 
