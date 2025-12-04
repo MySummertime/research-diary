@@ -6,7 +6,7 @@ import logging
 import json
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import List
+from typing import List, Dict
 
 # --- Core Modules ---
 from app.core.path import PathFinder
@@ -20,11 +20,11 @@ from app.utils.callback import GenerationalLogger, GenerationalFileLogger
 from app.utils.plotter import ParetoPlotter
 from app.utils.network_visualizer import NetworkVisualizer
 from app.utils.result_keeper import (
-    create_experiment_directory, 
-    setup_logging, 
-    save_rank0_solutions_csv
+    create_experiment_directory,
+    setup_logging,
 )
-from app.utils.analyzer import find_knee_point
+from app.utils.analyzer import find_knee_point, generate_routing_scheme_comparison
+
 
 class Experiment:
     """
@@ -104,81 +104,89 @@ class Experiment:
             logging.warning("No solutions found.")
             return
 
-        # 筛选出 Rank 0 用于保存 CSV 和生成路线图 (只需要最优解)
+        # 0. 筛选出 Rank 0 用于保存 CSV 和生成路线图 (只需要最优解)
         rank_0 = [s for s in self.final_front if s.rank == 0 and s.is_feasible]
         if not rank_0:
             logging.warning("No feasible Rank 0 solutions.")
             return
 
-        # 保存 Rank 0 的解
-        save_rank0_solutions_csv(rank_0, self.save_dir)
-
-        # # 1. 绘制 Pareto 前沿 (传入所有解 self.final_front)
-        # # 这样 Plotter 才能画出 Rank 1, Rank 2...
-        # self.plotter.plot(self.final_front, file_name="pareto_frontier.svg")
-
-        # # 2. 生成路线对比图 (Figure 2) (只画 Rank 0 的极端解)
-        # self._generate_route_maps(rank_0)
-        
-        # logging.info(f"All results saved to: {self.save_dir}")
-        
         # 1. 准备特殊解 (A, B, C)
         sol_a = min(rank_0, key=lambda s: s.f2_cost)  # Min Cost
         sol_b = min(rank_0, key=lambda s: s.f1_risk)  # Min Risk
-        sol_c = find_knee_point(rank_0)               # Knee Point
-        
-        special_solutions = {
-            "Opinion A": sol_a,
-            "Opinion B": sol_b,
-            "Opinion C": sol_c
-        }
+        sol_c = find_knee_point(rank_0)  # Knee Point
+
+        special_solutions = {"Opinion A": sol_a, "Opinion B": sol_b, "Opinion C": sol_c}
 
         # 2. 绘制 Pareto 前沿 (传入 special_solutions 以便高亮)
         self.plotter.plot(
-            self.final_front, 
+            self.final_front,
             file_name="pareto_frontier.svg",
-            special_solutions=special_solutions
+            special_solutions=special_solutions,
         )
 
         # 3. 生成对比表格 (Table 1)
-        # generate_routing_scheme_comparison(special_solutions, self.evaluator)
-        
+        generate_routing_scheme_comparison(
+            special_solutions, self.evaluator, self.save_dir
+        )
+
         # 4. 生成路线地图
-        self._generate_route_maps([sol_a, sol_b, sol_c])
-        
+        self._generate_route_maps(special_solutions)
+
         logging.info(f"All results saved to: {self.save_dir}")
 
-    def _generate_route_maps(self, solutions: List[Solution]):
-        """生成 Min Cost 和 Min Risk 的对比图"""
-        # 找极端解
-        sol_min_cost = min(solutions, key=lambda s: s.f2_cost)
-        sol_min_risk = min(solutions, key=lambda s: s.f1_risk)
-
-        # 生成一致的颜色映射 (Task ID -> Color)
-        # 使用 Set1 色板，颜色区分度高
-        tasks = [t.task_id for t in self.network.tasks]
-        cmap = plt.get_cmap("Set1")
-        task_colors = {
-            tid: "#{:02x}{:02x}{:02x}".format(
-                *map(lambda x: int(x * 255), cmap(i % 9)[:3])
+    def _generate_route_maps(self, solutions_map: Dict[str, Solution]):
+        """
+        [Visualizer] 批量生成特殊解的路线地图 (SVG)。
+        
+        Args:
+            solutions_map: 字典 {"Opinion A": sol_a, "Opinion B": sol_b, ...}
+        """
+        logging.info("Generating route maps for special solutions...")
+        
+        # 1. 为每个任务生成固定的颜色 (保持视觉一致性)
+        # 获取所有任务ID并排序
+        task_ids = sorted([t.task_id for t in self.network.tasks])
+        cmap = plt.get_cmap("Set1")  # 使用 Set1 配色方案 (颜色鲜明)
+        
+        task_colors = {}
+        for i, tid in enumerate(task_ids):
+            # 将 Matplotlib 的 RGBA 转为 Hex 颜色
+            rgb = cmap(i % 9)[:3]
+            hex_color = "#{:02x}{:02x}{:02x}".format(
+                int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255)
             )
-            for i, tid in enumerate(tasks)
-        }
+            task_colors[tid] = hex_color
 
-        # 绘制图A: 成本优先
-        self.visualizer.visualize_routes(
-            solution=sol_min_cost,
-            task_colors=task_colors,
-            save_dir=self.save_dir,
-            filename="route_min_cost.svg",
-            title=f"Min Cost Strategy (Cost: {sol_min_cost.f2_cost:.0f})",
-        )
+        # 2. 遍历字典生成地图
+        for label, sol in solutions_map.items():
+            if not sol:
+                continue
+            
+            # --- 智能生成标题和文件名 ---
+            # 把 "Opinion_A/B/C" 用作文件名
+            safe_label = label.replace(" ", "_")
+            filename = f"route_{safe_label}.svg"
+            
+            # 生成更有意义的地图标题
+            if "A" in label:
+                priority = "Cost Priority"
+                stats = f"¥{sol.f2_cost:,.0f}"
+            elif "B" in label:
+                priority = "Risk Priority"
+                stats = f"Risk {sol.f1_risk:.1f}"
+            else:
+                priority = "Balanced Strategy"
+                stats = "Knee Point"
+                
+            map_title = f"{label}: {priority} ({stats})"
 
-        # 绘制图B: 风险优先
-        self.visualizer.visualize_routes(
-            solution=sol_min_risk,
-            task_colors=task_colors,
-            save_dir=self.save_dir,
-            filename="route_min_risk.svg",
-            title=f"Min Risk Strategy (Risk: {sol_min_risk.f1_risk:.1f})",
-        )
+            # --- 调用 Visualizer ---
+            self.visualizer.visualize_routes(
+                solution=sol,
+                task_colors=task_colors,
+                save_dir=self.save_dir,
+                filename=filename,
+                title=map_title,
+            )
+            
+        logging.info("Route maps generation completed.")

@@ -4,11 +4,8 @@
 import os
 import sys
 import time
-import csv
 import logging
-from typing import List
 from contextlib import contextmanager
-from app.core.solution import Solution
 
 
 # ----------------------------------------
@@ -106,65 +103,3 @@ def log_section(clean: bool = False):
         for h, original_formatter in zip(handlers, original_formatters):
             if original_formatter:
                 h.setFormatter(original_formatter)
-
-
-# ----------------------------------------
-# 3. 结果保存器
-# ----------------------------------------
-def save_rank0_solutions_csv(rank_0_solutions: List[Solution], save_dir: str):
-    """
-    将所有 Rank 0 的解的详细路径保存到 'optimal_solutions.csv'。
-    """
-    file_path = os.path.join(save_dir, "optimal_solutions.csv")
-    logging.info(f"Pareto Optimal solutions saved to: {file_path}")
-
-    # 定义 CSV 表头
-    headers = [
-        "solution_index",  # 解的编号 (e.g., 1, 2, 3...)
-        "task_id",  # 任务 ID (e.g., "T1")
-        "origin_id",  # 任务起点
-        "destination_id",  # 任务终点
-        "f1_risk_total",  # (该解的) 总风险
-        "f2_cost_total",  # (该解的) 总成本
-        "path_nodes",  # 路径节点
-        "path_arcs_mode",  # 路径弧段(模式)
-    ]
-
-    try:
-        with open(file_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(headers)
-
-            # 遍历传入的 Rank 0 解列表
-            for i, sol in enumerate(rank_0_solutions):
-                sol_index = i + 1
-
-                # 遍历该解中的每一条路径 (每一个任务)
-                for task_id, path in sol.path_selections.items():
-                    if not path.task:
-                        continue
-
-                    # 提取路径信息
-                    nodes_str = " -> ".join([node.node_id for node in path.nodes])
-                    arcs_str = " -> ".join(
-                        [
-                            f"({arc.start.node_id},{arc.end.node_id})({arc.mode})"
-                            for arc in path.arcs
-                        ]
-                    )
-
-                    writer.writerow(
-                        [
-                            sol_index,
-                            task_id,
-                            path.task.origin.node_id,
-                            path.task.destination.node_id,
-                            f"{sol.f1_risk:.4f}",  # 记录该解的总目标值
-                            f"{sol.f2_cost:.4f}",  # 记录该解的总目标值
-                            nodes_str,
-                            arcs_str,
-                        ]
-                    )
-
-    except Exception as e:
-        logging.error(f"保存 PF_solutions.csv 失败: {e}")

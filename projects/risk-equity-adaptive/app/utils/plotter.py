@@ -30,7 +30,7 @@ class ParetoPlotter:
         os.makedirs(self.save_dir, exist_ok=True)
 
         # 设置通用的绘图风格 (可选，提升颜值)
-        plt.style.use('seaborn-v0_8-whitegrid')
+        plt.style.use("seaborn-v0_8-whitegrid")
 
     def plot(
         self,
@@ -38,7 +38,7 @@ class ParetoPlotter:
         file_name: str = "pareto_frontier.svg",
         xlabel: str = r"Transportation Risk $10^5$ (people $\cdot$ t)",
         ylabel: str = r"Transportation Cost $10^4$ (yuan)",
-        special_solutions: Optional[Dict[str, Solution]] = None
+        special_solutions: Optional[Dict[str, Solution]] = None,
     ):
         """
         绘制二维帕累托前沿图，并高亮特殊解。
@@ -177,7 +177,6 @@ class ParetoPlotter:
         plt.close(fig)
         logging.info(f"Pareto plot saved to: {full_path}")
 
-
     def _highlight_special_solutions(self, solutions_map: Dict[str, Solution], ax):
         """
         [辅助] 在当前图上标记特殊点
@@ -185,13 +184,13 @@ class ParetoPlotter:
         for label, sol in solutions_map.items():
             if not sol:
                 continue
-            
+
             # 绘制红色虚线外框
             ax.scatter(
-                [sol.f1_risk], 
-                [sol.f2_cost], 
-                facecolors='none',
-                edgecolors='red',
+                [sol.f1_risk],
+                [sol.f2_cost],
+                facecolors="none",
+                edgecolors="red",
                 s=220,
                 linestyle=":",
                 linewidths=2,
