@@ -1,6 +1,6 @@
-# projects/risk-equity-adaptive/environment.yaml
+# projects/risk-equity-adaptive/environment.yml
 
-name: conda_envs
+name: risk_equity_adaptive_env
 channels:
   - defaults
   - conda-forge
@@ -9,14 +9,15 @@ dependencies:
   # --- Conda packages ---
   - python
   - pandas
-  - networkx
-  - matplotlib
   - pydantic
   - ruff
   - mypy
+  - networkx
+  - matplotlib
+  - cartopy
+  - seaborn
+  - pip
 
   # --- Pip packages ---
   - pip:
       - contextily
-      - geopandas
-      - shapely
