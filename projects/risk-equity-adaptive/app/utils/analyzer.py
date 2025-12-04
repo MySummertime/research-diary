@@ -5,7 +5,7 @@ import random
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Dict, List
+from typing import Dict, List, Optional
 from app.core.solution import Solution
 from app.core.evaluator import Evaluator
 from app.core.path import Path
@@ -323,13 +323,13 @@ def print_solution_details(solution_type: str, solution: Solution):
             eta_v = solution.eta_values.get(task_id, 0.0)
 
             logging.info(
-                f"  - 任务 {task.task_id} (从 {task.origin.id} 到 {task.destination.id}):"
+                f"  - 任务 {task.task_id} (从 {task.origin.node_id} 到 {task.destination.node_id}):"
             )
 
             # 打印详细路径信息
-            path_str = " -> ".join([node.id for node in path.nodes])
-            all_hubs_str = ", ".join([h.id for h in path.all_hubs_on_path])
-            transfer_hubs_str = ", ".join([h.id for h in path.transfer_hubs])
+            path_str = " -> ".join([node.node_id for node in path.nodes])
+            all_hubs_str = ", ".join([h.node_id for h in path.all_hubs_on_path])
+            transfer_hubs_str = ", ".join([h.node_id for h in path.transfer_hubs])
 
             logging.info(f"      完整路径: {path_str}")
             logging.info(f"      途经所有枢纽: [{all_hubs_str}]")
@@ -339,3 +339,39 @@ def print_solution_details(solution_type: str, solution: Solution):
             logging.info(f"      此任务VaR (η_v): {eta_v:,.2f}")
         else:
             logging.warning(f"  - 任务 {task_id} 的路径缺少 task 引用。")
+
+def find_knee_point(solutions: List[Solution]) -> Optional[Solution]:
+    """
+    [算法] 寻找帕累托前沿上的 Knee Point (折衷解)。
+    定义：距离理想点 (Min Cost, Min Risk) 归一化欧氏距离最近的点。
+    """
+    if not solutions:
+        return None
+        
+    # 1. 获取目标值边界
+    costs = [s.f2_cost for s in solutions]
+    risks = [s.f1_risk for s in solutions]
+    
+    min_c, max_c = min(costs), max(costs)
+    min_r, max_r = min(risks), max(risks)
+    
+    # 避免除以零
+    range_c = max_c - min_c if max_c != min_c else 1.0
+    range_r = max_r - min_r if max_r != min_r else 1.0
+    
+    best_sol = None
+    min_dist = float('inf')
+    
+    # 2. 计算每个点到理想点 (归一化坐标 0,0) 的距离
+    for s in solutions:
+        norm_c = (s.f2_cost - min_c) / range_c
+        norm_r = (s.f1_risk - min_r) / range_r
+        
+        # 距离公式 d^2 = x^2 + y^2
+        dist = norm_c**2 + norm_r**2
+        
+        if dist < min_dist:
+            min_dist = dist
+            best_sol = s
+            
+    return best_sol

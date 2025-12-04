@@ -1,5 +1,5 @@
 # --- coding: utf-8 ---
-# --- app/utils/visualizer.py ---
+# --- app/utils/network_visualizer.py ---
 import os
 import math
 import networkx as nx

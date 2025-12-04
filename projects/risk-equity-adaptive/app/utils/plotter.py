@@ -4,7 +4,7 @@ import os
 import logging
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
-from typing import List, Dict
+from typing import List, Dict, Optional
 from app.core.solution import Solution
 
 # --- 全局绘图风格设置 ---
@@ -29,15 +29,26 @@ class ParetoPlotter:
         self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
 
+        # 设置通用的绘图风格 (可选，提升颜值)
+        plt.style.use('seaborn-v0_8-whitegrid')
+
     def plot(
         self,
         solutions: List[Solution],
         file_name: str = "pareto_frontier.svg",
         xlabel: str = r"Transportation Risk $10^5$ (people $\cdot$ t)",
         ylabel: str = r"Transportation Cost $10^4$ (yuan)",
+        special_solutions: Optional[Dict[str, Solution]] = None
     ):
         """
-        绘制二维帕累托前沿图 (SVG Only)。
+        绘制二维帕累托前沿图，并高亮特殊解。
+
+        Args:
+            solutions: pareto frontier 的接列表
+            file_name: 保存的文件名
+            xlabel: x 轴的 label 名
+            ylabel: y 轴的 label 名
+            special_solutions: 一个字典 {'Label': Solution}，用于在图上高亮标记特殊解
         """
         # 1. 预处理：筛选可行解并按 Rank 分组
         feasible_sols = [s for s in solutions if s.is_feasible]
@@ -50,6 +61,7 @@ class ParetoPlotter:
                 solutions_by_rank[s.rank] = []
             solutions_by_rank[s.rank].append(s)
 
+        # 创建画布和坐标轴 (面向对象风格)
         fig, ax = plt.subplots(figsize=(10, 8))
 
         # 2. 绘制次优层级 (Rank 3 -> Rank 2 -> Rank 1)
@@ -86,8 +98,8 @@ class ParetoPlotter:
         for r in [3, 2, 1]:
             if r in solutions_by_rank:
                 sols = solutions_by_rank[r]
-                x_vals = [s.f1_risk / 100000.0 for s in sols]
-                y_vals = [s.f2_cost / 10000.0 for s in sols]
+                x_vals = [s.f1_risk for s in sols]
+                y_vals = [s.f2_cost for s in sols]
 
                 style = rank_styles[r]
                 ax.scatter(
@@ -108,8 +120,8 @@ class ParetoPlotter:
             # 排序以便画连线
             rank0_sols.sort(key=lambda s: s.f1_risk)
 
-            x_r0 = [s.f1_risk / 100000.0 for s in rank0_sols]
-            y_r0 = [s.f2_cost / 10000.0 for s in rank0_sols]
+            x_r0 = [s.f1_risk for s in rank0_sols]
+            y_r0 = [s.f2_cost for s in rank0_sols]
 
             # 画连线 (虚线)
             ax.plot(x_r0, y_r0, color="#3498DB", linestyle="--", alpha=0.6, zorder=2)
@@ -128,7 +140,9 @@ class ParetoPlotter:
             )
 
             # 标记 Rank 0 的特殊点
-            self._mark_special_points(ax, x_r0, y_r0)
+            # self._mark_special_points(ax, x_r0, y_r0)
+            if special_solutions:
+                self._highlight_special_solutions(special_solutions, ax)
 
         # 4. 格式化图表
         ax.set_xlabel(xlabel)
@@ -163,44 +177,23 @@ class ParetoPlotter:
         plt.close(fig)
         logging.info(f"Pareto plot saved to: {full_path}")
 
-    def _mark_special_points(self, ax, x_vals, y_vals):
-        """标记 Knee Point 和极值点"""
-        points = list(zip(x_vals, y_vals))
-        if not points:
-            return
 
-        # 简单查找
-        p_min_cost = min(points, key=lambda p: p[1])
-        p_min_risk = min(points, key=lambda p: p[0])
-
-        # Knee Point (简化版: 距离理想点最近)
-        min_x, max_x = min(x_vals), max(x_vals)
-        min_y, max_y = min(y_vals), max(y_vals)
-
-        best_knee = None
-        min_dist = float("inf")
-
-        # 归一化计算
-        for px, py in points:
-            nx = (px - min_x) / (max_x - min_x + 1e-9)
-            ny = (py - min_y) / (max_y - min_y + 1e-9)
-            dist = nx**2 + ny**2
-            if dist < min_dist:
-                min_dist = dist
-                best_knee = (px, py)
-
-        special_points = {p_min_cost, p_min_risk, best_knee}
-
-        for sx, sy in special_points:
-            if sx is None:
+    def _highlight_special_solutions(self, solutions_map: Dict[str, Solution], ax):
+        """
+        [辅助] 在当前图上标记特殊点
+        """
+        for label, sol in solutions_map.items():
+            if not sol:
                 continue
+            
+            # 绘制红色虚线外框
             ax.scatter(
-                sx,
-                sy,
+                [sol.f1_risk], 
+                [sol.f2_cost], 
+                facecolors='none',
+                edgecolors='red',
                 s=220,
-                facecolors="none",
-                edgecolors="red",
                 linestyle=":",
-                linewidth=2,
+                linewidths=2,
                 zorder=4,
             )

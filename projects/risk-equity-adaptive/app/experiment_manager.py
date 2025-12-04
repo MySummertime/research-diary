@@ -18,9 +18,13 @@ from app.core.generator import JSONNetworkGenerator
 # --- Utils ---
 from app.utils.callback import GenerationalLogger, GenerationalFileLogger
 from app.utils.plotter import ParetoPlotter
-from app.utils.visualizer import NetworkVisualizer
-from app.utils.result_keeper import create_experiment_directory, setup_logging, save_rank0_solutions_csv
-
+from app.utils.network_visualizer import NetworkVisualizer
+from app.utils.result_keeper import (
+    create_experiment_directory, 
+    setup_logging, 
+    save_rank0_solutions_csv
+)
+from app.utils.analyzer import find_knee_point
 
 class Experiment:
     """
@@ -109,12 +113,38 @@ class Experiment:
         # 保存 Rank 0 的解
         save_rank0_solutions_csv(rank_0, self.save_dir)
 
-        # 1. 绘制 Pareto 前沿 (传入所有解 self.final_front)
-        # 这样 Plotter 才能画出 Rank 1, Rank 2...
-        self.plotter.plot(self.final_front, file_name="pareto_frontier.svg")
+        # # 1. 绘制 Pareto 前沿 (传入所有解 self.final_front)
+        # # 这样 Plotter 才能画出 Rank 1, Rank 2...
+        # self.plotter.plot(self.final_front, file_name="pareto_frontier.svg")
 
-        # 2. 生成路线对比图 (Figure 2) (只画 Rank 0 的极端解)
-        self._generate_route_maps(rank_0)
+        # # 2. 生成路线对比图 (Figure 2) (只画 Rank 0 的极端解)
+        # self._generate_route_maps(rank_0)
+        
+        # logging.info(f"All results saved to: {self.save_dir}")
+        
+        # 1. 准备特殊解 (A, B, C)
+        sol_a = min(rank_0, key=lambda s: s.f2_cost)  # Min Cost
+        sol_b = min(rank_0, key=lambda s: s.f1_risk)  # Min Risk
+        sol_c = find_knee_point(rank_0)               # Knee Point
+        
+        special_solutions = {
+            "Opinion A": sol_a,
+            "Opinion B": sol_b,
+            "Opinion C": sol_c
+        }
+
+        # 2. 绘制 Pareto 前沿 (传入 special_solutions 以便高亮)
+        self.plotter.plot(
+            self.final_front, 
+            file_name="pareto_frontier.svg",
+            special_solutions=special_solutions
+        )
+
+        # 3. 生成对比表格 (Table 1)
+        # generate_routing_scheme_comparison(special_solutions, self.evaluator)
+        
+        # 4. 生成路线地图
+        self._generate_route_maps([sol_a, sol_b, sol_c])
         
         logging.info(f"All results saved to: {self.save_dir}")
 
