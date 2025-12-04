@@ -12,7 +12,7 @@ def main():
 
     try:
         # 1. 初始化(自动设置日志、备份、加载数据、预计算)
-        exp = Experiment(config_path="config.json", seed=4)
+        exp = Experiment(config_path="config.json")
 
         # 2. 运行
         algo_start_time = time.time()

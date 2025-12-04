@@ -31,33 +31,41 @@ class Experiment:
     [Controller Layer] 实验总控
     """
 
-    def __init__(self, config_path: str = "config.json", seed: int = 94):
-        self.config_path = config_path
-        self.seed = seed
-
-        # 1. 创建实验目录
-        self.save_dir = create_experiment_directory(base_dir="results")
-        setup_logging(log_dir=self.save_dir, log_name="experiment.log")
-
-        # 2. 加载配置
+    def __init__(self, config_path: str = "config.json", seed: int = None):        
+        # 1. 加载实验配置
         with open(config_path, "r", encoding="utf-8") as f:
             self.config = json.load(f)
 
-        # 3. 初始化业务对象
+        # 2. 创建实验目录
+        self.base_dir = self.config.get("experiment", {}).get("base_dir", "results")
+        self.save_dir = create_experiment_directory(base_dir=self.base_dir)
+
+        # 2. 设置日志系统
+        setup_logging(log_dir=self.save_dir, log_name="experiment.log")
+
+        # 3. 设置全局随机种子
+        if seed is not None:
+            self.seed = seed
+            logging.info(f"Global Random Seed using manual override seed: {self.seed}")
+        else:
+            self.seed = self.config.get("experiment", {}).get("seed", 4)
+            logging.info(f"Global Random Seed using configuration seed: {self.seed}")
+
+        # 4. 初始化业务对象
         self.network, self.evaluator, self.candidate_paths_map = self._setup_core()
 
-        # 4. 初始化可视化器 (View)
+        # 5. 初始化可视化器 (View)
         self.visualizer = NetworkVisualizer(self.network)
         self.plotter = ParetoPlotter(save_dir=self.save_dir)
 
-        # 5. 立即绘制网络拓扑
+        # 6. 立即绘制网络拓扑
         self.visualizer.visualize_topology(
             save_dir=self.save_dir,
             filename="network_topology.svg",
             title="Hub-and-Spoke Hazmat Network",
         )
 
-        # 6. 初始化算法
+        # 7. 初始化算法
         self.algorithm = NSGA2(
             self.network, self.evaluator, self.candidate_paths_map, self.config
         )
