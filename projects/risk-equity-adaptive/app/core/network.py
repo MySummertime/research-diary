@@ -136,6 +136,7 @@ class TransportNetwork:
         # 快速查找索引
         self._nodes_map: Dict[str, Node] = {}
         self._arcs_map: Dict[Tuple[str, str], Arc] = {}
+        self._tasks_map: Dict[str, TransportTask] = {}
 
         # 拓扑缓存 (Lazy Loading)
         self._graph_cache: Optional[nx.DiGraph] = None
@@ -193,6 +194,7 @@ class TransportNetwork:
 
     def add_task(self, task: TransportTask):
         self.tasks.append(task)
+        self._tasks_map[task.task_id] = task
 
     def _add_arc_internal(self, arc: Arc):
         """内部方法：将弧段加入列表和索引。"""
@@ -264,6 +266,10 @@ class TransportNetwork:
     def get_emergency_centers(self) -> List[Node]:
         """获取所有应急中心节点"""
         return [n for n in self.nodes if n.is_emergency_center]
+
+    def get_task(self, task_id: str) -> Optional[TransportTask]:
+        """根据任务ID获取任务对象"""
+        return self._tasks_map.get(task_id)
 
     # --- 序列化与摘要 ---
 

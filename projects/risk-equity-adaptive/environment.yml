@@ -9,6 +9,7 @@ dependencies:
   # --- Conda packages ---
   - python
   - pandas
+  - pymoo
   - pydantic
   - ruff
   - mypy
@@ -21,3 +22,4 @@ dependencies:
   # --- Pip packages ---
   - pip:
       - contextily
+      - gurobipy

@@ -57,17 +57,17 @@ def setup_logging(log_dir: str, log_name: str = "experiment.log"):
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     # 使用 VERBOSE_FORMATTER
     file_handler.setFormatter(VERBOSE_FORMATTER)
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(logging.INFO)
     root_logger.addHandler(file_handler)
 
     # 3. 控制台处理器 (StreamHandler) - “安静”模式
     console_handler = logging.StreamHandler(sys.stdout)
     # 使用 VERBOSE_FORMATTER
     console_handler.setFormatter(VERBOSE_FORMATTER)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.WARNING)
     root_logger.addHandler(console_handler)
 
-    logging.info("日志系统已启动。(文件日志级别: INFO, 控制台日志级别: INFO)")
+    logging.info("日志系统已启动。(文件日志级别: INFO, 控制台日志级别: WARNING)")
     logging.info(f"日志将保存至: {log_path}")
 
 

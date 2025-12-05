@@ -82,7 +82,7 @@ class NSGA2:
             self._notify(gen + 1, callbacks)
 
             if (gen + 1) % 10 == 0:
-                logging.debug(f"Gen {gen + 1}: Archive Size {len(self.archive)}")
+                logging.info(f"Gen {gen + 1}: Archive Size {len(self.archive)}")
 
         return self.archive
 
