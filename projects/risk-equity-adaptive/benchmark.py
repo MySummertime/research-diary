@@ -449,37 +449,36 @@ def plot_pareto_comparison(frontiers: Dict[str, List[Solution]], save_dir: str):
     plt.figure(figsize=(10, 6))
 
     styles = {
+        "Gurobi (Exact)": {
+            "c": "black",
+            "marker": "*",
+            "s": 10,
+            "zorder": 4,
+            "label": "Gurobi (Exact)",
+            "edgecolors": "yellow",
+        },
         "Improved NSGA-II (Proposed)": {
             "c": "#d62728",
             "marker": "o",
             "s": 30,
+            "zorder": 3,
             "label": "Improved NSGA-II",
-            "edgecolors": "white",
-            "zorder": 10,
-            "alpha": 0.7,
+            "edgecolors": "red",
         },
         "Standard NSGA2": {
-            "c": "#1f77b4",
-            "marker": "s",
-            "s": 40,
-            "label": "Standard NSGA-II",
-            "alpha": 0.6,
-        },
-        "Standard SPEA2": {
             "c": "#2ca02c",
             "marker": "^",
-            "s": 40,
+            "s": 50,
+            "zorder": 2,
+            "label": "Standard NSGA-II",
+        },      
+        "Standard SPEA2": {
+            "c": "#1f77b4",
+            "marker": "s",
+            "s": 60,
+            "zorder": 1,
             "label": "Standard SPEA2",
-            "alpha": 0.6,
-        },
-        "Gurobi (Exact)": {
-            "c": "black",
-            "marker": "*",
-            "s": 40,
-            "label": "Gurobi (Exact)",
-            "zorder": 15,
-            "edgecolors": "yellow",
-        },
+        },  
     }
 
     for name, sols in frontiers.items():
