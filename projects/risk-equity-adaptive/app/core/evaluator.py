@@ -103,9 +103,6 @@ class Evaluator:
         for task_id, path in solution.path_selections.items():
             if not path.task:
                 continue
-            
-            # 获取该任务的运量
-            dv = path.task.demand
 
             # 1. 收集 (p, c) 事件对
             p_c_pairs: List[Tuple[float, float]] = []
@@ -115,9 +112,9 @@ class Evaluator:
                 p_ijm = arc.accident_prob_per_km * arc.length
                 c_base = self.risk_model.get_consequence(arc)
 
-                # 后果 = 基础后果 * 运量
-                # 这意味着运量越大，潜在的危害权重越大
-                c_ijm = c_base * dv
+                # Risk = Probability * Consequence (Impact Area * Pop Density)
+                # 论文模型中风险被定义为潜在受影响人数
+                c_ijm = c_base
 
                 if p_ijm > 0 and c_ijm > 0:
                     p_c_pairs.append((p_ijm, c_ijm))
@@ -127,8 +124,7 @@ class Evaluator:
                 p_k = hub.accident_prob
                 c_base = self.risk_model.get_consequence(hub)
                 
-                # 后果 = 基础后果 * 运量
-                c_k = c_base * dv
+                c_k = c_base
                 
                 if p_k > 0 and c_k > 0:
                     p_c_pairs.append((p_k, c_k))
@@ -143,7 +139,7 @@ class Evaluator:
                     p_c_pairs, alpha, one_minus_alpha
                 )
 
-            # 3. 存回 solution 作为“计算结果”
+            # 3. 存回 solution 作为计算结果
             solution.eta_values[task_id] = optimal_eta_v
 
             # 4. 累加到总风险
