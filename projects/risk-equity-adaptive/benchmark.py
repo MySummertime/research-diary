@@ -151,13 +151,6 @@ def main():
     logging.info(f"Benchmark Results will be saved to: {benchmark_dir}")
     logging.info("Log redirected to benchmark.log successfully.")
 
-    # HV 参考点
-    # 注意：务必确保该点大于所有可能的最差解
-    ref_point = config.get("analysis", {}).get("hv_ref_point", [300000, 2000000])
-    logging.info(f"Metrics Reference Point: {ref_point}")
-
-    calculator = MetricCalculator(ref_point)
-
     # 存储最终的统计数据
     results_data = {
         "Algorithm": [],
@@ -272,7 +265,44 @@ def main():
     logging.info(f"Reference Front constructed with {len(reference_front)} points.")
 
     # -------------------------------------------------------
-    # E. Calculate Curves (HV, IGD, SM)
+    # E. Auto-detecting Reference Point for HV
+    # -------------------------------------------------------
+    logging.info(">>> Auto-detecting Reference Point for HV...")
+    
+    max_risk, max_cost = 0.0, 0.0
+    
+    # 1. 扫描所有进化算法的历史种群 (Proposed, NSGA2, SPEA2)
+    # 目的：找到搜索过程中出现过的最差（最大）的目标值
+    for algo_name, history in raw_history_map.items():
+        for F_gen in history:
+            if len(F_gen) > 0:
+                # F_gen 是 (N, 2) 的 numpy array
+                current_max_r = np.max(F_gen[:, 0])
+                current_max_c = np.max(F_gen[:, 1])
+                max_risk = max(max_risk, current_max_r)
+                max_cost = max(max_cost, current_max_c)
+    
+    # 2. 扫描 Gurobi 的解 (如果有)
+    if gurobi_sols:
+        for s in gurobi_sols:
+            max_risk = max(max_risk, s.f1_risk)
+            max_cost = max(max_cost, s.f2_cost)
+            
+    # 3. 设置参考点 (Nadir Point * 1.1)
+    # 乘以 1.1 是为了给边界解留出空间，防止 HV 计算为 0
+    # 设置 1.0 为底线，防止全是 0 的情况
+    max_risk = max(max_risk, 1.0)
+    max_cost = max(max_cost, 1.0)
+    
+    ref_point = [max_risk * 1.1, max_cost * 1.1]
+    logging.info(f"Dynamic Reference Point set to: {ref_point}")
+    
+    # 4. 初始化计算器 (Late Initialization)
+    # 现在有了基于数据的合理参考点
+    calculator = MetricCalculator(ref_point)
+
+    # -------------------------------------------------------
+    # F. Calculate Curves (HV, IGD, SM)
     # -------------------------------------------------------
     logging.info(">>> Calculating Convergence Curves (HV, IGD, SM)...")
 
@@ -310,7 +340,7 @@ def main():
         sm_curves[algo] = sm_list
 
     # -------------------------------------------------------
-    # F. Generate Final Report (Table 2)
+    # G. Generate Final Report (Table 2)
     # -------------------------------------------------------
     logging.info(">>> Generating Table 2...")
 
@@ -359,7 +389,7 @@ def main():
     logging.info(f"Table 2 saved to: {csv_path}")
 
     # -------------------------------------------------------
-    # G. Plotting (Fig 3, 4, 5, 6)
+    # H. Plotting (Fig 3, 4, 5, 6)
     # -------------------------------------------------------
     logging.info(">>> Plotting Figures...")
 
