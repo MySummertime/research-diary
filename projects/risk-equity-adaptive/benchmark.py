@@ -418,7 +418,7 @@ def plot_convergence(
             "color": "#d62728",
             "marker": "o",
             "markevery": 0.1,
-            "linewidth": 2.5,
+            "linewidth": 1.5,
             "zorder": 10,
             "label": "Improved NSGA-II (Proposed)",
         },
