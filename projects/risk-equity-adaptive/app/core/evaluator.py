@@ -238,9 +238,16 @@ class Evaluator:
                     *arc.fuzzy_transport_time
                 )
 
-                # 累计成本: d^v * (C_m * d_ij + P * E[t] + E_m * d_ij)
-                # 可以合并为: d^v * ((C_m + E_m) * d_ij + P * expected_time)
-                segment_cost = dv * ((C_m + E_m) * d_ij + P * expected_time)
+                # 1. 纯运输成本 (运费 + 时间惩罚)
+                # Formula: d^v * (C_m * d_ij + P * E[t])
+                transport_cost = dv * (C_m * d_ij + P * expected_time)
+
+                # 2. 碳排放成本
+                # Formula: d^v * (E_m * d_ij)
+                carbon_cost = dv * (E_m * d_ij)
+
+                # 3. 该路段总成本
+                segment_cost = transport_cost + carbon_cost
                 total_cost += segment_cost
 
             # --- Part 3: 枢纽成本 (转运 + 设备占用) ---
