@@ -6,8 +6,8 @@
 
 对比对象:
 1. Proposed Improved NSGA-II
-2. Standard NSGA-II (via Pymoo)
-3. Standard SPEA2 (via Pymoo)
+2. NSGA-II (via Pymoo)
+3. SPEA2 (via Pymoo)
 4. Gurobi (Exact) - 作为 Reference Front 和 Pareto 对比基准
 
 输出目录:
@@ -181,10 +181,10 @@ def main():
     logger = HistoryLogger()
 
     # [CPU Time] Start
-    start_time = time.perf_counter()
+    start_time = time.process_time()
     proposed_final_pop = exp.algorithm.run(callbacks=[logger])
     # [CPU Time] End
-    end_time = time.perf_counter()
+    end_time = time.process_time()
     duration_proposed = end_time - start_time
 
     raw_history_map[algo_name] = logger.history_F
@@ -202,17 +202,17 @@ def main():
     pymoo_finals = {}
     durations = {}
 
-    # 这里对比 NSGA2 和 SPEA2
-    for base_name in ["NSGA2", "SPEA2"]:
-        label = f"Standard {base_name}"
+    # 这里对比 NSGA-II 和 SPEA2
+    for base_name in ["NSGA-II", "SPEA2"]:
+        label = f"{base_name}"
         logging.info(f">>> Running {label}...")
 
         # [CPU Time] Start
-        start_time = time.perf_counter()
-        # 注意：开启 save_history 以获取收敛过程
+        start_time = time.process_time()
+        # 开启 save_history 以获取收敛过程
         res = solver.run_algorithm(base_name, save_history=True)
         # [CPU Time] End
-        end_time = time.perf_counter()
+        end_time = time.process_time()
         durations[label] = end_time - start_time
 
         raw_history_map[label] = extract_history_F_from_pymoo(res)
@@ -237,11 +237,11 @@ def main():
             )
 
             # [CPU Time] Start
-            start_time = time.perf_counter()
+            start_time = time.process_time()
             # 跑 300 个采样点，以获得更密集的参考前沿
             gurobi_sols = g_solver.solve_weighted_sum(num_points=300)
             # [CPU Time] End
-            end_time = time.perf_counter()
+            end_time = time.process_time()
             durations[label] = end_time - start_time
 
             pymoo_finals[label] = gurobi_sols
@@ -332,7 +332,7 @@ def main():
     calc_final_stats(algo_name, final_frontiers.get(algo_name, []), duration_proposed)
 
     # 计算并收集 Baselines 的最终指标
-    for name in ["Standard NSGA2", "Standard SPEA2"]:
+    for name in ["NSGA-II", "SPEA2"]:
         calc_final_stats(name, final_frontiers.get(name, []), durations.get(name, 0))
 
     # 计算并收集 Gurobi 的最终指标
@@ -392,21 +392,21 @@ def plot_convergence(
             "zorder": 10,
             "label": "Improved NSGA-II (Proposed)",
         },
-        "Standard NSGA2": {
+        "NSGA-II": {
             "color": "#1f77b4",
             "marker": "s",
             "markevery": 0.1,
             "linewidth": 1.5,
             "linestyle": "--",
-            "label": "Standard NSGA-II",
+            "label": "NSGA-II",
         },
-        "Standard SPEA2": {
+        "SPEA2": {
             "color": "#2ca02c",
             "marker": "^",
             "markevery": 0.1,
             "linewidth": 1.5,
             "linestyle": "-.",
-            "label": "Standard SPEA2",
+            "label": "SPEA2",
         },
         "Gurobi (Exact)": {
             "color": "black",
@@ -438,7 +438,6 @@ def plot_convergence(
     plt.tight_layout()
 
     plt.savefig(os.path.join(save_dir, f"{filename}.svg"), dpi=300)
-    plt.savefig(os.path.join(save_dir, f"{filename}.png"), dpi=300)
     logging.info(f"Saved {filename} to {save_dir}")
 
 
@@ -465,19 +464,19 @@ def plot_pareto_comparison(frontiers: Dict[str, List[Solution]], save_dir: str):
             "label": "Improved NSGA-II",
             "edgecolors": "red",
         },
-        "Standard NSGA2": {
+        "NSGA-II": {
             "c": "#2ca02c",
             "marker": "^",
             "s": 50,
             "zorder": 2,
-            "label": "Standard NSGA-II",
+            "label": "NSGA-II",
         },      
-        "Standard SPEA2": {
+        "SPEA2": {
             "c": "#1f77b4",
             "marker": "s",
             "s": 60,
             "zorder": 1,
-            "label": "Standard SPEA2",
+            "label": "SPEA2",
         },  
     }
 
@@ -502,7 +501,6 @@ def plot_pareto_comparison(frontiers: Dict[str, List[Solution]], save_dir: str):
     plt.tight_layout()
 
     plt.savefig(os.path.join(save_dir, "Figure_6_Pareto_Comparison.svg"), dpi=300)
-    plt.savefig(os.path.join(save_dir, "Figure_6_Pareto_Comparison.png"), dpi=300)
     logging.info(f"Saved Figure_6_Pareto_Comparison to {save_dir}")
 
 
