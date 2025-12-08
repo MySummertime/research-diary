@@ -146,13 +146,25 @@ class NSGA2:
         return c1, c2
 
     def _mutate(self, sol: Solution):
+        """
+        变异：确保选出的新路径与当前路径不同，避免无效变异。
+        """
         for task in self.network.tasks:
             if random.random() < self.mut_prob:
                 tid = task.task_id
                 opts = self.candidate_paths_map.get(tid, [])
+                
                 if len(opts) > 1:
-                    sol.path_selections[tid] = random.choice(opts)
-                    self.op_log["mutation"] += 1
+                    # 获取当前选择的路径
+                    current_path = sol.path_selections.get(tid)
+                    
+                    # 过滤出除了当前路径以外的所有候选路径
+                    # 确保变异一定会改变基因，引入多样性
+                    candidates = [p for p in opts if p != current_path]
+                    
+                    if candidates:
+                        sol.path_selections[tid] = random.choice(candidates)
+                        self.op_log["mutation"] += 1
 
     # --- Helpers ---
     def _init_pop(self, size: int = None) -> List[Solution]:
