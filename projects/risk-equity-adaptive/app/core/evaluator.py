@@ -34,7 +34,7 @@ class Evaluator:
         self.risk_model = DynamicRiskModel(network, self.risk_config)
 
         # --- 获取确定性成本参数 ---
-        
+
         # 1. 单位运输成本 C (yuan/t*km)
         self.unit_transport_cost = self.cost_config.get(
             "unit_transport_cost", {"road": 0.55, "railway": 0.12}
@@ -123,9 +123,9 @@ class Evaluator:
             for hub in path.transfer_hubs:
                 p_k = hub.accident_prob
                 c_base = self.risk_model.get_consequence(hub)
-                
+
                 c_k = c_base
-                
+
                 if p_k > 0 and c_k > 0:
                     p_c_pairs.append((p_k, c_k))
 
@@ -272,11 +272,16 @@ class Evaluator:
         检查 1) 容量约束 和 2) 模糊成本约束。
         从 self.cost_config 读取参数。
         返回: (is_feasible, constraint_violation)
+
+        - 弧段 (Arc) 约束：检单车运量是否超过限重
+          物理含义：路面/桥梁的承重限制。
+        - 枢纽 (Hub) 约束：保持总流量累加，检查是否超过枢纽容量。
+          物理含义：中转站的吞吐/仓储能力限制。
         """
         total_violation = 0.0
 
         # --- 1. 容量约束 (Arc & Node) ---
-        arc_flow: Dict[Tuple[str, str], float] = {}
+        # arc_flow: Dict[Tuple[str, str], float] = {}  <-- [修改] 不再需要累加弧段流量
         node_flow: Dict[str, float] = {}
 
         for task_id, path in solution.path_selections.items():
@@ -284,31 +289,26 @@ class Evaluator:
                 continue
             demand = path.task.demand
 
-            # 累加弧段流量
+            # 弧段约束：直接检查单任务是否超重
             for arc in path.arcs:
-                arc_key = (arc.start.node_id, arc.end.node_id)
-                arc_flow[arc_key] = arc_flow.get(arc_key, 0.0) + demand
+                if demand > arc.capacity:
+                    # 违反：单车太重，压垮桥梁
+                    violation = (
+                        (demand - arc.capacity) / arc.capacity
+                        if arc.capacity > 0
+                        else demand
+                    )
+                    total_violation += violation
 
-            # 累加枢纽流量
+            # 枢纽约束：累加流量 (吞吐量)
             for hub in path.transfer_hubs:
                 node_flow[hub.node_id] = node_flow.get(hub.node_id, 0.0) + demand
 
-        # 检查弧段容量
-        for (u_id, v_id), flow in arc_flow.items():
-            # 使用 public method get_arc(u, v) 而非私有属性访问
-            arc = self.network.get_arc(u_id, v_id)
-            
-            if arc and flow > arc.capacity:
-                violation = (
-                    (flow - arc.capacity) / arc.capacity if arc.capacity > 0 else flow
-                )
-                total_violation += violation
-
-        # 检查枢纽容量
+        # 检查枢纽容量 (总吞吐量)
         for node_id, flow in node_flow.items():
             # 使用 public method get_node(id) 而非私有属性访问
             node = self.network.get_node(node_id)
-            
+
             if node and flow > node.capacity:
                 violation = (
                     (flow - node.capacity) / node.capacity
