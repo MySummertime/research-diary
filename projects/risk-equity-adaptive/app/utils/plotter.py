@@ -2,6 +2,7 @@
 # --- app/utils/plotter.py ---
 import os
 import logging
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
 from typing import List, Dict, Optional
@@ -196,3 +197,160 @@ class ParetoPlotter:
                 linewidths=2,
                 zorder=4,
             )
+
+
+class BenchmarkPlotter:
+    """
+    [View Layer] 专门负责 Benchmark 实验的绘图。
+    """
+
+    def __init__(self, save_dir: str):
+        self.save_dir = save_dir
+        os.makedirs(save_dir, exist_ok=True)
+
+        # 定义算法颜色方案 (Highlight Proposed)
+        self.colors = {
+            "Improved NSGA-II": "#D62728",  # Proposed: Red
+            "NSGA-II": "#1F77B4",  # Baseline 1: Blue
+            "SPEA2": "#2CA02C",  # Baseline 2: Green
+            "Gurobi": "#7F7F7F",  # Benchmark: Gray
+        }
+
+    def plot_convergence_curves(
+        self, data_map: Dict[str, List[float]], metric_name: str, filename: str
+    ):
+        """绘制收敛曲线 (HV, IGD, SM)"""
+        plt.figure(figsize=(10, 6))
+        for name, history in data_map.items():
+            if not history:
+                continue
+
+            # 样式处理
+            color = self.colors.get(name, "gray")
+            lw = 1.5
+            ls = "-" if "Improved" in name else "--"
+            if "Gurobi" in name:
+                ls = ":"
+
+            plt.plot(history, label=name, color=color, linewidth=lw, linestyle=ls)
+
+        plt.xlabel("Generation", fontsize=12, fontweight="bold")
+        plt.ylabel(metric_name, fontsize=12, fontweight="bold")
+        # plt.title(f"{metric_name} Convergence", fontsize=13)
+        plt.legend(fontsize=11, frameon=True, fancybox=True, framealpha=0.9)
+        plt.grid(True, linestyle="--", alpha=0.5)
+        plt.tight_layout()
+
+        plt.savefig(os.path.join(self.save_dir, f"{filename}.svg"))
+        plt.close()
+
+    def plot_performance_comparison(
+        self, stats_data: Dict[str, Dict[str, List[float]]]
+    ):
+        """
+        绘制多算法对比的小提琴图。
+        生成 4 张独立的图：HV_Comparison.svg, IGD_Comparison.svg, ...
+        每张图中 X 轴是算法，Y 轴是指标分布。
+        """
+        metrics = ["HV", "IGD", "SM", "Time"]
+        titles = {
+            "HV": "Hypervolume (Higher is Better)",
+            "IGD": "IGD (Lower is Better)",
+            "SM": "Spacing Metric (Lower is Better)",
+            "Time": "CPU Time (s) (Lower is Better)",
+        }
+
+        # 获取所有算法名称
+        algo_names = list(stats_data.keys())
+        # 确保 Proposed 排在第一个 (为了好看)
+        if "Improved NSGA-II" in algo_names:
+            algo_names.remove("Improved NSGA-II")
+            algo_names.insert(0, "Improved NSGA-II")
+
+        for metric in metrics:
+            self._plot_single_metric_comparison(
+                metric, titles[metric], algo_names, stats_data
+            )
+
+    def _plot_single_metric_comparison(
+        self, metric: str, title: str, algo_names: List[str], stats_data: Dict
+    ):
+        """[Helper] 绘制单个指标的对比图"""
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # 准备数据列表
+        data_to_plot = []
+        labels = []
+        colors = []
+
+        for algo in algo_names:
+            raw_data = stats_data[algo].get(metric, [])
+            # 清洗 None, Inf, NaN
+            clean = [
+                x
+                for x in raw_data
+                if x is not None and not np.isinf(x) and not np.isnan(x)
+            ]
+
+            # 如果数据为空，放一个空列表占位
+            data_to_plot.append(clean if clean else [])
+            labels.append(algo)
+            colors.append(self.colors.get(algo, "gray"))
+
+        # 1. 绘制小提琴 (Violin) - 密度
+        # 注意：如果有空数据或方差为0的数据，violinplot 需要特殊处理
+        # 这里我们手动处理方差为0的情况（Gurobi）：给它加极小的抖动，或者只画 scatter
+
+        processed_data = []
+        for d in data_to_plot:
+            if len(d) > 0 and np.var(d) < 1e-9:
+                # 方差为0 (Gurobi)，加微小抖动防止 violinplot 报错
+                d = np.array(d) + np.random.normal(0, 1e-6, size=len(d))
+            processed_data.append(d)
+
+        try:
+            parts = ax.violinplot(processed_data, showextrema=False, widths=0.7)
+
+            # 设置颜色
+            for i, pc in enumerate(parts["bodies"]):
+                pc.set_facecolor(colors[i])
+                pc.set_edgecolor("black")
+                pc.set_alpha(0.6)
+        except Exception as e:
+            print(f"Violin plot warning for {metric}: {e}. Skipping violin body.")
+
+        # 2. 绘制箱线图 (Box) - 统计区间 (嵌在小提琴内部)
+        ax.boxplot(
+            processed_data,
+            widths=0.15,
+            patch_artist=True,
+            boxprops=dict(facecolor="white", alpha=0.9, edgecolor="black"),
+            medianprops=dict(color="black", linewidth=1.5),
+            whiskerprops=dict(color="black"),
+            capprops=dict(color="black"),
+            showfliers=False,
+        )  # 不显示离群点，交由 jitter 显示
+
+        # 3. 绘制抖动散点 (Jitter Scatter) - 原始数据
+        for i, d in enumerate(data_to_plot):
+            y = d
+            # x 坐标添加随机抖动: i+1 是因为 boxplot 索引从1开始
+            x = np.random.normal(i + 1, 0.04, size=len(y))
+            ax.scatter(x, y, alpha=0.6, color="black", s=15, zorder=10)
+
+        # 装饰
+        ax.set_title(title, fontsize=14, fontweight="bold", pad=15)
+        ax.set_xticks(range(1, len(algo_names) + 1))
+        ax.set_xticklabels(labels, fontsize=11, fontweight="bold")
+        ax.yaxis.grid(True, linestyle="--", alpha=0.5)
+
+        # 微调 Gurobi 的标签颜色 (可选)
+        for tick_label in ax.get_xticklabels():
+            if "Improved" in tick_label.get_text():
+                tick_label.set_color("#D62728")
+
+        plt.tight_layout()
+        save_path = os.path.join(self.save_dir, f"Comparison_{metric}.svg")
+        plt.savefig(save_path, dpi=300)
+        plt.close()
+        print(f"   Generated comparison plot: {save_path}")

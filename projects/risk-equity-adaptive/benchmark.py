@@ -8,7 +8,7 @@
 1. Improved NSGA-II
 2. NSGA-II (via Pymoo)
 3. SPEA2 (via Pymoo)
-4. Gurobi (Exact) - 作为 Reference Front 和 Pareto 对比基准
+4. Gurobi - 作为 Reference Front 和 Pareto 对比基准
 
 输出目录:
 results/experiment_timestamp/benchmark/
@@ -16,492 +16,344 @@ results/experiment_timestamp/benchmark/
 
 import time
 import os
+import random
 import numpy as np
-import matplotlib.pyplot as plt
-import logging
 import pandas as pd
-from typing import List, Dict
+import logging
+from typing import List, Dict, Any
 
 # --- Project Imports ---
 from app.experiment_manager import Experiment
 from app.core.solution import Solution
 from app.core.baselines import PymooSolver, GurobiSolver, HAS_GUROBI
-from app.utils.metrics import MetricCalculator
+from app.utils.metrics import MetricCalculator, build_reference_front
 from app.utils.result_keeper import setup_logging
-from app.core.moea_utils import MOEAUtils
+from app.utils.plotter import BenchmarkPlotter
 
-
-# -----------------------------------------------------------
-# Helper Classes & Functions
-# -----------------------------------------------------------
+# ===========================================================
+# Helper Classes (辅助类)
+# ===========================================================
 
 
 class HistoryLogger:
     """
-    用于捕获 Proposed Algorithm 每一代种群的回调函数。
-    我们需要存下每一代的 F (目标值) 用于后续计算指标历史。
+    [回调函数] 用于捕获算法每一代种群的完整状态。
     """
 
     def __init__(self):
-        # 存储每一代种群的目标值矩阵 List[np.ndarray]
-        self.history_F = []
+        # 存储历史记录：每一代是一个 Solution 列表
+        # List[List[Solution]]
+        self.history_pop: List[List[Solution]] = []
 
     def on_generation_end(self, gen: int, population: List[Solution]):
-        # 提取目标值 F (保留所有解以计算指标)
-        F = np.array([[s.f1_risk, s.f2_cost] for s in population])
-        self.history_F.append(F)
-
-        if gen % 10 == 0:
-            logging.info(f"[Proposed] Gen {gen} captured.")
-
-
-def convert_pymoo_solutions(pymoo_result, solver: PymooSolver) -> List[Solution]:
-    """将 Pymoo 结果转回 Solution 对象"""
-    final_solutions = []
-    X_matrix = np.atleast_2d(pymoo_result.opt.get("X"))
-    task_ids = solver.problem.task_ids
-
-    for x_vec in X_matrix:
-        sol = Solution()
-        for i, path_idx in enumerate(x_vec):
-            tid = task_ids[i]
-            idx = int(round(path_idx))
-            path = solver.candidate_paths_map[tid][idx]
-            sol.path_selections[tid] = path
-
-        solver.evaluator.evaluate(sol)
-        if sol.is_feasible:
-            final_solutions.append(sol)
-
-    return final_solutions
+        """
+        每一代结束时触发。
+        """
+        # 深拷贝 (Clone) 可行解，确保历史记录不可变
+        snapshot = [s.clone() for s in population if s.is_feasible]
+        self.history_pop.append(snapshot)
 
 
-def extract_history_F_from_pymoo(res) -> List[np.ndarray]:
-    """从 Pymoo 历史中提取每一代的 F 矩阵"""
-    history_F = []
-    for snapshot in res.history:
-        F = snapshot.pop.get("F")
-        G = snapshot.pop.get("G")
-
-        # 简单过滤: 如果有 G，只留可行解
-        if G is not None:
-            feasible = (G <= 0).flatten()
-            if np.any(feasible):
-                history_F.append(F[feasible])
-            else:
-                history_F.append(np.empty((0, 2)))
-        else:
-            history_F.append(F)
-    return history_F
-
-
-def build_reference_front(all_F_arrays: List[np.ndarray]) -> np.ndarray:
-    """构建 IGD 计算所需的 Reference Front (True PF)"""
-    if not all_F_arrays:
-        return np.empty((0, 2))
-
-    # 1. 合并所有点
-    combined_F = np.vstack(all_F_arrays)
-    # 2. 去重
-    combined_F = np.unique(combined_F, axis=0)
-
-    # 3. 非支配排序提取 Rank 0
-    temp_sols = []
-    for f in combined_F:
-        s = Solution()
-        s.f1_risk, s.f2_cost = f[0], f[1]
-        temp_sols.append(s)
-
-    fronts = MOEAUtils.fast_non_dominated_sort(temp_sols)
-
-    if not fronts:
-        return np.empty((0, 2))
-
-    rank0_sols = fronts[0]
-    ref_front = np.array([[s.f1_risk, s.f2_cost] for s in rank0_sols])
-    # 按 Risk 排序，方便后续处理
-    ref_front = ref_front[ref_front[:, 0].argsort()]
-
-    return ref_front
-
-
-# -----------------------------------------------------------
-# Main Benchmark Logic
-# -----------------------------------------------------------
+# ===========================================================
+# Main Execution Flow (主流程)
+# ===========================================================
 
 
 def main():
-    logging.info("==========================================")
-    logging.info("   STARTING COMPREHENSIVE BENCHMARK       ")
-    logging.info("==========================================")
-
-    # 1. 初始化实验环境
+    # -------------------------------------------------------
+    # 1. 环境初始化 (Setup)
+    # -------------------------------------------------------
     exp = Experiment(config_path="config.json")
-    config = exp.config
 
     # 设置 benchmark 输出目录
-    # 路径: results/experiment_timestamp/benchmark/
     benchmark_dir = os.path.join(exp.save_dir, "benchmark")
     os.makedirs(benchmark_dir, exist_ok=True)
-    logging.info(f"Benchmark Results will be saved to: {benchmark_dir}")
 
-    # 日志系统 -> benchmark.log
-    # 将后续所有的 logging.info/error 输出到 benchmark/benchmark.log
+    # 重定向日志到 benchmark.log
     setup_logging(log_dir=benchmark_dir, log_name="benchmark.log")
-    logging.info(f"Benchmark Results will be saved to: {benchmark_dir}")
-    logging.info("Log redirected to benchmark.log successfully.")
 
-    # HV 参考点
-    # 注意：务必确保该点大于所有可能的最差解
-    ref_point = config.get("analysis", {}).get("hv_ref_point", [300000, 2000000])
-    logging.info(f"Metrics Reference Point: {ref_point}")
+    # --- 读取 Config 中的实验配置 ---
+    exp_config = exp.config.get("experiment", {})
 
-    calculator = MetricCalculator(ref_point)
+    # 读取 n_runs，默认为 5
+    n_runs = exp_config.get("n_runs", 5)
 
-    # 存储最终的统计数据
-    results_data = {
-        "Algorithm": [],
-        "HV": [],
-        "IGD": [],
-        "SM": [],
-        "CPU Time (s)": [],
+    # 读取 seeds 列表，默认为空
+    seeds_list = exp_config.get("seeds", [])
+
+    logging.info("==========================================")
+    logging.info("   STARTING RIGOROUS BENCHMARK")
+    logging.info(f"   Total Runs: {n_runs}")
+    logging.info(f"   Seeds Config: {seeds_list}")
+    logging.info("==========================================")
+
+    # 鲁棒性检查：确保种子够用
+    if len(seeds_list) < n_runs:
+        logging.warning(
+            f"⚠️ Config Warning: Provided seeds ({len(seeds_list)}) are fewer than n_runs ({n_runs}). "
+            f"Generating extra random seeds..."
+        )
+        # 补齐种子
+        while len(seeds_list) < n_runs:
+            seeds_list.append(random.randint(0, 999999))
+        logging.info(f"   Final Seeds List: {seeds_list}")
+
+    # -------------------------------------------------------
+    # 2. 数据容器初始化 (Initialize Containers)
+    # -------------------------------------------------------
+
+    stats_data = {
+        algo: {"HV": [], "IGD": [], "SM": [], "Time": []}
+        for algo in ["Improved NSGA-II", "NSGA-II", "SPEA2", "Gurobi"]
     }
 
-    # 存储过程数据用于画图 {"AlgoName": [F_gen0, F_gen1, ...]}
-    raw_history_map = {}
-    # 用于存储各算法的最终 Pareto 前沿，用于画 Figure 6
-    final_frontiers: Dict[str, List[Solution]] = {}
+    all_known_solutions_F: List[np.ndarray] = []
+    last_run_history: Dict[str, List[List[Solution]]] = {}
+    last_run_finals: Dict[str, List[Solution]] = {}
 
     # -------------------------------------------------------
-    # A. Proposed Algorithm
+    # 3. 执行循环 (Execution Loop)
     # -------------------------------------------------------
-    algo_name = "Improved NSGA-II"
-    logging.info(f">>> Running {algo_name}...")
+    for run_idx in range(n_runs):
+        # 获取当前种子
+        current_seed = seeds_list[run_idx]
 
-    logger = HistoryLogger()
-
-    # [CPU Time] Start
-    start_time = time.process_time()
-    proposed_final_pop = exp.algorithm.run(callbacks=[logger])
-    # [CPU Time] End
-    end_time = time.process_time()
-    duration_proposed = end_time - start_time
-
-    raw_history_map[algo_name] = logger.history_F
-
-    # 提取可行解中的 rank 0 作为最终前沿
-    feasible_prop = [s for s in proposed_final_pop if s.is_feasible and s.rank == 0]
-    final_frontiers[algo_name] = feasible_prop
-
-    logging.info(f"{algo_name} Finished in {duration_proposed:.2f}s")
-
-    # -------------------------------------------------------
-    # B. Baselines (Pymoo)
-    # -------------------------------------------------------
-    solver = PymooSolver(exp.network, exp.evaluator, exp.candidate_paths_map, config)
-    pymoo_finals = {}
-    durations = {}
-
-    # 这里对比 NSGA-II 和 SPEA2
-    for base_name in ["NSGA-II", "SPEA2"]:
-        label = f"{base_name}"
-        logging.info(f">>> Running {label}...")
-
-        # [CPU Time] Start
-        start_time = time.process_time()
-        # 开启 save_history 以获取收敛过程
-        res = solver.run_algorithm(base_name, save_history=True)
-        # [CPU Time] End
-        end_time = time.process_time()
-        durations[label] = end_time - start_time
-
-        raw_history_map[label] = extract_history_F_from_pymoo(res)
-
-        # 转换并存储最终前沿
-        sols = convert_pymoo_solutions(res, solver)
-        pymoo_finals[label] = sols
-        final_frontiers[label] = sols
-
-        logging.info(f"{label} Finished in {durations[label]:.2f}s")
-
-    # -------------------------------------------------------
-    # C. Exact Baseline (Gurobi)
-    # -------------------------------------------------------
-    gurobi_sols = []
-    if HAS_GUROBI:
-        label = "Gurobi (Exact)"
-        logging.info(f">>> Running {label}...")
-        try:
-            g_solver = GurobiSolver(
-                exp.network, exp.evaluator, exp.candidate_paths_map, config
-            )
-
-            # [CPU Time] Start
-            start_time = time.process_time()
-            # 跑 300 个采样点，以获得更密集的参考前沿
-            gurobi_sols = g_solver.solve_weighted_sum(num_points=300)
-            # [CPU Time] End
-            end_time = time.process_time()
-            durations[label] = end_time - start_time
-
-            pymoo_finals[label] = gurobi_sols
-            final_frontiers[label] = gurobi_sols
-
-            logging.info(f"{label} Finished in {durations[label]:.2f}s")
-        except Exception as e:
-            logging.error(f"Gurobi failed: {e}")
-            durations[label] = 0.0
-    else:
-        logging.warning("Skipping Gurobi (gurobipy not installed).")
-
-    # -------------------------------------------------------
-    # D. Build Reference Front & Calculate Metrics
-    # -------------------------------------------------------
-    logging.info(">>> Building Reference Front for IGD Calculation...")
-
-    all_final_F_list = []
-
-    # 将所有算法（包括 Gurobi）的解都加入 Ref Front 构建池
-    # 这样能保证 Reference Front 是当前所有已知解中的最优集合
-    for name, sols in final_frontiers.items():
-        if sols:
-            f_arr = np.array([[s.f1_risk, s.f2_cost] for s in sols])
-            all_final_F_list.append(f_arr)
-
-    reference_front = build_reference_front(all_final_F_list)
-    logging.info(f"Reference Front constructed with {len(reference_front)} points.")
-
-    # -------------------------------------------------------
-    # E. Calculate Curves (HV, IGD, SM)
-    # -------------------------------------------------------
-    logging.info(">>> Calculating Convergence Curves (HV, IGD, SM)...")
-
-    hv_curves = {}
-    igd_curves = {}
-    sm_curves = {}
-
-    for algo, history in raw_history_map.items():
-        hv_list = []
-        igd_list = []
-        sm_list = []
-
-        for F_gen in history:
-            if len(F_gen) == 0:
-                hv_list.append(0.0)
-                igd_list.append(float("inf"))
-                sm_list.append(0.0)
-                continue
-
-            # 临时构造 Solution 列表给 calculator 用
-            temp_sols = []
-            for val in F_gen:
-                s = Solution()
-                s.f1_risk, s.f2_cost = val[0], val[1]
-                temp_sols.append(s)
-
-            # 计算各项指标
-            hv_list.append(calculator.calculate_hv(temp_sols))
-            # 这里的 calculate_igd 应该在 metrics.py 中已包含归一化逻辑
-            igd_list.append(calculator.calculate_igd(temp_sols, reference_front))
-            sm_list.append(calculator.calculate_sm(temp_sols))
-
-        hv_curves[algo] = hv_list
-        igd_curves[algo] = igd_list
-        sm_curves[algo] = sm_list
-
-    # -------------------------------------------------------
-    # F. Generate Final Report (Table 2)
-    # -------------------------------------------------------
-    logging.info(">>> Generating Table 2...")
-
-    def calc_final_stats(algo, solutions, duration):
-        if not solutions:
-            hv, igd, sm = 0.0, float("inf"), 0.0
-        else:
-            hv = calculator.calculate_hv(solutions)
-            igd = calculator.calculate_igd(solutions, reference_front)
-            sm = calculator.calculate_sm(solutions)
-
-        results_data["Algorithm"].append(algo)
-        results_data["HV"].append(hv)
-        results_data["IGD"].append(igd)
-        results_data["SM"].append(sm)
-        results_data["CPU Time (s)"].append(duration)
-
-    # 计算并收集 Proposed 的最终指标
-    calc_final_stats(algo_name, final_frontiers.get(algo_name, []), duration_proposed)
-
-    # 计算并收集 Baselines 的最终指标
-    for name in ["NSGA-II", "SPEA2"]:
-        calc_final_stats(name, final_frontiers.get(name, []), durations.get(name, 0))
-
-    # 计算并收集 Gurobi 的最终指标
-    if gurobi_sols:
-        calc_final_stats(
-            "Gurobi (Exact)", gurobi_sols, durations.get("Gurobi (Exact)", 0)
+        logging.info(
+            f"\n>>> Starting Run {run_idx + 1}/{n_runs} [Seed: {current_seed}]..."
         )
 
-    # 输出表格
-    df = pd.DataFrame(results_data)
+        # 设置随机种子
+        random.seed(current_seed)
+        np.random.seed(current_seed)
 
-    logging.info("\n" + "=" * 80)
-    logging.info("Table 2: Algorithmic Performance Comparison")
-    logging.info("=" * 80)
-    # 使用 to_string 让 logging 能够整齐输出表格
-    logging.info(
-        "\n" + df.to_string(index=False, float_format=lambda x: "{:.4f}".format(x))
-    )
-    logging.info("=" * 80 + "\n")
+        # --- A. Proposed Algorithm: Improved NSGA-II ---
+        logging.info("Running Improved NSGA-II...")
+        logger = HistoryLogger()
+        start = time.process_time()
 
-    # 保存 CSV
-    csv_path = os.path.join(benchmark_dir, "table_2_metrics.csv")
-    df.to_csv(csv_path, index=False)
-    logging.info(f"Table 2 saved to: {csv_path}")
+        # 强制不传入 initial_population 以确保随机初始化
+        # 此时内部的 random.choice 会受上面的 seed 影响
+        proposed_pop = exp.algorithm.run(callbacks=[logger], initial_population=None)
+        duration = time.process_time() - start
+
+        feasible_prop = [s for s in proposed_pop if s.is_feasible]
+
+        _record_run_data(
+            run_idx=run_idx,
+            n_total_runs=n_runs,
+            algo_name="Improved NSGA-II",
+            final_sols=feasible_prop,
+            duration=duration,
+            history_sols=logger.history_pop,
+            stats_data=stats_data,
+            all_F_list=all_known_solutions_F,
+            last_run_hist=last_run_history,
+            last_run_fin=last_run_finals,
+        )
+
+        # --- B. Baselines: NSGA-II & SPEA2 (via Pymoo) ---
+        solver = PymooSolver(
+            exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
+        )
+        for base_name in ["NSGA-II", "SPEA2"]:
+            logging.info(f"Running {base_name}...")
+
+            start = time.process_time()
+            res = solver.run_algorithm(base_name, save_history=True)
+            duration = time.process_time() - start
+
+            finals = PymooSolver.convert_to_solutions(res, solver)
+            history_F_list = PymooSolver.extract_history_F(res)
+            history_sols = [
+                [_make_dummy_sol(f) for f in F_gen] for F_gen in history_F_list
+            ]
+
+            _record_run_data(
+                run_idx=run_idx,
+                n_total_runs=n_runs,
+                algo_name=base_name,
+                final_sols=finals,
+                duration=duration,
+                history_sols=history_sols,
+                stats_data=stats_data,
+                all_F_list=all_known_solutions_F,
+                last_run_hist=last_run_history,
+                last_run_fin=last_run_finals,
+            )
+
+        # --- C. Exact Baseline: Gurobi ---
+        if HAS_GUROBI:
+            logging.info("Running Gurobi...")
+            g_solver = GurobiSolver(
+                exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
+            )
+
+            start = time.process_time()
+            g_sols = g_solver.solve_weighted_sum(num_points=200)
+            duration = time.process_time() - start
+
+            _record_run_data(
+                run_idx=run_idx,
+                n_total_runs=n_runs,
+                algo_name="Gurobi",
+                final_sols=g_sols,
+                duration=duration,
+                history_sols=[g_sols],
+                stats_data=stats_data,
+                all_F_list=all_known_solutions_F,
+                last_run_hist=last_run_history,
+                last_run_fin=last_run_finals,
+            )
+        else:
+            logging.warning("Skipping Gurobi (Not installed).")
 
     # -------------------------------------------------------
-    # G. Plotting (Fig 3, 4, 5, 6)
+    # 4. 全局分析与绘图 (Global Analysis & Plotting)
     # -------------------------------------------------------
-    logging.info(">>> Plotting Figures...")
-
-    plot_convergence(
-        hv_curves, "Hypervolume (HV)", "Figure_3_HV_Convergence", benchmark_dir
-    )
-    plot_convergence(
-        igd_curves, "IGD Metric", "Figure_4_IGD_Convergence", benchmark_dir
-    )
-    plot_convergence(
-        sm_curves, "Spacing Metric (SM)", "Figure_5_SM_Convergence", benchmark_dir
+    _perform_global_analysis(
+        stats_data=stats_data,
+        all_F_list=all_known_solutions_F,
+        last_hist=last_run_history,
+        last_finals=last_run_finals,
+        save_dir=benchmark_dir,
     )
 
-    # 绘制 Pareto 前沿对比图
-    plot_pareto_comparison(final_frontiers, benchmark_dir)
+
+# ===========================================================
+# Internal Helpers (内部辅助函数)
+# ===========================================================
 
 
-def plot_convergence(
-    data: Dict[str, List[float]], ylabel: str, filename: str, save_dir: str
+def _make_dummy_sol(f_values: np.ndarray) -> Solution:
+    s = Solution()
+    if len(f_values) >= 2:
+        s.f1_risk, s.f2_cost = f_values[0], f_values[1]
+    return s
+
+
+def _record_run_data(
+    run_idx: int,
+    n_total_runs: int,
+    algo_name: str,
+    final_sols: List[Solution],
+    duration: float,
+    history_sols: List[List[Solution]],
+    stats_data: Dict[str, Any],
+    all_F_list: List[np.ndarray],
+    last_run_hist: Dict[str, List[List[Solution]]],
+    last_run_fin: Dict[str, List[List[Solution]]],
 ):
-    """通用绘图函数 (Convergence Curves)"""
-    plt.figure(figsize=(10, 6))
-
-    styles = {
-        "Improved NSGA-II": {
-            "color": "#d62728",
-            "marker": "o",
-            "markevery": 0.1,
-            "linewidth": 2.5,
-            "zorder": 10,
-            "label": "Improved NSGA-II",
-        },
-        "NSGA-II": {
-            "color": "#1f77b4",
-            "marker": "s",
-            "markevery": 0.1,
-            "linewidth": 1.5,
-            "linestyle": "--",
-            "label": "NSGA-II",
-        },
-        "SPEA2": {
-            "color": "#2ca02c",
-            "marker": "^",
-            "markevery": 0.1,
-            "linewidth": 1.5,
-            "linestyle": "-.",
-            "label": "SPEA2",
-        },
-        "Gurobi (Exact)": {
-            "color": "black",
-            "linewidth": 2.0,
-            "linestyle": ":",
-            "label": "Gurobi (Exact)",
-        },
-    }
-
-    for name, history in data.items():
-        if not history:
-            continue
-        gens = np.arange(1, len(history) + 1)
-
-        # 获取样式，并避免修改原字典
-        style = styles.get(name, {}).copy()
-
-        # 智能兜底 label
-        if "label" not in style:
-            style["label"] = name
-
-        plt.plot(gens, history, **style)
-
-    plt.xlabel("Generation", fontsize=12, fontweight="bold")
-    plt.ylabel(ylabel, fontsize=12, fontweight="bold")
-    plt.title(f"{ylabel} Convergence Analysis", fontsize=14, pad=15)
-    plt.legend(fontsize=11, frameon=True, fancybox=True, framealpha=0.9)
-    plt.grid(True, linestyle="--", alpha=0.5)
-    plt.tight_layout()
-
-    plt.savefig(os.path.join(save_dir, f"{filename}.svg"), dpi=300)
-    logging.info(f"Saved {filename} to {save_dir}")
-
-
-def plot_pareto_comparison(frontiers: Dict[str, List[Solution]], save_dir: str):
     """
-    绘制多算法 Pareto 前沿对比图 (Figure 6)
+    记录单次运行数据。
     """
-    plt.figure(figsize=(10, 6))
+    if final_sols:
+        F = np.array([[s.f1_risk, s.f2_cost] for s in final_sols])
+        all_F_list.append(F)
 
-    styles = {
-        "Gurobi (Exact)": {
-            "c": "black",
-            "marker": "*",
-            "s": 10,
-            "zorder": 4,
-            "label": "Gurobi (Exact)",
-            "edgecolors": "yellow",
-        },
-        "Improved NSGA-II": {
-            "c": "#d62728",
-            "marker": "o",
-            "s": 30,
-            "zorder": 3,
-            "label": "Improved NSGA-II",
-            "edgecolors": "red",
-        },
-        "NSGA-II": {
-            "c": "#2ca02c",
-            "marker": "^",
-            "s": 50,
-            "zorder": 2,
-            "label": "NSGA-II",
-        },      
-        "SPEA2": {
-            "c": "#1f77b4",
-            "marker": "s",
-            "s": 60,
-            "zorder": 1,
-            "label": "SPEA2",
-        },  
-    }
+    if "_raw_data" not in stats_data[algo_name]:
+        stats_data[algo_name]["_raw_data"] = []
 
-    for name, sols in frontiers.items():
-        if not sols:
-            continue
+    stats_data[algo_name]["_raw_data"].append(
+        {"finals": final_sols, "history": history_sols, "time": duration}
+    )
 
-        # 提取坐标
-        risks = [s.f1_risk for s in sols]
-        costs = [s.f2_cost for s in sols]
+    # 如果是最后一次运行，更新缓存
+    if run_idx == n_total_runs - 1:
+        last_run_hist[algo_name] = history_sols
+        last_run_fin[algo_name] = final_sols
 
-        # 获取样式
-        style = styles.get(name, {"label": name}).copy()
 
-        plt.scatter(risks, costs, **style)
+def _perform_global_analysis(
+    stats_data: Dict[str, Any],
+    all_F_list: List[np.ndarray],
+    last_hist: Dict[str, List[List[Solution]]],
+    last_finals: Dict[str, List[Solution]],
+    save_dir: str,
+):
+    logging.info("\n>>> Calculating Global Bounds & Metrics...")
 
-    plt.xlabel("Transportation Risk (people·t)", fontsize=12, fontweight="bold")
-    plt.ylabel("Transportation Cost (yuan)", fontsize=12, fontweight="bold")
-    plt.title("Pareto Frontiers Comparison", fontsize=14, pad=15)
-    plt.legend(fontsize=11, frameon=True, fancybox=True, framealpha=0.9)
-    plt.grid(True, linestyle="--", alpha=0.5)
-    plt.tight_layout()
+    if not all_F_list:
+        logging.error("No feasible solutions generated across all runs!")
+        return
 
-    plt.savefig(os.path.join(save_dir, "Figure_6_Pareto_Comparison.svg"), dpi=300)
-    logging.info(f"Saved Figure_6_Pareto_Comparison to {save_dir}")
+    # 1. Global Normalization Bounds
+    all_F = np.vstack(all_F_list)
+    ideal = np.min(all_F, axis=0)
+    nadir = np.max(all_F, axis=0)
+
+    logging.info(f"Global Ideal (Min): {ideal}")
+    logging.info(f"Global Nadir (Max): {nadir}")
+
+    # 2. Reference Front
+    ref_front = build_reference_front(all_F_list)
+    logging.info(f"Reference Front constructed with {len(ref_front)} points.")
+
+    # 3. Metric Calculator
+    calc = MetricCalculator(ideal_point=ideal, nadir_point=nadir)
+
+    # 4. Compute Metrics for All Runs
+    for algo, data in stats_data.items():
+        raw_list = data.pop("_raw_data", [])
+
+        for run_record in raw_list:
+            finals = run_record["finals"]
+
+            hv = calc.calculate_hv(finals)
+            igd = calc.calculate_igd(finals, ref_front)
+            sm = calc.calculate_sm(finals)
+
+            data["HV"].append(hv)
+            data["IGD"].append(igd)
+            data["SM"].append(sm)
+            data["Time"].append(run_record["time"])
+
+    # 5. Reporting
+    logging.info("Generating Table 2...")
+    rows = []
+    for algo, metrics in stats_data.items():
+        row = {"Algorithm": algo}
+        for k in ["HV", "IGD", "SM", "Time"]:
+            vals = metrics[k]
+            if not vals:
+                vals = [0.0]
+            row[k] = f"{np.mean(vals):.4f} ± {np.std(vals):.4f}"
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    logging.info("\n" + df.to_string(index=False))
+    df.to_csv(os.path.join(save_dir, "table_2_final.csv"), index=False)
+
+    # 6. Plotting
+    plotter = BenchmarkPlotter(save_dir)
+
+    # 6.1 Convergence Curves (Last Run)
+    hv_map, igd_map, sm_map = {}, {}, {}
+    for algo, hist in last_hist.items():
+        h_hv, h_igd, h_sm = [], [], []
+        for pop in hist:
+            if not pop:
+                h_hv.append(0.0)
+                h_igd.append(np.inf)
+                h_sm.append(0.0)
+                continue
+            h_hv.append(calc.calculate_hv(pop))
+            h_igd.append(calc.calculate_igd(pop, ref_front))
+            h_sm.append(calc.calculate_sm(pop))
+        hv_map[algo] = h_hv
+        igd_map[algo] = h_igd
+        sm_map[algo] = h_sm
+
+    plotter.plot_convergence_curves(hv_map, "Hypervolume (HV)", "Figure_3_HV")
+    plotter.plot_convergence_curves(igd_map, "IGD Metric", "Figure_4_IGD")
+    plotter.plot_convergence_curves(sm_map, "Spacing Metric (SM)", "Figure_5_SM")
+
+    # 6.2 Performance Comparison (Violin Plots)
+    logging.info("Plotting Algorithm Comparison Violins...")
+
+    # 直接传入整个 stats_data 字典
+    plotter.plot_performance_comparison(stats_data)
+
+    logging.info("Benchmark Finished Successfully! 🎉")
 
 
 if __name__ == "__main__":

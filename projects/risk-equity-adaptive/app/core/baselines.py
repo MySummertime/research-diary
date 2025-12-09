@@ -140,6 +140,59 @@ class PymooSolver:
         logging.info(f"Pymoo {algo_name} finished. Found {len(res.opt)} solutions.")
         return res
 
+    @staticmethod
+    def convert_to_solutions(
+        pymoo_result, solver_instance: "PymooSolver"
+    ) -> List[Solution]:
+        """
+        [Helper] 将 Pymoo 的 Result 对象转换为本项目标准的 Solution 列表。
+        """
+        final_solutions = []
+        if pymoo_result.opt is None:
+            return []
+
+        # Pymoo 的 X 是一个矩阵，每一行是一个解的变量向量
+        X_matrix = np.atleast_2d(pymoo_result.opt.get("X"))
+        task_ids = solver_instance.problem.task_ids
+
+        for x_vec in X_matrix:
+            sol = Solution()
+            # 解码基因型
+            for i, path_idx in enumerate(x_vec):
+                tid = task_ids[i]
+                idx = int(round(path_idx))
+                path = solver_instance.candidate_paths_map[tid][idx]
+                sol.path_selections[tid] = path
+
+            # 重新评估以填充属性 (F1, F2, Feasibility)
+            solver_instance.evaluator.evaluate(sol)
+            if sol.is_feasible:
+                final_solutions.append(sol)
+        return final_solutions
+
+    @staticmethod
+    def extract_history_F(pymoo_result) -> List[np.ndarray]:
+        """
+        [Helper] 从 Pymoo 历史记录中提取每一代的目标值矩阵。
+        """
+        history_F = []
+        if not pymoo_result.history:
+            return []
+
+        for snapshot in pymoo_result.history:
+            F = snapshot.pop.get("F")
+            G = snapshot.pop.get("G")
+            # 过滤不可行解
+            if G is not None:
+                feasible_mask = (G <= 0).flatten()
+                if np.any(feasible_mask):
+                    history_F.append(F[feasible_mask])
+                else:
+                    history_F.append(np.empty((0, 2)))
+            else:
+                history_F.append(F)
+        return history_F
+
 
 class GurobiSolver:
     """
