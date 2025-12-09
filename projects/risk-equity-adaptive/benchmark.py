@@ -5,7 +5,7 @@
 用于生成论文所需的 Figure 3, 4, 5, 6 和 Table 2。
 
 对比对象:
-1. Proposed Improved NSGA-II
+1. Improved NSGA-II
 2. NSGA-II (via Pymoo)
 3. SPEA2 (via Pymoo)
 4. Gurobi (Exact) - 作为 Reference Front 和 Pareto 对比基准
@@ -175,7 +175,7 @@ def main():
     # -------------------------------------------------------
     # A. Proposed Algorithm
     # -------------------------------------------------------
-    algo_name = "Improved NSGA-II (Proposed)"
+    algo_name = "Improved NSGA-II"
     logging.info(f">>> Running {algo_name}...")
 
     logger = HistoryLogger()
@@ -384,13 +384,13 @@ def plot_convergence(
     plt.figure(figsize=(10, 6))
 
     styles = {
-        "Improved NSGA-II (Proposed)": {
+        "Improved NSGA-II": {
             "color": "#d62728",
             "marker": "o",
             "markevery": 0.1,
             "linewidth": 2.5,
             "zorder": 10,
-            "label": "Improved NSGA-II (Proposed)",
+            "label": "Improved NSGA-II",
         },
         "NSGA-II": {
             "color": "#1f77b4",
@@ -456,7 +456,7 @@ def plot_pareto_comparison(frontiers: Dict[str, List[Solution]], save_dir: str):
             "label": "Gurobi (Exact)",
             "edgecolors": "yellow",
         },
-        "Improved NSGA-II (Proposed)": {
+        "Improved NSGA-II": {
             "c": "#d62728",
             "marker": "o",
             "s": 30,
