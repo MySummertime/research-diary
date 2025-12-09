@@ -106,7 +106,7 @@ class PymooSolver:
         logging.info(f"--- Starting Baseline Solver: Pymoo {algo_name} ---")
 
         # 1. 选择算法
-        if algo_name == "NSGA2":
+        if algo_name == "NSGA-II":
             algorithm = PymooNSGA2(
                 pop_size=self.pop_size,
                 sampling=IntegerRandomSampling(),
