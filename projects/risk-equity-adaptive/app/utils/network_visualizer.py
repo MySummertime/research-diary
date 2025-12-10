@@ -15,7 +15,7 @@ HAS_CTX = True
 
 class NetworkVisualizer:
     """
-    [View Layer] 网络可视化器 (最终修正版)
+    [View Layer] 网络可视化器
     职责：负责将 Network 对象和 Solution 对象转换为 SVG 图像。
     特性：自动投影、动态曲线避让、严格的形状/线型区分、节点标签显示。
     """
@@ -60,7 +60,6 @@ class NetworkVisualizer:
         save_dir: str,
         filename: str = "network_topology.svg",
         add_basemap: bool = True,
-        title: str = "Network Topology",
     ):
         """
         [Topology] 绘制基础拓扑结构。
@@ -86,7 +85,7 @@ class NetworkVisualizer:
 
         # 4. 图例与保存
         self._add_topology_legend(ax)
-        self._save_plot(save_dir, filename, title)
+        self._save_plot(save_dir, filename)
 
     def visualize_routes(
         self,
@@ -94,7 +93,6 @@ class NetworkVisualizer:
         task_colors: Dict[str, str],
         save_dir: str,
         filename: str,
-        title: str,
     ):
         """
         [Routes] 绘制特定解的路线图 (带箭头、曲线、线型区分)。
@@ -110,7 +108,9 @@ class NetworkVisualizer:
         fig, ax = plt.subplots(figsize=self.styles["figure_size"])
 
         # 1. 绘制淡化的背景节点，作为空间参考
-        nx.draw_networkx_nodes(G_bg, plot_pos, ax=ax, node_size=100, node_color="#BDC3C7", alpha=0.3)
+        nx.draw_networkx_nodes(
+            G_bg, plot_pos, ax=ax, node_size=100, node_color="#BDC3C7", alpha=0.3
+        )
 
         # 2. 绘制前景 Task 路线 (核心逻辑)
         legend_handles = []
@@ -166,7 +166,7 @@ class NetworkVisualizer:
 
         # 绘制节点标签
         self._draw_labels(G_bg, plot_pos, ax)
-        
+
         # 添加底图
         if use_projection:
             self._add_basemap(ax)
@@ -200,7 +200,7 @@ class NetworkVisualizer:
             shadow=True,
             title="Legend",
         )
-        self._save_plot(save_dir, filename, title)
+        self._save_plot(save_dir, filename)
 
     # --- 核心逻辑：动态曲率计算器 ---
 
@@ -413,9 +413,7 @@ class NetworkVisualizer:
             shadow=True,
         )
 
-    def _save_plot(self, save_dir, filename, title):
-        ax = plt.gca()
-        ax.set_title(title, fontsize=16, pad=20)
+    def _save_plot(self, save_dir, filename):
         plt.axis("off")
         plt.tight_layout()
         plt.savefig(os.path.join(save_dir, filename), format="svg", bbox_inches="tight")

@@ -20,11 +20,13 @@ import random
 import numpy as np
 import pandas as pd
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict
 
 # --- Project Imports ---
 from app.experiment_manager import Experiment
 from app.core.solution import Solution
+from app.core.nsga2 import NSGA2
+from app.core.evaluator import Evaluator
 from app.core.baselines import PymooSolver, GurobiSolver, HAS_GUROBI
 from app.utils.metrics import MetricCalculator, build_reference_front
 from app.utils.result_keeper import setup_logging
@@ -103,12 +105,11 @@ def main():
     # -------------------------------------------------------
 
     stats_data = {
-        algo: {"HV": [], "IGD": [], "SM": [], "Time": []}
+        algo: {"HV": [], "IGD": [], "SM": [], "CPU Time": []}
         for algo in ["Improved NSGA-II", "NSGA-II", "SPEA2", "Gurobi"]
     }
 
     all_known_solutions_F: List[np.ndarray] = []
-    last_run_history: Dict[str, List[List[Solution]]] = {}
     last_run_finals: Dict[str, List[Solution]] = {}
 
     # -------------------------------------------------------
@@ -140,16 +141,14 @@ def main():
         feasible_prop = [s for s in proposed_pop if s.is_feasible and s.rank == 0]
 
         _record_run_data(
-            run_idx=run_idx,
-            n_total_runs=n_runs,
-            algo_name="Improved NSGA-II",
-            final_sols=feasible_prop,
-            duration=duration,
-            history_sols=logger.history_pop,
-            stats_data=stats_data,
-            all_F_list=all_known_solutions_F,
-            last_run_hist=last_run_history,
-            last_run_fin=last_run_finals,
+            run_idx,
+            n_runs,
+            "Improved NSGA-II",
+            feasible_prop,
+            duration,
+            stats_data,
+            all_known_solutions_F,
+            last_run_finals,
         )
 
         # --- B. Baselines: NSGA-II & SPEA2 (via Pymoo) ---
@@ -164,22 +163,16 @@ def main():
             duration = time.process_time() - start
 
             finals = PymooSolver.convert_to_solutions(res, solver)
-            history_F_list = PymooSolver.extract_history_F(res)
-            history_sols = [
-                [_make_dummy_sol(f) for f in F_gen] for F_gen in history_F_list
-            ]
 
             _record_run_data(
-                run_idx=run_idx,
-                n_total_runs=n_runs,
-                algo_name=base_name,
-                final_sols=finals,
-                duration=duration,
-                history_sols=history_sols,
-                stats_data=stats_data,
-                all_F_list=all_known_solutions_F,
-                last_run_hist=last_run_history,
-                last_run_fin=last_run_finals,
+                run_idx,
+                n_runs,
+                base_name,
+                finals,
+                duration,
+                stats_data,
+                all_known_solutions_F,
+                last_run_finals,
             )
 
         # --- C. Exact Baseline: Gurobi ---
@@ -194,16 +187,14 @@ def main():
             duration = time.process_time() - start
 
             _record_run_data(
-                run_idx=run_idx,
-                n_total_runs=n_runs,
-                algo_name="Gurobi",
-                final_sols=g_sols,
-                duration=duration,
-                history_sols=[g_sols],
-                stats_data=stats_data,
-                all_F_list=all_known_solutions_F,
-                last_run_hist=last_run_history,
-                last_run_fin=last_run_finals,
+                run_idx,
+                n_runs,
+                "Gurobi",
+                g_sols,
+                duration,
+                stats_data,
+                all_known_solutions_F,
+                last_run_finals,
             )
         else:
             logging.warning("Skipping Gurobi (Not installed).")
@@ -212,12 +203,15 @@ def main():
     # 4. 全局分析与绘图 (Global Analysis & Plotting)
     # -------------------------------------------------------
     _perform_global_analysis(
-        stats_data=stats_data,
-        all_F_list=all_known_solutions_F,
-        last_hist=last_run_history,
-        last_finals=last_run_finals,
-        save_dir=benchmark_dir,
+        stats_data, all_known_solutions_F, last_run_finals, benchmark_dir
     )
+
+    # -------------------------------------------------------
+    # 5. Sensitivity Analysis (Budget & CVaR) - Proposed Algorithm Only
+    # -------------------------------------------------------
+    # _perform_sensitivity_analysis(exp, benchmark_dir)
+
+    logging.info("Benchmark Finished Successfully! 🎉")
 
 
 # ===========================================================
@@ -225,146 +219,169 @@ def main():
 # ===========================================================
 
 
-def _make_dummy_sol(f_values: np.ndarray) -> Solution:
-    s = Solution()
-    if len(f_values) >= 2:
-        s.f1_risk, s.f2_cost = f_values[0], f_values[1]
-        s.is_feasible = True  # 强制标记为可行解，避免在计算 HV 时被剔除
-        s.constraint_violation = 0.0
-    return s
+def _perform_sensitivity_analysis(exp: Experiment, save_dir: str):
+    """
+    执行灵敏度分析
+    同时记录 Min Cost 和 Min Risk，并绘制双轴图。
+    """
+    logging.info("\n>>> Starting Dual-Axis Sensitivity Analysis...")
+    plotter = BenchmarkPlotter(save_dir)
+
+    # --- 1. Sensitivity to Budget Confidence ---
+    logging.info("   [1/2] Analyzing Budget Confidence Sensitivity...")
+    confidence_levels = [0.90, 0.93, 0.95, 0.97, 0.99]
+
+    # 存储两个目标的最优值
+    min_costs_1 = []
+    min_risks_1 = []  # 该配置下的最小 Risk (可能是 trade-off 的另一端)
+
+    # 随着约束收紧，Pareto 前沿会移动。
+    # 我们记录当前前沿的“理想点”范围，或者简单记录 Min Cost 和 Min Risk (代表前沿的两个端点变化)
+
+    original_conf = exp.config.get("constraints", {}).get(
+        "fuzzy_budget_confidence", 0.9
+    )
+
+    for conf in confidence_levels:
+        if "constraints" not in exp.config:
+            exp.config["constraints"] = {}
+        exp.config["constraints"]["fuzzy_budget_confidence"] = conf
+
+        # Reload
+        exp.evaluator = Evaluator(exp.network, exp.config)
+        exp.algorithm = NSGA2(
+            exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
+        )
+
+        final_pop = exp.algorithm.run(callbacks=[])
+        feasible = [s for s in final_pop if s.is_feasible]
+
+        if feasible:
+            # 记录当前可行解集中的极值
+            c_min = min(s.f2_cost for s in feasible)
+            r_min = min(s.f1_risk for s in feasible)
+            min_costs_1.append(c_min)
+            min_risks_1.append(r_min)
+        else:
+            logging.warning(f"     Conf={conf}: No feasible solution.")
+            min_costs_1.append(None)
+            min_risks_1.append(None)
+
+    exp.config["constraints"]["fuzzy_budget_confidence"] = original_conf
+
+    # 绘制双轴图
+    plotter.plot_dual_sensitivity_curve(
+        x_vals=confidence_levels,
+        cost_vals=min_costs_1,
+        risk_vals=min_risks_1,
+        xlabel=r"Budget Confidence Level $\alpha_c$",
+        filename="sensitivity_budget_dual.svg",
+    )
+
+    # --- 2. Sensitivity to CVaR Confidence ---
+    logging.info("   [2/2] Analyzing CVaR Confidence Sensitivity...")
+    alphas = [0.99990, 0.99992, 0.99994, 0.99996, 0.99998, 0.9991]
+    min_costs_2 = []
+    min_risks_2 = []
+
+    original_alpha = exp.config.get("risk", {}).get("cvar_alpha", 0.95)
+
+    for alpha in alphas:
+        if "risk" not in exp.config:
+            exp.config["risk"] = {}
+        exp.config["risk"]["cvar_alpha"] = alpha
+
+        exp.evaluator = Evaluator(exp.network, exp.config)
+        exp.algorithm = NSGA2(
+            exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
+        )
+
+        final_pop = exp.algorithm.run(callbacks=[])
+        feasible = [s for s in final_pop if s.is_feasible]
+
+        if feasible:
+            c_min = min(s.f2_cost for s in feasible)
+            r_min = min(s.f1_risk for s in feasible)
+            min_costs_2.append(c_min)
+            min_risks_2.append(r_min)
+        else:
+            min_costs_2.append(None)
+            min_risks_2.append(None)
+
+    exp.config["risk"]["cvar_alpha"] = original_alpha
+
+    plotter.plot_dual_sensitivity_curve(
+        x_vals=alphas,
+        cost_vals=min_costs_2,
+        risk_vals=min_risks_2,
+        xlabel=r"CVaR Confidence Level $\alpha$",
+        filename="sensitivity_CVaR_dual.svg",
+    )
 
 
 def _record_run_data(
-    run_idx: int,
-    n_total_runs: int,
-    algo_name: str,
-    final_sols: List[Solution],
-    duration: float,
-    history_sols: List[List[Solution]],
-    stats_data: Dict[str, Any],
-    all_F_list: List[np.ndarray],
-    last_run_hist: Dict[str, List[List[Solution]]],
-    last_run_fin: Dict[str, List[List[Solution]]],
+    run_idx,
+    n_total,
+    algo_name,
+    final_sols,
+    duration,
+    stats_data,
+    all_F_list,
+    last_run_finals,
 ):
-    """
-    记录单次运行数据。
-    """
     if final_sols:
         F = np.array([[s.f1_risk, s.f2_cost] for s in final_sols])
         all_F_list.append(F)
 
     if "_raw_data" not in stats_data[algo_name]:
         stats_data[algo_name]["_raw_data"] = []
+    stats_data[algo_name]["_raw_data"].append({"finals": final_sols, "time": duration})
 
-    stats_data[algo_name]["_raw_data"].append(
-        {"finals": final_sols, "history": history_sols, "time": duration}
-    )
-
-    # 如果是最后一次运行，更新缓存
-    if run_idx == n_total_runs - 1:
-        last_run_hist[algo_name] = history_sols
-        last_run_fin[algo_name] = final_sols
+    if run_idx == n_total - 1:
+        last_run_finals[algo_name] = final_sols
 
 
-def _perform_global_analysis(
-    stats_data: Dict[str, Any],
-    all_F_list: List[np.ndarray],
-    last_hist: Dict[str, List[List[Solution]]],
-    last_finals: Dict[str, List[Solution]],
-    save_dir: str,
-):
+def _perform_global_analysis(stats_data, all_F_list, last_finals, save_dir):
     logging.info("\n>>> Calculating Global Bounds & Metrics...")
-
     if not all_F_list:
-        logging.error("No feasible solutions generated across all runs!")
+        logging.error("No feasible solutions found!")
         return
 
-    # 1. Global Normalization Bounds
     all_F = np.vstack(all_F_list)
-    ideal = np.min(all_F, axis=0)
-    nadir = np.max(all_F, axis=0)
-
-    logging.info(f"Global Ideal (Min): {ideal}")
-    logging.info(f"Global Nadir (Max): {nadir}")
-
-    # 2. Reference Front
+    ideal, nadir = np.min(all_F, axis=0), np.max(all_F, axis=0)
     ref_front = build_reference_front(all_F_list)
-    logging.info(f"Reference Front constructed with {len(ref_front)} points.")
-
-    # 3. Metric Calculator
     calc = MetricCalculator(ideal_point=ideal, nadir_point=nadir)
 
-    # 4. Compute Metrics for All Runs
     for algo, data in stats_data.items():
         raw_list = data.pop("_raw_data", [])
+        for rec in raw_list:
+            finals = rec["finals"]
+            data["HV"].append(calc.calculate_hv(finals))
+            data["IGD"].append(calc.calculate_igd(finals, ref_front))
+            data["SM"].append(calc.calculate_sm(finals))
+            data["CPU Time"].append(rec["time"])
 
-        for run_record in raw_list:
-            finals = run_record["finals"]
-
-            hv = calc.calculate_hv(finals)
-            igd = calc.calculate_igd(finals, ref_front)
-            sm = calc.calculate_sm(finals)
-
-            data["HV"].append(hv)
-            data["IGD"].append(igd)
-            data["SM"].append(sm)
-            data["Time"].append(run_record["time"])
-
-    # 5. Reporting
-    logging.info("Generating Table 2...")
+    # Table Final Metrics
+    logging.info("Generating Table Final Metrics...")
     rows = []
     for algo, metrics in stats_data.items():
         row = {"Algorithm": algo}
-        for k in ["HV", "IGD", "SM", "Time"]:
+        for k in ["HV", "IGD", "SM", "CPU Time"]:
             vals = metrics[k]
-            if not vals:
-                vals = [0.0]
-            row[k] = f"{np.mean(vals):.4f} ± {np.std(vals):.4f}"
+            row[k] = f"{np.mean(vals):.4f} ± {np.std(vals):.4f}" if vals else "N/A"
         rows.append(row)
+    pd.DataFrame(rows).to_csv(os.path.join(save_dir, "final_metrics.csv"), index=False)
 
-    df = pd.DataFrame(rows)
-    logging.info("\n" + df.to_string(index=False))
-    df.to_csv(os.path.join(save_dir, "table_2_final.csv"), index=False)
-
-    # 6. Plotting
+    # Plots
     plotter = BenchmarkPlotter(save_dir)
-
-    # 6.1 Convergence Curves (Last Run)
-    hv_map, igd_map, sm_map = {}, {}, {}
-    for algo, hist in last_hist.items():
-        h_hv, h_igd, h_sm = [], [], []
-        for pop in hist:
-            if not pop:
-                h_hv.append(0.0)
-                h_igd.append(np.inf)
-                h_sm.append(0.0)
-                continue
-            h_hv.append(calc.calculate_hv(pop))
-            h_igd.append(calc.calculate_igd(pop, ref_front))
-            h_sm.append(calc.calculate_sm(pop))
-        hv_map[algo] = h_hv
-        igd_map[algo] = h_igd
-        sm_map[algo] = h_sm
-
-    plotter.plot_convergence_curves(hv_map, "Hypervolume (HV)", "Figure_3_HV")
-    plotter.plot_convergence_curves(igd_map, "IGD Metric", "Figure_4_IGD")
-    plotter.plot_convergence_curves(sm_map, "Spacing Metric (SM)", "Figure_5_SM")
-
-    # 6.2 Performance Comparison (Violin Plots)
-    logging.info("Plotting Algorithm Comparison Violins...")
-
-    # 直接传入整个 stats_data 字典
+    logging.info("Plotting Comparison Violins...")
     plotter.plot_performance_comparison(stats_data)
 
-    # 6.3 Pareto Frontier Comparison (Figure 6)
-    logging.info("Generating Final Pareto Frontier Comparison...")
-
+    logging.info("Plotting Pareto Comparison...")
     pareto_plotter = ParetoPlotter(save_dir=save_dir)
     pareto_plotter.plot_frontier_comparison(
-        frontiers=last_finals, file_name="Pareto_Comparison.svg"
+        frontiers=last_finals, file_name="pareto_frontier_comparison.svg"
     )
-
-    logging.info("Benchmark Finished Successfully! 🎉")
 
 
 if __name__ == "__main__":

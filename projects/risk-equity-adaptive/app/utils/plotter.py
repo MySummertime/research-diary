@@ -4,19 +4,37 @@ import os
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FormatStrFormatter
+from matplotlib.ticker import ScalarFormatter
 from typing import List, Dict, Optional
 from app.core.solution import Solution
 
+
 # --- 全局绘图风格设置 ---
-plt.rcParams["font.family"] = "Times New Roman"
-plt.rcParams["mathtext.fontset"] = "cm"
-plt.rcParams["font.size"] = 12
-plt.rcParams["axes.labelsize"] = 14
-plt.rcParams["xtick.labelsize"] = 12
-plt.rcParams["ytick.labelsize"] = 12
-plt.rcParams["xtick.direction"] = "in"
-plt.rcParams["ytick.direction"] = "in"
+def apply_academic_style():
+    plt.rcParams.update(
+        {
+            "font.family": "Times New Roman",
+            "mathtext.fontset": "cm",  # Latex 风格数学字体
+            "font.size": 12,
+            "axes.labelsize": 14,
+            "axes.titlesize": 15,
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+            "legend.fontsize": 12,
+            "xtick.direction": "in",
+            "ytick.direction": "in",
+            "lines.linewidth": 2,
+            "axes.grid": True,
+            "grid.linestyle": "--",
+            "grid.alpha": 0.5,
+            "savefig.dpi": 300,
+            "savefig.bbox": "tight",
+        }
+    )
+
+
+# 应用风格
+apply_academic_style()
 
 
 class ParetoPlotter:
@@ -30,15 +48,12 @@ class ParetoPlotter:
         self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
 
-        # 设置通用的绘图风格 (可选，提升颜值)
-        plt.style.use("seaborn-v0_8-whitegrid")
-
     def plot(
         self,
         solutions: List[Solution],
         file_name: str = "pareto_frontier.svg",
-        xlabel: str = r"Transportation Risk (people)",
-        ylabel: str = r"Transportation Cost (yuan)",
+        xlabel: str = r"Total Risk (people)",
+        ylabel: str = r"Total Cost (yuan)",
         special_solutions: Optional[Dict[str, Solution]] = None,
     ):
         """
@@ -141,35 +156,36 @@ class ParetoPlotter:
             )
 
             # 标记 Rank 0 的特殊点
-            # self._mark_special_points(ax, x_r0, y_r0)
             if special_solutions:
                 self._highlight_special_solutions(special_solutions, ax)
 
         # 4. 格式化图表
+        # axis formatting
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
-        ax.grid(True, linestyle=":", alpha=0.6)
 
-        # 设置坐标轴格式
-        ax.xaxis.set_major_formatter(FormatStrFormatter("%.1f"))
-        ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+        # Scientific Notation
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-2, 3))
+        ax.xaxis.set_major_formatter(formatter)
+        ax.yaxis.set_major_formatter(formatter)
 
-        # 图例
+        # Legend
         handles, labels = ax.get_legend_handles_labels()
-
         by_label = dict(zip(labels, handles))
-        sorted_keys = [
-            k for k in ["Pareto Optimal", "Rank 1", "Rank 2", "Rank 3"] if k in by_label
-        ]
+        # Ensure consistent order
+        order = ["Pareto Optimal", "Rank 1", "Rank 2", "Rank 3"]
+        sorted_keys = [k for k in order if k in by_label]
         sorted_handles = [by_label[k] for k in sorted_keys]
 
-        # 添加特殊点的图例 (如果存在)
-        for k, v in by_label.items():
-            if k not in sorted_keys:
-                sorted_keys.append(k)
-                sorted_handles.append(v)
-
-        ax.legend(sorted_handles, sorted_keys, loc="upper right", frameon=True)
+        ax.legend(
+            sorted_handles,
+            sorted_keys,
+            loc="upper right",
+            frameon=True,
+            framealpha=0.9,
+            fancybox=True,
+        )
 
         # 5. 保存
         full_path = os.path.join(self.save_dir, file_name)
@@ -181,9 +197,9 @@ class ParetoPlotter:
     def plot_frontier_comparison(
         self,
         frontiers: Dict[str, List[Solution]],
-        file_name: str = "Figure_6_Pareto_Comparison.svg",
-        xlabel: str = r"Transportation Risk (people)",
-        ylabel: str = r"Transportation Cost (yuan)",
+        file_name: str = "pareto_comparison.svg",
+        xlabel: str = r"Total Risk (people)",
+        ylabel: str = r"Total Cost (yuan)",
     ):
         """
         绘制多算法 Pareto 前沿对比图。
@@ -197,7 +213,7 @@ class ParetoPlotter:
         # 定义各算法的样式
         styles = {
             "Gurobi": {
-                "c": "yellow",
+                "c": "#EED960",  # 暖金黄
                 "marker": "*",  # 星号
                 "s": 20,
                 "label": "Gurobi",
@@ -259,14 +275,13 @@ class ParetoPlotter:
         # 格式化
         ax.set_xlabel(xlabel, fontweight="bold")
         ax.set_ylabel(ylabel, fontweight="bold")
-        ax.grid(True, linestyle="--", alpha=0.5)
 
-        # 坐标轴格式化 (科学计数法或普通浮点)
-        ax.xaxis.set_major_formatter(FormatStrFormatter("%.0f"))
-        ax.yaxis.set_major_formatter(FormatStrFormatter("%.0f"))
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-2, 3))
+        ax.xaxis.set_major_formatter(formatter)
+        ax.yaxis.set_major_formatter(formatter)
 
         ax.legend(loc="upper right", frameon=True, framealpha=0.9, fancybox=True)
-        ax.set_title("Pareto Frontiers Comparison", fontsize=15, pad=15)
 
         # 保存
         full_path = os.path.join(self.save_dir, file_name)
@@ -288,7 +303,7 @@ class ParetoPlotter:
                 [sol.f1_risk],
                 [sol.f2_cost],
                 facecolors="none",
-                edgecolors="red",
+                edgecolors="#D62728",
                 s=220,
                 linestyle=":",
                 linewidths=2,
@@ -298,7 +313,7 @@ class ParetoPlotter:
 
 class BenchmarkPlotter:
     """
-    [View Layer] 专门负责 Benchmark 实验的绘图。
+    [View Layer] 专门负责 Benchmark 实验的绘图（Violin & Dual-Axis Sensitivity）
     """
 
     def __init__(self, save_dir: str):
@@ -333,7 +348,7 @@ class BenchmarkPlotter:
 
         plt.xlabel("Generation", fontsize=12, fontweight="bold")
         plt.ylabel(metric_name, fontsize=12, fontweight="bold")
-        # plt.title(f"{metric_name} Convergence", fontsize=13)
+
         plt.legend(fontsize=11, frameon=True, fancybox=True, framealpha=0.9)
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.tight_layout()
@@ -349,12 +364,12 @@ class BenchmarkPlotter:
         生成 4 张独立的图：HV_Comparison.svg, IGD_Comparison.svg, ...
         每张图中 X 轴是算法，Y 轴是指标分布。
         """
-        metrics = ["HV", "IGD", "SM", "Time"]
+        metrics = ["HV", "IGD", "SM", "CPU Time"]
         titles = {
             "HV": "Hypervolume (Higher is Better)",
             "IGD": "IGD (Lower is Better)",
             "SM": "Spacing Metric (Lower is Better)",
-            "Time": "CPU Time (s) (Lower is Better)",
+            "CPU Time": "CPU Time (s) (Lower is Better)",
         }
 
         # 获取所有算法名称
@@ -365,89 +380,210 @@ class BenchmarkPlotter:
             algo_names.insert(0, "Improved NSGA-II")
 
         for metric in metrics:
-            self._plot_single_metric_comparison(
+            self._plot_single_metric_violin(
                 metric, titles[metric], algo_names, stats_data
             )
 
-    def _plot_single_metric_comparison(
+    def _plot_single_metric_violin(
         self, metric: str, title: str, algo_names: List[str], stats_data: Dict
     ):
-        """[Helper] 绘制单个指标的对比图"""
-        fig, ax = plt.subplots(figsize=(10, 6))
+        """[Helper] 绘制单个指标的小提琴图"""
+        fig, ax = plt.subplots(figsize=(10, 8))
 
-        # 准备数据列表
         data_to_plot = []
         labels = []
         colors = []
 
         for algo in algo_names:
             raw_data = stats_data[algo].get(metric, [])
-            # 清洗 None, Inf, NaN
             clean = [
                 x
                 for x in raw_data
                 if x is not None and not np.isinf(x) and not np.isnan(x)
             ]
-
-            # 如果数据为空，放一个空列表占位
             data_to_plot.append(clean if clean else [])
             labels.append(algo)
             colors.append(self.colors.get(algo, "gray"))
 
-        # 1. 绘制小提琴 (Violin) - 密度
-        # 注意：如果有空数据或方差为0的数据，violinplot 需要特殊处理
-        # 这里我们手动处理方差为0的情况（Gurobi）：给它加极小的抖动
-
+        # 处理全0方差 (Gurobi) 以防 matplotlib 报错
         processed_data = []
         for d in data_to_plot:
             if len(d) > 0 and np.var(d) < 1e-9:
-                # 方差为0 (Gurobi)，加微小抖动防止 violinplot 报错
                 d = np.array(d) + np.random.normal(0, 1e-6, size=len(d))
             processed_data.append(d)
 
+        # -----------------------------------------------------
+        # 1. Violin (分布形状)
+        # -----------------------------------------------------
+        # 只为有数据的列绘制 violin
+        valid_data_for_violin = []
+        valid_positions = []
+
+        for i, d in enumerate(processed_data):
+            if len(d) > 0:
+                valid_data_for_violin.append(d)
+                # i + 1 是因为 matplotlib 的 plot 索引通常从 1 开始
+                valid_positions.append(i + 1)
+
+        if valid_data_for_violin:
+            try:
+                parts = ax.violinplot(
+                    valid_data_for_violin,
+                    positions=valid_positions,
+                    showextrema=False,
+                    widths=0.7,
+                )
+                # 正确匹配颜色: valid_positions[k] 对应的原始索引是 valid_positions[k]-1
+                for k, pc in enumerate(parts["bodies"]):
+                    original_idx = valid_positions[k] - 1
+                    pc.set_facecolor(colors[original_idx])
+                    pc.set_edgecolor("black")
+                    pc.set_alpha(0.6)
+            except Exception as e:
+                logging.warning(f"Violin plot failed for {metric}: {e}")
+        else:
+            logging.warning(f"No valid data to plot violin for {metric}")
+
+        # -----------------------------------------------------
+        # 2. Boxplot (统计矩)
+        # -----------------------------------------------------
+        # Boxplot 可以接受包含空列表的列表，它会自动跳过
         try:
-            parts = ax.violinplot(processed_data, showextrema=False, widths=0.7)
-
-            # 设置颜色
-            for i, pc in enumerate(parts["bodies"]):
-                pc.set_facecolor(colors[i])
-                pc.set_edgecolor("black")
-                pc.set_alpha(0.6)
+            ax.boxplot(
+                processed_data,
+                widths=0.15,
+                patch_artist=True,
+                boxprops=dict(facecolor="white", alpha=0.9, edgecolor="black"),
+                medianprops=dict(color="black", linewidth=1.5),
+                whiskerprops=dict(color="black"),
+                capprops=dict(color="black"),
+                showfliers=False,
+            )
         except Exception as e:
-            print(f"Violin plot warning for {metric}: {e}. Skipping violin body.")
+            logging.warning(f"Boxplot failed for {metric}: {e}")
 
-        # 2. 绘制箱线图 (Box) - 统计区间 (嵌在小提琴内部)
-        ax.boxplot(
-            processed_data,
-            widths=0.15,
-            patch_artist=True,
-            boxprops=dict(facecolor="white", alpha=0.9, edgecolor="black"),
-            medianprops=dict(color="black", linewidth=1.5),
-            whiskerprops=dict(color="black"),
-            capprops=dict(color="black"),
-            showfliers=False,
-        )  # 不显示离群点，交由 jitter 显示
-
-        # 3. 绘制抖动散点 (Jitter Scatter) - 原始数据
+        # -----------------------------------------------------
+        # 3. Jitter Scatter (原始数据点)
+        # -----------------------------------------------------
         for i, d in enumerate(data_to_plot):
+            if len(d) == 0:
+                continue
             y = d
-            # x 坐标添加随机抖动: i+1 是因为 boxplot 索引从1开始
             x = np.random.normal(i + 1, 0.04, size=len(y))
             ax.scatter(x, y, alpha=0.6, color="black", s=15, zorder=10)
 
         # 装饰
-        ax.set_title(title, fontsize=14, fontweight="bold", pad=15)
         ax.set_xticks(range(1, len(algo_names) + 1))
-        ax.set_xticklabels(labels, fontsize=11, fontweight="bold")
-        ax.yaxis.grid(True, linestyle="--", alpha=0.5)
+        ax.set_xticklabels(labels, fontweight="bold")
 
-        # 微调 Gurobi 的标签颜色 (可选)
+        # 高亮 Proposed 算法的标签
         for tick_label in ax.get_xticklabels():
             if "Improved" in tick_label.get_text():
                 tick_label.set_color("#D62728")
+                tick_label.set_fontweight("bold")
 
         plt.tight_layout()
-        save_path = os.path.join(self.save_dir, f"Comparison_{metric}.svg")
+        save_path = os.path.join(self.save_dir, f"comparison_{metric}.svg")
         plt.savefig(save_path, dpi=300)
         plt.close()
-        print(f"   Generated comparison plot: {save_path}")
+        logging.info(f"Generated comparison plot: {save_path}")
+
+    def plot_dual_sensitivity_curve(
+        self,
+        x_vals: List[float],
+        cost_vals: List[float],
+        risk_vals: List[float],
+        xlabel: str,
+        filename: str,
+    ):
+        """
+        双 Y 轴灵敏度分析图
+        左轴 Cost (Teal/Green), 右轴 Risk (Orange), 空心标记
+        """
+        # 过滤无效数据 (None)
+        valid_indices = [
+            i
+            for i, (c, r) in enumerate(zip(cost_vals, risk_vals))
+            if c is not None and r is not None
+        ]
+        if not valid_indices:
+            logging.warning(f"No valid data for {filename}")
+            return
+
+        xs = [x_vals[i] for i in valid_indices]
+        ys_cost = [cost_vals[i] for i in valid_indices]
+        ys_risk = [risk_vals[i] for i in valid_indices]
+
+        fig, ax1 = plt.subplots(figsize=(10, 8))
+
+        # --- 设置风格颜色 ---
+        color_cost = "#72AACF"
+        color_risk = "#FDB96B"
+
+        # --- 左轴: Cost ---
+        ax1.set_xlabel(xlabel, fontweight="bold")
+        ax1.set_ylabel(r"Min Cost (yuan)", color=color_cost, fontweight="bold")
+
+        # 强制设置 X 轴刻度，使其与输入 xs 完全一致
+        ax1.set_xticks(xs) 
+        # 可选：如果 tick label 太密，可以旋转
+        # ax1.set_xticklabels(xs, rotation=45)
+
+        # 绘制 Cost 曲线
+        line1 = ax1.plot(
+            xs,
+            ys_cost,
+            color=color_cost,
+            marker="o",
+            markersize=8,
+            markerfacecolor="white",
+            markeredgewidth=2,
+            linewidth=2,
+            label="Cost Objective",
+        )
+        ax1.tick_params(axis="y", labelcolor=color_cost)
+
+        # Cost 轴科学计数法
+        formatter1 = ScalarFormatter(useMathText=True)
+        formatter1.set_powerlimits((-2, 3))
+        ax1.yaxis.set_major_formatter(formatter1)
+
+        # --- 右轴: Risk ---
+        ax2 = ax1.twinx()
+        ax2.set_ylabel(r"Min Risk (people)", color=color_risk, fontweight="bold")
+
+        # 绘制 Risk 曲线
+        line2 = ax2.plot(
+            xs,
+            ys_risk,
+            color=color_risk,
+            marker="D",
+            markersize=8,
+            markerfacecolor="white",
+            markeredgewidth=2,
+            linewidth=2,
+            label="Risk Objective",
+        )
+        ax2.tick_params(axis="y", labelcolor=color_risk)
+
+        # Risk 轴科学计数法
+        formatter2 = ScalarFormatter(useMathText=True)
+        formatter2.set_powerlimits((-2, 3))
+        ax2.yaxis.set_major_formatter(formatter2)
+
+        # --- 合并图例 ---
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax1.legend(
+            lines, labels, loc="upper left", frameon=True, fancybox=True, framealpha=0.9
+        )
+
+        # 标题和网格
+        ax1.grid(True, linestyle="--", alpha=0.5)
+
+        # 保存
+        plt.tight_layout()
+        save_path = os.path.join(self.save_dir, filename)
+        plt.savefig(save_path)
+        plt.close()
+        logging.info(f"Dual sensitivity plot saved to: {save_path}")

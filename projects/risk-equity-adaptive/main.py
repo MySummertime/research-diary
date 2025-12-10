@@ -49,10 +49,14 @@ def main():
             wall_algo_time = algo_wall_end - algo_wall_start
             logging.info(f"算法纯CPU时间: {process_time:.4f} 秒")
             logging.info(f"算法壁钟时间: {wall_algo_time:.3f} 秒（含IO、Gurobi回调等）")
-            logging.info(f"CPU利用率估算: {(process_time / wall_algo_time) * 100:5.1f}%")
+            logging.info(
+                f"CPU利用率估算: {(process_time / wall_algo_time) * 100:5.1f}%"
+            )
 
             if wall_algo_time > 0:
-                logging.info(f"I/O与系统开销占比: {100 * (1 - process_time/wall_algo_time):.1f}%")
+                logging.info(
+                    f"I/O与系统开销占比: {100 * (1 - process_time / wall_algo_time):.1f}%"
+                )
 
         if exp and exp.save_dir:
             logging.info(f"所有结果已保存至: {exp.save_dir}")

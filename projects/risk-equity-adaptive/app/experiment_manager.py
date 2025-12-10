@@ -31,7 +31,7 @@ class Experiment:
     [Controller Layer] 实验总控
     """
 
-    def __init__(self, config_path: str = "config.json", seed: int = None):        
+    def __init__(self, config_path: str = "config.json", seed: int = None):
         # 1. 加载实验配置
         with open(config_path, "r", encoding="utf-8") as f:
             self.config = json.load(f)
@@ -62,7 +62,6 @@ class Experiment:
         self.visualizer.visualize_topology(
             save_dir=self.save_dir,
             filename="network_topology.svg",
-            title="Hub-and-Spoke Hazmat Network",
         )
 
         # 7. 初始化算法
@@ -145,23 +144,23 @@ class Experiment:
     def _generate_route_maps(self, solutions_map: Dict[str, Solution]):
         """
         [Visualizer] 批量生成特殊解的路线地图 (SVG)。
-        
+
         Args:
             solutions_map: 字典 {"Opinion A": sol_a, "Opinion B": sol_b, ...}
         """
         logging.info("Generating route maps for special solutions...")
-        
+
         # 1. 为每个任务生成固定的颜色 (保持视觉一致性)
         # 获取所有任务ID并排序
         task_ids = sorted([t.task_id for t in self.network.tasks])
         cmap = plt.get_cmap("Set1")  # 使用 Set1 配色方案 (颜色鲜明)
-        
+
         task_colors = {}
         for i, tid in enumerate(task_ids):
             # 将 Matplotlib 的 RGBA 转为 Hex 颜色
             rgb = cmap(i % 9)[:3]
             hex_color = "#{:02x}{:02x}{:02x}".format(
-                int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255)
+                int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
             )
             task_colors[tid] = hex_color
 
@@ -169,24 +168,11 @@ class Experiment:
         for label, sol in solutions_map.items():
             if not sol:
                 continue
-            
+
             # --- 智能生成标题和文件名 ---
             # 把 "Opinion_A/B/C" 用作文件名
             safe_label = label.replace(" ", "_")
             filename = f"route_{safe_label}.svg"
-            
-            # 生成更有意义的地图标题
-            if "A" in label:
-                priority = "Cost Priority"
-                stats = f"¥{sol.f2_cost:,.0f}"
-            elif "B" in label:
-                priority = "Risk Priority"
-                stats = f"Risk {sol.f1_risk:.1f}"
-            else:
-                priority = "Balanced Strategy"
-                stats = "Knee Point"
-                
-            map_title = f"{label}: {priority} ({stats})"
 
             # --- 调用 Visualizer ---
             self.visualizer.visualize_routes(
@@ -194,7 +180,6 @@ class Experiment:
                 task_colors=task_colors,
                 save_dir=self.save_dir,
                 filename=filename,
-                title=map_title,
             )
-            
+
         logging.info("Route maps generation completed.")
