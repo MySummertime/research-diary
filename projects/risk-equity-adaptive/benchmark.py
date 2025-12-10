@@ -28,7 +28,7 @@ from app.core.solution import Solution
 from app.core.baselines import PymooSolver, GurobiSolver, HAS_GUROBI
 from app.utils.metrics import MetricCalculator, build_reference_front
 from app.utils.result_keeper import setup_logging
-from app.utils.plotter import BenchmarkPlotter
+from app.utils.plotter import ParetoPlotter, BenchmarkPlotter
 
 # ===========================================================
 # Helper Classes (辅助类)
@@ -75,8 +75,8 @@ def main():
     # --- 读取 Config 中的实验配置 ---
     exp_config = exp.config.get("experiment", {})
 
-    # 读取 n_runs，默认为 5
-    n_runs = exp_config.get("n_runs", 5)
+    # 读取 n_runs，默认为 1
+    n_runs = exp_config.get("n_runs", 1)
 
     # 读取 seeds 列表，默认为空
     seeds_list = exp_config.get("seeds", [])
@@ -136,7 +136,8 @@ def main():
         proposed_pop = exp.algorithm.run(callbacks=[logger], initial_population=None)
         duration = time.process_time() - start
 
-        feasible_prop = [s for s in proposed_pop if s.is_feasible]
+        # 同时过滤可行性 AND Rank 0 (非支配解)
+        feasible_prop = [s for s in proposed_pop if s.is_feasible and s.rank == 0]
 
         _record_run_data(
             run_idx=run_idx,
@@ -228,6 +229,8 @@ def _make_dummy_sol(f_values: np.ndarray) -> Solution:
     s = Solution()
     if len(f_values) >= 2:
         s.f1_risk, s.f2_cost = f_values[0], f_values[1]
+        s.is_feasible = True  # 强制标记为可行解，避免在计算 HV 时被剔除
+        s.constraint_violation = 0.0
     return s
 
 
@@ -352,6 +355,14 @@ def _perform_global_analysis(
 
     # 直接传入整个 stats_data 字典
     plotter.plot_performance_comparison(stats_data)
+
+    # 6.3 Pareto Frontier Comparison (Figure 6)
+    logging.info("Generating Final Pareto Frontier Comparison...")
+
+    pareto_plotter = ParetoPlotter(save_dir=save_dir)
+    pareto_plotter.plot_frontier_comparison(
+        frontiers=last_finals, file_name="Pareto_Comparison.svg"
+    )
 
     logging.info("Benchmark Finished Successfully! 🎉")
 

@@ -37,8 +37,8 @@ class ParetoPlotter:
         self,
         solutions: List[Solution],
         file_name: str = "pareto_frontier.svg",
-        xlabel: str = r"Transportation Risk $10^5$ (people $\cdot$ t)",
-        ylabel: str = r"Transportation Cost $10^4$ (yuan)",
+        xlabel: str = r"Transportation Risk (people)",
+        ylabel: str = r"Transportation Cost (yuan)",
         special_solutions: Optional[Dict[str, Solution]] = None,
     ):
         """
@@ -178,6 +178,103 @@ class ParetoPlotter:
         plt.close(fig)
         logging.info(f"Pareto plot saved to: {full_path}")
 
+    def plot_frontier_comparison(
+        self,
+        frontiers: Dict[str, List[Solution]],
+        file_name: str = "Figure_6_Pareto_Comparison.svg",
+        xlabel: str = r"Transportation Risk (people)",
+        ylabel: str = r"Transportation Cost (yuan)",
+    ):
+        """
+        绘制多算法 Pareto 前沿对比图。
+
+        Args:
+            frontiers: 字典 { "Algorithm Name": [Solution List], ... }
+            file_name: 保存文件名
+        """
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        # 定义各算法的样式
+        styles = {
+            "Gurobi": {
+                "c": "yellow",
+                "marker": "*",  # 星号
+                "s": 20,
+                "label": "Gurobi",
+                "zorder": 4,
+                "edgecolors": "yellow",
+            },
+            "Improved NSGA-II": {
+                "c": "#D62728",
+                "marker": "o",
+                "s": 30,
+                "label": "Improved NSGA-II",
+                "zorder": 3,
+                "edgecolors": "red",
+            },
+            "NSGA-II": {
+                "c": "#2CA02C",  # 绿
+                "marker": "^",  # 三角
+                "s": 50,
+                "label": "SPEA2",
+                "zorder": 2,
+            },
+            "SPEA2": {
+                "c": "#1F77B4",  # 蓝
+                "marker": "s",  # 方块
+                "s": 60,
+                "label": "NSGA-II",
+                "zorder": 1,
+            },
+        }
+
+        # 遍历绘制
+        for algo_name, solutions in frontiers.items():
+            if not solutions:
+                continue
+
+            # 提取坐标
+            x_vals = [s.f1_risk for s in solutions]
+            y_vals = [s.f2_cost for s in solutions]
+
+            # 获取样式 (如果没有定义，使用默认灰)
+            style = styles.get(
+                algo_name,
+                {"c": "gray", "marker": "x", "s": 30, "label": algo_name, "zorder": 1},
+            )
+
+            ax.scatter(
+                x_vals,
+                y_vals,
+                c=style["c"],
+                marker=style["marker"],
+                s=style["s"],
+                label=style["label"],
+                zorder=style.get("zorder", 1),
+                alpha=style.get("alpha", 1.0),
+                edgecolors=style.get("edgecolors", "none"),
+                linewidths=style.get("linewidths", 0),
+            )
+
+        # 格式化
+        ax.set_xlabel(xlabel, fontweight="bold")
+        ax.set_ylabel(ylabel, fontweight="bold")
+        ax.grid(True, linestyle="--", alpha=0.5)
+
+        # 坐标轴格式化 (科学计数法或普通浮点)
+        ax.xaxis.set_major_formatter(FormatStrFormatter("%.0f"))
+        ax.yaxis.set_major_formatter(FormatStrFormatter("%.0f"))
+
+        ax.legend(loc="upper right", frameon=True, framealpha=0.9, fancybox=True)
+        ax.set_title("Pareto Frontiers Comparison", fontsize=15, pad=15)
+
+        # 保存
+        full_path = os.path.join(self.save_dir, file_name)
+        plt.tight_layout()
+        plt.savefig(full_path, format="svg", bbox_inches="tight")
+        plt.close(fig)
+        logging.info(f"Comparison plot saved to: {full_path}")
+
     def _highlight_special_solutions(self, solutions_map: Dict[str, Solution], ax):
         """
         [辅助] 在当前图上标记特殊点
@@ -230,7 +327,7 @@ class BenchmarkPlotter:
             lw = 1.5
             ls = "-" if "Improved" in name else "--"
             if "Gurobi" in name:
-                ls = ":"
+                pass
 
             plt.plot(history, label=name, color=color, linewidth=lw, linestyle=ls)
 
@@ -299,7 +396,7 @@ class BenchmarkPlotter:
 
         # 1. 绘制小提琴 (Violin) - 密度
         # 注意：如果有空数据或方差为0的数据，violinplot 需要特殊处理
-        # 这里我们手动处理方差为0的情况（Gurobi）：给它加极小的抖动，或者只画 scatter
+        # 这里我们手动处理方差为0的情况（Gurobi）：给它加极小的抖动
 
         processed_data = []
         for d in data_to_plot:
