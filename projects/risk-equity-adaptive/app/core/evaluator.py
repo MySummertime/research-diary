@@ -92,7 +92,9 @@ class Evaluator:
         total_risk = 0.0
         alpha = self.risk_config.get("cvar_alpha", 0.95)
 
-        if alpha >= 1.0 or alpha <= 0.0:
+        # 允许 alpha = 0.0 (此时 CVaR = Expected Value)
+        # 只拦截 alpha >= 1.0 (除以零) 和 alpha < 0.0 (无意义)
+        if alpha >= 1.0 or alpha < 0.0:
             return float("inf")
 
         one_minus_alpha = 1.0 - alpha
@@ -135,6 +137,8 @@ class Evaluator:
                 optimal_eta_v = 0.0
                 task_cvar = 0.0
             else:
+                # 如果 alpha=0，则 optimal_eta_v=0 (因为 sum(p) << 1.0)
+                # task_cvar = sum(p*c) / 1.0 = Expected Risk
                 optimal_eta_v, task_cvar = self._calc_cvar_for_path(
                     p_c_pairs, alpha, one_minus_alpha
                 )
