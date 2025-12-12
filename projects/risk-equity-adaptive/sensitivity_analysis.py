@@ -30,8 +30,10 @@ def main():
     # Risk Aversion
     perform_extreme_aversion_analysis(exp, sensitivity_dir)
 
-    # Reliability & Uncertainty
+    # Reliability
     # perform_reliability_sensitivity(exp, sensitivity_dir)
+
+    # Uncertainty
     # perform_uncertainty_sensitivity(exp, sensitivity_dir)
 
 
@@ -42,7 +44,7 @@ def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
     logging.info(">>> Starting Experiment: Extreme Risk Aversion Analysis...")
 
     # 极高精度的 Alpha 区间
-    alphas = np.linspace(0.9999774, 0.999986, 7)
+    alphas = np.linspace(0.999977, 0.999989, 5)
 
     pareto_fronts = {}
     cost_breakdown = {"transport": [], "transshipment": [], "carbon": []}

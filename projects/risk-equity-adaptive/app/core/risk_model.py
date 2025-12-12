@@ -56,7 +56,8 @@ class DynamicRiskModel:
             t_e = self.max_response_time
 
         # 2. 物理扩散模型: A_spread = γ * q * t
-        a_spread = gamma * q * t_e
+        # q: kg/s, need to be transformed to kg/h for alignment
+        a_spread = gamma * q * (t_e * 3600.0)
 
         # 3. 计算总后果
         if isinstance(entity, Arc):
