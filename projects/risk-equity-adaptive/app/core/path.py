@@ -120,7 +120,7 @@ class PathFinder:
             paths = self.find_paths_for_task(task)
             candidate_paths_map[task.task_id] = paths
         logging.info(
-            f"路径搜索完成。共为 {len(self.network.tasks)} 个任务找到了候选路径。"
+            f"路径搜索完成。共为 {len(self.network.tasks)} 个任务找到了 {len(candidate_paths_map)} 条候选路径。"
         )
         return candidate_paths_map
 

@@ -1,8 +1,7 @@
 # --- coding: utf-8 ---
 # --- benchmark.py ---
 """
-[Experiment Benchmark Script]
-用于生成论文所需的 Figure 3, 4, 5, 6 和 Table 2。
+[Experiment Benchmark]
 
 对比对象:
 1. Improved NSGA-II
@@ -25,8 +24,6 @@ from typing import List, Dict
 # --- Project Imports ---
 from app.experiment_manager import Experiment
 from app.core.solution import Solution
-from app.core.nsga2 import NSGA2
-from app.core.evaluator import Evaluator
 from app.core.baselines import PymooSolver, GurobiSolver, HAS_GUROBI
 from app.utils.metrics import MetricCalculator, build_reference_front
 from app.utils.result_keeper import setup_logging
@@ -206,117 +203,12 @@ def main():
         stats_data, all_known_solutions_F, last_run_finals, benchmark_dir
     )
 
-    # -------------------------------------------------------
-    # 5. Sensitivity Analysis (Budget & CVaR) - Proposed Algorithm Only
-    # -------------------------------------------------------
-    # _perform_sensitivity_analysis(exp, benchmark_dir)
-
     logging.info("Benchmark Finished Successfully! 🎉")
 
 
 # ===========================================================
 # Internal Helpers (内部辅助函数)
 # ===========================================================
-
-
-def _perform_sensitivity_analysis(exp: Experiment, save_dir: str):
-    """
-    执行灵敏度分析
-    同时记录 Min Cost 和 Min Risk，并绘制双轴图。
-    """
-    logging.info("\n>>> Starting Dual-Axis Sensitivity Analysis...")
-    plotter = BenchmarkPlotter(save_dir)
-
-    # --- 1. Sensitivity to Budget Confidence ---
-    logging.info("   [1/2] Analyzing Budget Confidence Sensitivity...")
-    confidence_levels = [0.90, 0.93, 0.95, 0.97, 0.99]
-
-    # 存储两个目标的最优值
-    min_costs_1 = []
-    min_risks_1 = []  # 该配置下的最小 Risk (可能是 trade-off 的另一端)
-
-    # 随着约束收紧，Pareto 前沿会移动。
-    # 我们记录当前前沿的“理想点”范围，或者简单记录 Min Cost 和 Min Risk (代表前沿的两个端点变化)
-
-    original_conf = exp.config.get("constraints", {}).get(
-        "fuzzy_budget_confidence", 0.9
-    )
-
-    for conf in confidence_levels:
-        if "constraints" not in exp.config:
-            exp.config["constraints"] = {}
-        exp.config["constraints"]["fuzzy_budget_confidence"] = conf
-
-        # Reload
-        exp.evaluator = Evaluator(exp.network, exp.config)
-        exp.algorithm = NSGA2(
-            exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
-        )
-
-        final_pop = exp.algorithm.run(callbacks=[])
-        feasible = [s for s in final_pop if s.is_feasible]
-
-        if feasible:
-            # 记录当前可行解集中的极值
-            c_min = min(s.f2_cost for s in feasible)
-            r_min = min(s.f1_risk for s in feasible)
-            min_costs_1.append(c_min)
-            min_risks_1.append(r_min)
-        else:
-            logging.warning(f"     Conf={conf}: No feasible solution.")
-            min_costs_1.append(None)
-            min_risks_1.append(None)
-
-    exp.config["constraints"]["fuzzy_budget_confidence"] = original_conf
-
-    # 绘制双轴图
-    plotter.plot_dual_sensitivity_curve(
-        x_vals=confidence_levels,
-        cost_vals=min_costs_1,
-        risk_vals=min_risks_1,
-        xlabel=r"Budget Confidence Level $\alpha_c$",
-        filename="sensitivity_budget_dual.svg",
-    )
-
-    # --- 2. Sensitivity to CVaR Confidence ---
-    logging.info("   [2/2] Analyzing CVaR Confidence Sensitivity...")
-    alphas = [0.99990, 0.99992, 0.99994, 0.99996, 0.99998, 0.9991]
-    min_costs_2 = []
-    min_risks_2 = []
-
-    original_alpha = exp.config.get("risk", {}).get("cvar_alpha", 0.95)
-
-    for alpha in alphas:
-        if "risk" not in exp.config:
-            exp.config["risk"] = {}
-        exp.config["risk"]["cvar_alpha"] = alpha
-
-        exp.evaluator = Evaluator(exp.network, exp.config)
-        exp.algorithm = NSGA2(
-            exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
-        )
-
-        final_pop = exp.algorithm.run(callbacks=[])
-        feasible = [s for s in final_pop if s.is_feasible]
-
-        if feasible:
-            c_min = min(s.f2_cost for s in feasible)
-            r_min = min(s.f1_risk for s in feasible)
-            min_costs_2.append(c_min)
-            min_risks_2.append(r_min)
-        else:
-            min_costs_2.append(None)
-            min_risks_2.append(None)
-
-    exp.config["risk"]["cvar_alpha"] = original_alpha
-
-    plotter.plot_dual_sensitivity_curve(
-        x_vals=alphas,
-        cost_vals=min_costs_2,
-        risk_vals=min_risks_2,
-        xlabel=r"CVaR Confidence Level $\alpha$",
-        filename="sensitivity_CVaR_dual.svg",
-    )
 
 
 def _record_run_data(
@@ -372,15 +264,17 @@ def _perform_global_analysis(stats_data, all_F_list, last_finals, save_dir):
         rows.append(row)
     pd.DataFrame(rows).to_csv(os.path.join(save_dir, "final_metrics.csv"), index=False)
 
-    # Plots
     plotter = BenchmarkPlotter(save_dir)
-    logging.info("Plotting Comparison Violins...")
-    plotter.plot_performance_comparison(stats_data)
 
+    # Violin
+    logging.info("Plotting Comparison Violins...")
+    plotter.plot_metrics_comparison(stats_data)
+
+    # Pareto Frontier comparison
     logging.info("Plotting Pareto Comparison...")
     pareto_plotter = ParetoPlotter(save_dir=save_dir)
-    pareto_plotter.plot_frontier_comparison(
-        frontiers=last_finals, file_name="pareto_frontier_comparison.svg"
+    pareto_plotter.plot_frontier_comparison_by_algo(
+        frontiers=last_finals, file_name="pareto_frontier_comparison_by_algo.svg"
     )
 
 

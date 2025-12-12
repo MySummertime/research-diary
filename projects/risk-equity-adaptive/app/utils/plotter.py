@@ -3,9 +3,9 @@
 import os
 import logging
 import numpy as np
+from typing import List, Dict, Optional
 import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter
-from typing import List, Dict, Optional
 from app.core.solution import Solution
 
 
@@ -39,7 +39,7 @@ apply_academic_style()
 
 class ParetoPlotter:
     """
-    [View Layer] 帕累托前沿绘图器
+    [View Layer] 通用 Pareto Frontier 绘图器
     职责：绘制目标空间 (Objective Space) 的散点图。
     """
 
@@ -57,8 +57,9 @@ class ParetoPlotter:
         special_solutions: Optional[Dict[str, Solution]] = None,
     ):
         """
-        绘制二维帕累托前沿图，并高亮特殊解。
-
+        绘制单个的 2-D Pareto Frontier，并高亮特殊解。
+            不进行平滑，以保持离散解的真实感。
+            X=Risk, Y=Cost
         Args:
             solutions: pareto frontier 的接列表
             file_name: 保存的文件名
@@ -161,23 +162,18 @@ class ParetoPlotter:
 
         # 4. 格式化图表
         # axis formatting
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(ylabel)
-
-        # Scientific Notation
-        formatter = ScalarFormatter(useMathText=True)
-        formatter.set_powerlimits((-2, 3))
-        ax.xaxis.set_major_formatter(formatter)
-        ax.yaxis.set_major_formatter(formatter)
+        ax.set_xlabel(xlabel, fontweight="bold")
+        ax.set_ylabel(ylabel, fontweight="bold")
+        self._format_axes(ax)  # 统一格式化
 
         # Legend
         handles, labels = ax.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
+
         # Ensure consistent order
         order = ["Pareto Optimal", "Rank 1", "Rank 2", "Rank 3"]
         sorted_keys = [k for k in order if k in by_label]
         sorted_handles = [by_label[k] for k in sorted_keys]
-
         ax.legend(
             sorted_handles,
             sorted_keys,
@@ -194,15 +190,17 @@ class ParetoPlotter:
         plt.close(fig)
         logging.info(f"Pareto plot saved to: {full_path}")
 
-    def plot_frontier_comparison(
+    def plot_frontier_comparison_by_algo(
         self,
         frontiers: Dict[str, List[Solution]],
-        file_name: str = "pareto_comparison.svg",
+        file_name: str = "pareto_comparison_by_algo.svg",
         xlabel: str = r"Total Risk (people)",
         ylabel: str = r"Total Cost (yuan)",
     ):
         """
-        绘制多算法 Pareto 前沿对比图。
+        绘制不同算法下的 Pareto Frontier 对比图。
+        使用插值函数绘制平滑曲线。
+        X=Risk, Y=Cost
 
         Args:
             frontiers: 字典 { "Algorithm Name": [Solution List], ... }
@@ -290,6 +288,69 @@ class ParetoPlotter:
         plt.close(fig)
         logging.info(f"Comparison plot saved to: {full_path}")
 
+    def plot_frontier_comparison_by_cvar_alpha(
+        self,
+        frontiers: Dict[str, List[Solution]],
+        file_name: str = "pareto_comparison_by_cvar_alpha.svg",
+    ):
+        """
+        绘制不同 CVaR alpha 下的 Pareto Frontier 对比图。
+        X=Risk, Y=Cost
+        """
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        keys = list(frontiers.keys())
+        cmap = plt.get_cmap("viridis_r")
+        colors = [cmap(i) for i in np.linspace(0, 1, len(keys))]
+        markers = ["o", "s", "D", "^", "v", "<", ">"]
+
+        all_x, all_y = [], []
+
+        for idx, (label, solutions) in enumerate(frontiers.items()):
+            if not solutions:
+                continue
+
+            # 按 Risk 排序
+            solutions.sort(key=lambda s: s.f1_risk)
+
+            x_vals = [s.f1_risk for s in solutions]
+            y_vals = [s.f2_cost for s in solutions]
+            all_x.extend(x_vals)
+            all_y.extend(y_vals)
+
+            color = colors[idx % len(colors)]
+            marker = markers[idx % len(markers)]
+
+            # [Straight Line] 直线连接
+            ax.plot(
+                x_vals, y_vals, color=color, linestyle="--", alpha=0.5, linewidth=1.5
+            )
+            ax.scatter(
+                x_vals,
+                y_vals,
+                label=r"$\alpha$={label}",
+                color=color,
+                marker=marker,
+                s=80,
+                edgecolors="white",
+                alpha=0.9,
+                zorder=3,
+            )
+
+        ax.set_xlabel(r"Total Risk (people)", fontweight="bold")
+        ax.set_ylabel(r"Total Cost (yuan)", fontweight="bold")
+
+        self._format_axes(ax)
+        self._set_dynamic_limits(ax, all_x, all_y)
+
+        ax.legend(loc="upper right", frameon=True, fancybox=True)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.save_dir, file_name))
+        plt.close(fig)
+        logging.info(f"Pareto comparison saved: {file_name}")
+
+    # --- Helper function ---
+
     def _highlight_special_solutions(self, solutions_map: Dict[str, Solution], ax):
         """
         [辅助] 在当前图上标记特殊点
@@ -310,10 +371,30 @@ class ParetoPlotter:
                 zorder=4,
             )
 
+    def _format_axes(self, ax):
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-2, 3))
+        ax.xaxis.set_major_formatter(formatter)
+        ax.yaxis.set_major_formatter(formatter)
+        ax.grid(True, linestyle="--", alpha=0.5)
+
+    def _set_dynamic_limits(self, ax, x_data, y_data, margin=0.05):
+        """辅助：设置动态坐标轴范围"""
+        if not x_data or not y_data:
+            return
+        x_min, x_max = min(x_data), max(x_data)
+        y_min, y_max = min(y_data), max(y_data)
+
+        dx = (x_max - x_min) * margin if x_max != x_min else x_min * margin
+        dy = (y_max - y_min) * margin if y_max != y_min else y_min * margin
+
+        ax.set_xlim(x_min - dx, x_max + dx)
+        ax.set_ylim(y_min - dy, y_max + dy)
+
 
 class BenchmarkPlotter:
     """
-    [View Layer] 专门负责 Benchmark 实验的绘图（Violin & Dual-Axis Sensitivity）
+    [View Layer] 专门负责 Benchmark 实验的绘图
     """
 
     def __init__(self, save_dir: str):
@@ -328,64 +409,27 @@ class BenchmarkPlotter:
             "Gurobi": "#7F7F7F",  # Benchmark: Gray
         }
 
-    def plot_convergence_curves(
-        self, data_map: Dict[str, List[float]], metric_name: str, filename: str
-    ):
-        """绘制收敛曲线 (HV, IGD, SM)"""
-        plt.figure(figsize=(10, 6))
-        for name, history in data_map.items():
-            if not history:
-                continue
-
-            # 样式处理
-            color = self.colors.get(name, "gray")
-            lw = 1.5
-            ls = "-" if "Improved" in name else "--"
-            if "Gurobi" in name:
-                pass
-
-            plt.plot(history, label=name, color=color, linewidth=lw, linestyle=ls)
-
-        plt.xlabel("Generation", fontsize=12, fontweight="bold")
-        plt.ylabel(metric_name, fontsize=12, fontweight="bold")
-
-        plt.legend(fontsize=11, frameon=True, fancybox=True, framealpha=0.9)
-        plt.grid(True, linestyle="--", alpha=0.5)
-        plt.tight_layout()
-
-        plt.savefig(os.path.join(self.save_dir, f"{filename}.svg"))
-        plt.close()
-
-    def plot_performance_comparison(
-        self, stats_data: Dict[str, Dict[str, List[float]]]
-    ):
+    def plot_metrics_comparison(self, stats_data: Dict[str, Dict[str, List[float]]]):
         """
         绘制多算法对比的小提琴图。
-        生成 4 张独立的图：HV_Comparison.svg, IGD_Comparison.svg, ...
+        生成 4 张独立的图: HV_Comparison.svg, IGD_Comparison.svg, ...
         每张图中 X 轴是算法，Y 轴是指标分布。
         """
         metrics = ["HV", "IGD", "SM", "CPU Time"]
-        titles = {
-            "HV": "Hypervolume (Higher is Better)",
-            "IGD": "IGD (Lower is Better)",
-            "SM": "Spacing Metric (Lower is Better)",
-            "CPU Time": "CPU Time (s) (Lower is Better)",
-        }
-
-        # 获取所有算法名称
         algo_names = list(stats_data.keys())
+
         # 确保 Proposed 排在第一个 (为了好看)
         if "Improved NSGA-II" in algo_names:
             algo_names.remove("Improved NSGA-II")
             algo_names.insert(0, "Improved NSGA-II")
 
         for metric in metrics:
-            self._plot_single_metric_violin(
-                metric, titles[metric], algo_names, stats_data
-            )
+            self._plot_single_metric_violin(metric, algo_names, stats_data)
+
+    # --- Helper function ---
 
     def _plot_single_metric_violin(
-        self, metric: str, title: str, algo_names: List[str], stats_data: Dict
+        self, metric: str, algo_names: List[str], stats_data: Dict
     ):
         """[Helper] 绘制单个指标的小提琴图"""
         fig, ax = plt.subplots(figsize=(10, 8))
@@ -488,102 +532,237 @@ class BenchmarkPlotter:
         plt.close()
         logging.info(f"Generated comparison plot: {save_path}")
 
-    def plot_dual_sensitivity_curve(
+
+class SensitivityPlotter:
+    """
+    [View Layer] 负责 Sensitivity Analysis 的绘图 (支持动态缩放)
+    """
+
+    def __init__(self, save_dir: str):
+        self.save_dir = save_dir
+        os.makedirs(save_dir, exist_ok=True)
+
+    def plot_cost_structure_dual_axis(
         self,
-        x_vals: List[float],
-        cost_vals: List[float],
-        risk_vals: List[float],
-        xlabel: str,
+        x_labels: List[str],
+        cost_data: Dict[str, List[float]],
+        risk_data: List[float],
         filename: str,
     ):
         """
-        双 Y 轴灵敏度分析图
-        左轴 Cost (Teal/Green), 右轴 Risk (Orange), 空心标记
+        双 Y 轴组合图：
+            左轴 (ax1): Cost (Stacked Bar)
+            右轴 (ax2): Risk (Line)
+            x轴: CVaR Confidence level
         """
-        # 过滤无效数据 (None)
+        fig, ax1 = plt.subplots(figsize=(12, 7))
+        x = np.arange(len(x_labels))
+        width = 0.4
+
+        trans = np.array(cost_data["transport"])
+        ship = np.array(cost_data["transshipment"])
+        carb = np.array(cost_data["carbon"])
+        total_costs = trans + ship + carb
+
+        # --- 左轴: Cost (Bar) ---
+        c1, c2, c3 = "#3498db", "#95a5a6", "#2ecc71"
+        ax1.bar(
+            x,
+            trans,
+            width,
+            label="Transport Cost",
+            color=c1,
+            alpha=0.7,
+            edgecolor="white",
+            zorder=1,
+        )
+        ax1.bar(
+            x,
+            ship,
+            width,
+            bottom=trans,
+            label="Transshipment Cost",
+            color=c2,
+            alpha=0.7,
+            edgecolor="white",
+            zorder=1,
+        )
+        ax1.bar(
+            x,
+            carb,
+            width,
+            bottom=trans + ship,
+            label="Carbon Cost",
+            color=c3,
+            alpha=0.7,
+            edgecolor="white",
+            zorder=1,
+        )
+
+        ax1.set_ylabel("Total Cost (yuan)", fontweight="bold", color="#2c3e50")
+        ax1.tick_params(axis="y", labelcolor="#2c3e50")
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(x_labels, rotation=25, ha="right")
+        ax1.set_xlabel(r"CVaR Confidence Level $\alpha$", fontweight="bold")
+
+        # [Auto-Scale Cost: Broken Axis Effect]
+        self._set_dynamic_ylim(ax1, total_costs, is_bar=True)
+
+        # --- 右轴: Risk (Line) ---
+        ax2 = ax1.twinx()
+        c_risk = "#e74c3c"
+        # [Straight Line] 直线连接，清晰展示 Trend
+        ax2.plot(
+            x,
+            risk_data,
+            color=c_risk,
+            marker="D",
+            markersize=8,
+            linewidth=1.5,
+            linestyle="-",
+            label="Min Risk",
+            zorder=10,
+        )
+        ax2.set_ylabel(r"Min Risk (people)", fontweight="bold", color=c_risk)
+        ax2.tick_params(axis="y", labelcolor=c_risk)
+
+        # [Auto-Scale Risk]
+        self._set_dynamic_ylim(ax2, risk_data)
+
+        # Format
+        fmt = ScalarFormatter(useMathText=True)
+        fmt.set_powerlimits((-2, 3))
+        ax1.yaxis.set_major_formatter(fmt)
+        ax2.yaxis.set_major_formatter(fmt)
+
+        # Legend
+        h1, l1 = ax1.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax1.legend(
+            h1 + h2,
+            l1 + l2,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.15),
+            ncol=4,
+            frameon=False,
+        )
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.save_dir, filename))
+        plt.close()
+        logging.info(f"Dual axis chart saved: {filename}")
+
+    def plot_dual_line_chart(
+        self,
+        x_vals: List[float],
+        cost_data: List[float],
+        risk_data: List[float],
+        xlabel: str,
+        filename: str,
+        x_ticks: Optional[List[float]] = None,
+    ):
+        """
+        左轴: Cost (Teal Line), 右轴: Risk (Orange Line)
+        """
         valid_indices = [
             i
-            for i, (c, r) in enumerate(zip(cost_vals, risk_vals))
+            for i, (c, r) in enumerate(zip(cost_data, risk_data))
             if c is not None and r is not None
         ]
         if not valid_indices:
-            logging.warning(f"No valid data for {filename}")
             return
 
         xs = [x_vals[i] for i in valid_indices]
-        ys_cost = [cost_vals[i] for i in valid_indices]
-        ys_risk = [risk_vals[i] for i in valid_indices]
+        ys_cost = [cost_data[i] for i in valid_indices]
+        ys_risk = [risk_data[i] for i in valid_indices]
 
-        fig, ax1 = plt.subplots(figsize=(10, 8))
+        fig, ax1 = plt.subplots(figsize=(10, 6))
 
-        # --- 设置风格颜色 ---
-        color_cost = "#72AACF"
-        color_risk = "#FDB96B"
-
-        # --- 左轴: Cost ---
-        ax1.set_xlabel(xlabel, fontweight="bold")
-        ax1.set_ylabel(r"Min Cost (yuan)", color=color_cost, fontweight="bold")
-
-        # 强制设置 X 轴刻度，使其与输入 xs 完全一致
-        ax1.set_xticks(xs) 
-        # 可选：如果 tick label 太密，可以旋转
-        # ax1.set_xticklabels(xs, rotation=45)
-
-        # 绘制 Cost 曲线
+        # --- 左轴 Cost ---
+        c_cost = "#16a085"  # Teal
         line1 = ax1.plot(
             xs,
             ys_cost,
-            color=color_cost,
+            color=c_cost,
             marker="o",
             markersize=8,
-            markerfacecolor="white",
-            markeredgewidth=2,
-            linewidth=2,
-            label="Cost Objective",
+            linewidth=2.5,
+            label="Min Expected Cost",
         )
-        ax1.tick_params(axis="y", labelcolor=color_cost)
+        ax1.set_ylabel(r"Expected Cost (yuan)", color=c_cost, fontweight="bold")
+        ax1.tick_params(axis="y", labelcolor=c_cost)
+        ax1.set_xlabel(xlabel, fontweight="bold")
 
-        # Cost 轴科学计数法
-        formatter1 = ScalarFormatter(useMathText=True)
-        formatter1.set_powerlimits((-2, 3))
-        ax1.yaxis.set_major_formatter(formatter1)
+        if x_ticks:
+            ax1.set_xticks(x_ticks)
+        else:
+            ax1.set_xticks(xs)
 
-        # --- 右轴: Risk ---
+        # Auto-Scale Cost
+        self._set_dynamic_ylim(ax1, ys_cost)
+
+        # --- 右轴 Risk ---
         ax2 = ax1.twinx()
-        ax2.set_ylabel(r"Min Risk (people)", color=color_risk, fontweight="bold")
-
-        # 绘制 Risk 曲线
+        c_risk = "#f39c12"  # Orange
         line2 = ax2.plot(
             xs,
             ys_risk,
-            color=color_risk,
+            color=c_risk,
             marker="D",
             markersize=8,
-            markerfacecolor="white",
-            markeredgewidth=2,
-            linewidth=2,
-            label="Risk Objective",
+            linewidth=2.5,
+            linestyle="--",
+            label="Min CVaR Risk",
         )
-        ax2.tick_params(axis="y", labelcolor=color_risk)
+        ax2.set_ylabel(r"CVaR Risk (people)", color=c_risk, fontweight="bold")
+        ax2.tick_params(axis="y", labelcolor=c_risk)
 
-        # Risk 轴科学计数法
-        formatter2 = ScalarFormatter(useMathText=True)
-        formatter2.set_powerlimits((-2, 3))
-        ax2.yaxis.set_major_formatter(formatter2)
+        # Auto-Scale Risk
+        self._set_dynamic_ylim(ax2, ys_risk)
 
-        # --- 合并图例 ---
+        # Legend
         lines = line1 + line2
         labels = [l.get_label() for l in lines]
-        ax1.legend(
-            lines, labels, loc="upper left", frameon=True, fancybox=True, framealpha=0.9
-        )
-
-        # 标题和网格
+        ax1.legend(lines, labels, loc="upper left", frameon=True, fancybox=True)
         ax1.grid(True, linestyle="--", alpha=0.5)
 
-        # 保存
+        fmt = ScalarFormatter(useMathText=True)
+        fmt.set_powerlimits((-2, 3))
+        ax1.yaxis.set_major_formatter(fmt)
+        ax2.yaxis.set_major_formatter(fmt)
+
         plt.tight_layout()
-        save_path = os.path.join(self.save_dir, filename)
-        plt.savefig(save_path)
+        plt.savefig(os.path.join(self.save_dir, filename))
         plt.close()
-        logging.info(f"Dual sensitivity plot saved to: {save_path}")
+        logging.info(f"Dual line chart saved: {filename}")
+
+    # --- Helper function ---
+
+    def _set_dynamic_ylim(self, ax, data, margin_ratio=0.1, is_bar=False):
+        """
+        [辅助] 动态设置 Y 轴范围 (支持截断模式)
+        """
+        if len(data) == 0:
+            return
+        ymin, ymax = min(data), max(data)
+
+        # 柱状图强制从 0 开始
+        if is_bar:
+            ax.set_ylim(0, ymax * 1.1)
+            return
+
+        # 其他图（折线图）使用动态缩放
+        if ymax > 0:
+            diff = ymax - ymin
+            variation = diff / ymax
+
+            # 如果变化率极小 (<5%)，启用聚焦模式
+            if variation < 0.05:
+                # 聚焦微小变化
+                margin = diff if diff > 0 else ymax * 0.01
+                lower = max(0, ymin - margin * 2)
+                upper = ymax + margin * 2
+                ax.set_ylim(lower, upper)
+            else:
+                # 正常波动，预留 10% 边距
+                margin = diff * 0.1
+                ax.set_ylim(max(0, ymin - margin), ymax + margin)
