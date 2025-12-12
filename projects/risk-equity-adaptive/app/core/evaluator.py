@@ -195,7 +195,7 @@ class Evaluator:
         """
         total_risk = 0.0
 
-        # 重新从 self.config 中读取，防止 self.risk_config 引用失效，确保 sensitivity analysis 修改生效
+        # 重新从 self.config 中读取，防止 self.risk_config 引用失效
         current_risk_config = self.config.get("risk_model_f1", {})
         alpha = current_risk_config.get("cvar_alpha", 0.95)
 
@@ -272,15 +272,24 @@ class Evaluator:
         # (p, c) -> (c, p)
         sorted_c_p_pairs = sorted([(c, p) for p, c in p_c_pairs])
 
+        # 增加 epsilon 防止除零 (虽然 alpha 通常 < 1.0)
+        epsilon = 1e-9
+        safe_denominator = one_minus_alpha + epsilon
+
         # 步骤 2: 找到 VaR (最优的 eta)
         # 需要找到最小的 c_i，使得 "超过它的概率" <= (1 - alpha)
         # 当 alpha=0 (one_minus_alpha=1) 时, CVaR = E[L] / 1 = E[L]
         total_prob = sum(p for c, p in sorted_c_p_pairs)
+
+        # [Case 1] 绝大多数情况: total_prob (e.g. 0.0001) < 1-alpha (e.g. 0.05)
+        # 这意味着 VaR_alpha = 0 (无事故状态)
         if total_prob <= one_minus_alpha:
             expected_loss = sum(p * c for c, p in sorted_c_p_pairs)
-            # 防止除以极小值 (即使理论上 total_prob <= 1-alpha 意味着 VaR=0)
-            return 0.0, expected_loss / one_minus_alpha
+            # 此时 CVaR 退化为: Expected_Risk / (1 - alpha)
+            # 使用 safe_denominator 确保稳定性
+            return 0.0, expected_loss / safe_denominator
 
+        # [Case 2] (极少见) 事故概率总和非常高，或者 alpha 极其接近 1.0
         prob_sum = 0.0
         opt_eta = sorted_c_p_pairs[-1][0]
         for c, p in sorted_c_p_pairs:
