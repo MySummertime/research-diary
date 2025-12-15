@@ -2,345 +2,12 @@
 # --- app/utils/analyzer.py ---
 import os
 import csv
-import random
 import logging
 import numpy as np
-import matplotlib.pyplot as plt
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 from app.core.solution import Solution
 from app.core.evaluator import Evaluator
-from app.core.path import Path
 from app.core.fuzzy import FuzzyMath
-
-
-def plot_risk_histogram(
-    solutions: List[Solution],
-    save_dir: str = "results",
-    file_name: str = "risk_histogram.png",
-):
-    """
-    绘制最终种群中所有可行解的风险值分布直方图。
-    (注: 此处过滤 'is_feasible' 是合理的设计选择，因为我们关心的是 *最终可用解* 的分布)
-    """
-    risks = [
-        s.f1_risk for s in solutions if s.is_feasible and s.f1_risk != float("inf")
-    ]
-
-    if not risks:
-        logging.warning("Analyzer: 未找到可行的解，无法绘制风险直方图。")
-        return
-
-    os.makedirs(save_dir, exist_ok=True)
-    try:
-        plt.figure(figsize=(10, 7))
-        plt.hist(risks, bins=20, edgecolor="black", alpha=0.7, color="red")
-        plt.xlabel("f1_Risk")
-        plt.ylabel("Frequency")
-        plt.title("Risk Distribution in Final Feasible Population")
-        plt.grid(axis="y", alpha=0.75)
-
-        # 添加均值和中位数线
-        plt.axvline(
-            np.mean(risks),
-            color="blue",
-            linestyle="dashed",
-            linewidth=2,
-            label=f"Mean (avg: {np.mean(risks):,.0f})",
-        )
-        plt.axvline(
-            np.median(risks),
-            color="orange",
-            linestyle="dashed",
-            linewidth=2,
-            label=f"Median (med: {np.median(risks):,.0f})",
-        )
-        plt.legend()
-
-        full_path = os.path.join(save_dir, file_name)
-        plt.savefig(full_path, dpi=300)
-        plt.close()
-        logging.info(f"风险分布直方图已保存至: {full_path}")
-    except Exception as e:
-        logging.error(f"风险直方图绘制失败: {e}")
-
-
-def plot_evolution(
-    logs: Dict[str, List[float]],
-    save_dir: str = "results",
-    file_name_prefix: str = "evolution",
-):
-    """
-    绘制风险、成本和约束违反度(CV)的进化轨迹。
-    """
-    if not logs.get("cv_avg"):
-        logging.warning("Analyzer: 日志数据不完整 (缺少 'cv_avg')，无法绘制进化图。")
-        return
-
-    gens = range(len(logs["cv_avg"]))
-    os.makedirs(save_dir, exist_ok=True)
-
-    try:
-        # --- 1. 绘制“可行性” (CV) 演化图 ---
-        plt.figure(figsize=(12, 6))
-        plt.plot(
-            gens, logs["cv_avg"], label="Mean Constraint Violation (CV)", color="purple"
-        )
-        plt.plot(
-            gens,
-            logs["cv_min"],
-            label="Min Constraint Violation (CV)",
-            color="pink",
-            linestyle="--",
-        )
-        plt.xlabel("Generation")
-        plt.ylabel("Constraint Violation (CV)")
-        plt.title("Feasibility Evolution (Constraint Violation)")
-        # plt.yscale('log')   # CV 通常最好用对数尺度看
-        plt.legend()
-        plt.grid(True)
-        cv_file_path = os.path.join(save_dir, f"{file_name_prefix}_feasibility_cv.png")
-        plt.savefig(cv_file_path, dpi=300)
-        plt.close()
-        logging.info(f"“可行性”演化轨迹图已保存至: {cv_file_path}")
-
-        # --- 2. 绘制风险演化图 (可行解) ---
-        plt.figure(figsize=(12, 6))
-        plt.plot(gens, logs["risk_min"], label="Minimum Risk", color="green")
-        plt.plot(
-            gens, logs["risk_mean"], label="Mean Risk", color="blue", linestyle="--"
-        )
-        plt.plot(
-            gens,
-            logs["risk_median"],
-            label="Median Risk",
-            color="orange",
-            linestyle=":",
-        )
-        plt.xlabel("Generation")
-        plt.ylabel("Risk (f1)")
-        plt.title("Risk Evolution")
-        plt.legend()
-        plt.grid(True)
-        risk_file_path = os.path.join(save_dir, f"{file_name_prefix}_risk.png")
-        plt.savefig(risk_file_path, dpi=300)
-        plt.close()
-        logging.info(f"风险演化轨迹图已保存至: {risk_file_path}")
-
-        # --- 3. 绘制成本演化图 (可行解) ---
-        plt.figure(figsize=(12, 6))
-        plt.plot(gens, logs["cost_min"], label="Minimum Cost", color="green")
-        plt.plot(
-            gens, logs["cost_mean"], label="Mean Cost", color="blue", linestyle="--"
-        )
-        plt.plot(
-            gens,
-            logs["cost_median"],
-            label="Median Cost",
-            color="orange",
-            linestyle=":",
-        )
-        plt.xlabel("Generation")
-        plt.ylabel("Cost (f2)")
-        plt.title("Cost Evolution")
-        plt.legend()
-        plt.grid(True)
-        cost_file_path = os.path.join(save_dir, f"{file_name_prefix}_cost.png")
-        plt.savefig(cost_file_path, dpi=300)
-        plt.close()
-        logging.info(f"成本演化轨迹图已保存至: {cost_file_path}")
-    except Exception as e:
-        logging.error(f"进化曲线绘图失败: {e}")
-
-
-def analyze_operator_contribution(log: Dict[str, int]):
-    """
-    打印并记录 *混合* 算子的调用次数。
-    """
-    logging.info("--- [附加分析] 算子贡献度日志 ---")
-
-    crossover_calls = log.get("crossover", 0)
-    mut_path_calls = log.get("mutation", 0)
-
-    total_calls = crossover_calls + mut_path_calls
-
-    if total_calls == 0:
-        logging.warning("\n未记录到算子调用信息。")
-        return
-
-    logging.info("\n算子调用次数及占比分析:")
-    crossover_pct = (crossover_calls / total_calls) * 100 if total_calls > 0 else 0
-    mutation_pct = (mut_path_calls / total_calls) * 100 if total_calls > 0 else 0
-
-    logging.info(
-        f"  - 交叉 (Crossover) 总调用: {crossover_calls:<6} 次, 占比 {crossover_pct:.2f}%"
-    )
-    logging.info(
-        f"  - 变异 (Mutation)  总调用: {mut_path_calls:<6} 次, 占比 {mutation_pct:.2f}%"
-    )
-
-
-def plot_sensitivity_boxplot(
-    all_deltas: List[List[float]],
-    save_dir: str = "results",
-    file_name: str = "sensitivity_boxplot.png",
-):
-    """
-    [辅助函数] 绘制局部灵敏度测试的结果箱线图。
-    """
-    if not all_deltas:
-        logging.warning("Analyzer: 灵敏度分析数据为空，跳过箱线图绘制。")
-        return
-
-    os.makedirs(save_dir, exist_ok=True)
-    try:
-        plt.figure(figsize=(12, 8))
-        # 过滤掉空的 deltas 列表（如果某个解的所有变异都失败了）
-        valid_deltas = [d for d in all_deltas if d]
-        if not valid_deltas:
-            logging.warning("Analyzer: 灵敏度分析未收集到任何有效的 delta 数据。")
-            return
-
-        plt.boxplot(valid_deltas)
-        plt.xlabel("Solution Index (Randomly Sampled from Pareto Front)")
-        plt.ylabel("ΔRisk (Risk_mutated - Risk_original)")
-        plt.title("Local Sensitivity Analysis (via Path Mutation)")
-        plt.grid(True)
-        full_path = os.path.join(save_dir, file_name)
-        plt.savefig(full_path, dpi=300)
-        plt.close()
-        logging.info(f"局部灵敏度箱线图已保存至: {full_path}")
-    except Exception as e:
-        logging.error(f"灵敏度箱线图绘制失败: {e}")
-
-
-def perform_local_sensitivity_analysis(
-    final_front: List[Solution],
-    evaluator: Evaluator,
-    candidate_paths_map: Dict[str, List[Path]],
-    save_dir: str,
-    n_solutions_to_test: int = 5,
-    n_trials_per_solution: int = 20,
-):
-    """
-    对帕累托前沿上的部分解进行局部扰动。
-    同时记录 'deltas' 和 'infeasible_count'。
-    """
-    logging.info("--- [附加分析] 正在执行局部灵敏度测试... ---")
-
-    # 1. 选择解
-    feasible_front = [s for s in final_front if s.is_feasible]
-    if not feasible_front:
-        logging.warning(
-            "Analyzer: 灵敏度分析失败，因为最终前沿没有 *可行* 解可供测试。"
-        )
-        return
-
-    n_solutions = len(feasible_front)
-    n_to_select = min(n_solutions, n_solutions_to_test)
-
-    if n_to_select == 0:
-        logging.warning("Analyzer: n_solutions_to_test 为 0，跳过灵敏度分析。")
-        return
-
-    selected_indices = np.random.choice(n_solutions, n_to_select, replace=False)
-    selected_solutions = [feasible_front[i] for i in selected_indices]
-
-    all_deltas = []  # 存储 (new_risk - original_risk)
-    total_infeasible_mutations = 0
-    total_mutations = 0
-
-    for i, solution in enumerate(selected_solutions):
-        deltas = []
-        original_risk = solution.f1_risk
-
-        logging.info(
-            f"  - 正在测试 (可行的) 解 {i + 1}/{n_to_select} (Risk: {original_risk:,.0f})..."
-        )
-
-        for _ in range(n_trials_per_solution):
-            mutated_solution = solution.clone()
-
-            try:
-                task_id_to_mutate = random.choice(
-                    list(mutated_solution.path_selections.keys())
-                )
-
-                all_paths = candidate_paths_map[task_id_to_mutate]
-                if len(all_paths) <= 1:
-                    continue  # 无法变异
-
-                new_path = random.choice(all_paths)
-                while new_path == solution.path_selections[task_id_to_mutate]:
-                    new_path = random.choice(all_paths)
-
-                mutated_solution.path_selections[task_id_to_mutate] = new_path
-                total_mutations += 1
-
-            except Exception as e:
-                logging.warning(f"灵敏度分析中的变异步骤失败: {e}")
-                continue
-
-            evaluator.evaluate(mutated_solution)
-
-            # 不再关心变异后是否可行，我们只关心风险值
-            new_risk = mutated_solution.f1_risk
-
-            if new_risk != float("inf"):
-                delta = new_risk - original_risk
-                deltas.append(delta)
-
-            # 我们 *额外* 统计它是否“掉下了悬崖”
-            if not mutated_solution.is_feasible:
-                total_infeasible_mutations += 1
-
-        all_deltas.append(deltas)
-
-    # 2. 绘制箱线图
-    plot_sensitivity_boxplot(all_deltas, save_dir=save_dir)
-
-    # 3. 报告“稳定性”
-    if total_mutations > 0:
-        infeasible_pct = (total_infeasible_mutations / total_mutations) * 100
-        logging.info(
-            f"  - 灵敏度总结: 在 {total_mutations} 次变异中, 有 {total_infeasible_mutations} 次 ({infeasible_pct:.2f}%) 导致了解变为“不可行”。"
-        )
-
-
-def print_solution_details(solution_type: str, solution: Solution):
-    """
-    打印单个最优解的详细信息。
-    """
-    logging.info(f"\n--- {solution_type} 解读 ---")
-    logging.info(
-        f"目标值: f1_Risk={solution.f1_risk:,.2f}, f2_Cost={solution.f2_cost:,.2f}"
-    )
-    logging.info(
-        f"状态: Feasible={solution.is_feasible}, CV={solution.constraint_violation:.4f}"
-    )
-    logging.info("该解对应的路径选择策略为:")
-
-    for task_id, path in solution.path_selections.items():
-        if path.task:
-            task = path.task
-            eta_v = solution.eta_values.get(task_id, 0.0)
-
-            logging.info(
-                f"  - 任务 {task.task_id} (从 {task.origin.node_id} 到 {task.destination.node_id}):"
-            )
-
-            # 打印详细路径信息
-            path_str = " -> ".join([node.node_id for node in path.nodes])
-            all_hubs_str = ", ".join([h.node_id for h in path.all_hubs_on_path])
-            transfer_hubs_str = ", ".join([h.node_id for h in path.transfer_hubs])
-
-            logging.info(f"      完整路径: {path_str}")
-            logging.info(f"      途经所有枢纽: [{all_hubs_str}]")
-            logging.info(
-                f"      转运枢纽 ({len(path.transfer_hubs)}): [{transfer_hubs_str}]"
-            )
-            logging.info(f"      此任务VaR (η_v): {eta_v:,.2f}")
-        else:
-            logging.warning(f"  - 任务 {task_id} 的路径缺少 task 引用。")
 
 
 def find_knee_point(solutions: List[Solution]) -> Optional[Solution]:
@@ -384,7 +51,7 @@ def generate_routing_scheme_comparison(
     solutions_map: Dict[str, Solution], evaluator: Evaluator, save_dir: str
 ):
     """
-    [Table 1 Generator] 生成详细的路由方案对比表 (CSV)。
+    生成详细的路由方案对比表 (CSV)。
 
     功能：
     1. 遍历 A, B, C 三个方案。
@@ -401,12 +68,14 @@ def generate_routing_scheme_comparison(
         "Task_ID",  # T1, T2...
         "Origin",  # 起点
         "Destination",  # 终点
-        "Total_Cost",  # 该任务的总成本 (Expected)
         "Total_Risk",  # 该任务的风险 (CVaR)
-        "Carbon_Cost",  # 该任务的碳排放成本
+        "Total_Cost",  # 该任务的总成本 (Expected)
+        "Transport_Cost",
+        "Transshipment_Cost",
+        "Carbon_Cost",
         "Transfers",  # 中转次数
-        "Mode_Ratio",  # 公路/铁路 距离占比 (e.g. "30% / 70%")
-        "Selected_Hubs",  # 选中的枢纽 (e.g. "H1, H3")
+        "RoadOverRail_Ratio",  # 公路/铁路 距离占比 (e.g. "30% / 70%")
+        "Transfer_Hubs",  # 转运枢纽 (e.g. "H1, H3")
         "Route_Path",  # 完整路径 (e.g. "S1 -> H1 -> H3 -> D1")
     ]
 
@@ -431,8 +100,8 @@ def generate_routing_scheme_comparison(
                         continue
 
                     # --- 1. 计算单任务指标 ---
-                    task_cost, carbon_cost = _calculate_single_task_cost(
-                        path, evaluator
+                    task_cost, transport_cost, transship_cost, carbon_cost = (
+                        _calculate_single_task_cost(path, evaluator)
                     )
                     task_risk = _calculate_single_task_risk(path, evaluator)
 
@@ -442,7 +111,7 @@ def generate_routing_scheme_comparison(
                     route_nodes = [n.node_id for n in path.nodes]
                     route_str = " -> ".join(route_nodes)
 
-                    hubs_str = (
+                    transfer_hubs_str = (
                         ", ".join([h.node_id for h in path.transfer_hubs])
                         if path.transfer_hubs
                         else "Direct"
@@ -468,12 +137,14 @@ def generate_routing_scheme_comparison(
                             task_id,
                             path.task.origin.node_id,
                             path.task.destination.node_id,
-                            f"{task_cost:.2f}",
                             f"{task_risk:.4f}",
+                            f"{task_cost:.2f}",
+                            f"{transport_cost:.2f}",
+                            f"{transship_cost:.2f}",
                             f"{carbon_cost:.2f}",
                             transfers,
                             ratio_str,
-                            hubs_str,
+                            transfer_hubs_str,
                             route_str,
                         ]
                     )
@@ -487,11 +158,137 @@ def generate_routing_scheme_comparison(
         logging.error(traceback.format_exc())
 
 
-def _calculate_single_task_cost(path, evaluator: Evaluator) -> Tuple[float, float]:
+def calculate_solution_gini(solution: Solution, evaluator: Evaluator) -> float:
+    """
+    [封装函数] 计算给定解决方案的社会公平性指标（基尼系数）。
+
+    Args:
+        solution: 要评估的解。
+        evaluator: 评估器。
+
+    Returns:
+        float: 基尼系数 (0.0 - 1.0)。
+    """
+    # 1. 获取风险暴露分布
+    risk_map = _get_node_risk_exposure(solution, evaluator)
+
+    # 2. 提取风险值列表
+    risk_exposures = list(risk_map.values())
+
+    # 3. 计算基尼系数
+    gini = _calculate_gini_coefficient(risk_exposures)
+
+    return gini
+
+
+def _calculate_gini_coefficient(risk_exposures: List[float]) -> float:
+    """
+    [核心算法] 计算基于风险暴露分布的基尼系数 (Gini Coefficient)。
+    用于衡量风险在不同地理区域/节点间分配的公平性。
+    Formula: Gini = (sum_i sum_j |R_i - R_j|) / (2 * n^2 * mean(R))
+
+    Args:
+        risk_exposures: 每个区域/节点承担的总风险暴露 R_i 列表。
+
+    Returns:
+        float: 基尼系数 (0.0 - 1.0)。
+    """
+    if not risk_exposures or len(risk_exposures) < 2:
+        return 0.0
+
+    # 1. 转换为 Numpy 数组并过滤零值（零风险区域不影响相对公平性，但数学上保留）
+    R = np.array([r for r in risk_exposures if r >= 0])
+    n = len(R)
+
+    # 如果所有风险都是零，则 Gini=0 (完全公平)
+    if n == 0 or np.sum(R) == 0:
+        return 0.0
+
+    # 2. 计算分子: sum_i sum_j |R_i - R_j|
+    # R[:, None] - R[None, :] 得到 R_i - R_j 的差值矩阵
+    diff_matrix = np.abs(R[:, None] - R[None, :])
+    numerator = np.sum(diff_matrix)
+
+    # 3. 计算分母: 2 * n^2 * mean(R)
+    R_mean = np.mean(R)
+    denominator = 2 * n * n * R_mean
+
+    # 4. 计算 Gini
+    # 避免除以零（已在 np.sum(R) == 0 处处理）
+    gini = numerator / denominator
+
+    return float(gini)
+
+
+def _get_node_risk_exposure(
+    solution: Solution, evaluator: Evaluator
+) -> Dict[str, float]:
+    """
+    [Helper] 计算给定方案下，每个节点（或区域）的总风险暴露。
+
+    总风险暴露 R_k =
+      sum_{v, p: k in p} [ 风险事件发生时，该节点 k 贡献的后果 * 发生概率 ]
+
+    Args:
+        solution: 要评估的解。
+        evaluator: 评估器 (用于获取风险参数)。
+
+    Returns:
+        Dict[str, float]: {node_id: total_risk_contribution, ...}
+    """
+    node_risk_map: Dict[str, float] = {}
+
+    for path in solution.path_selections.values():
+        if not path.task:
+            continue
+
+        # 任务运量 dv
+        dv = path.task.demand
+
+        # 1. 收集弧段风险贡献
+        for arc in path.arcs:
+            # 弧段事故概率 p_ijm
+            p_ijm = arc.accident_prob_per_km * arc.length
+            # 弧段后果 c_ijm (动态后果)
+            c_base = evaluator.risk_model.get_consequence(arc)
+            c_ijm_final = c_base * dv
+
+            # 贡献风险 = 概率 * 后果
+            risk_contrib = p_ijm * c_ijm_final
+
+            # 将弧段风险贡献平均分配给弧段的两个端点作为区域风险暴露
+            # 这是一个常见的简化，将弧段风险转化为节点/区域风险
+            u_id = arc.start.node_id
+            v_id = arc.end.node_id
+
+            node_risk_map[u_id] = node_risk_map.get(u_id, 0.0) + risk_contrib / 2.0
+            node_risk_map[v_id] = node_risk_map.get(v_id, 0.0) + risk_contrib / 2.0
+
+        # 2. 收集枢纽风险贡献
+        for hub in path.transfer_hubs:
+            # 枢纽事故概率 p_k
+            p_k = hub.accident_prob
+            # 枢纽后果 c_k (动态后果)
+            c_base = evaluator.risk_model.get_consequence(hub)
+            c_k_final = c_base * dv
+
+            # 贡献风险 = 概率 * 后果
+            risk_contrib = p_k * c_k_final
+
+            node_risk_map[hub.node_id] = (
+                node_risk_map.get(hub.node_id, 0.0) + risk_contrib
+            )
+
+    return node_risk_map
+
+
+def _calculate_single_task_cost(path, evaluator: Evaluator):
     """
     [Helper] 重新计算单个任务的 Expected Cost 和 Carbon Cost
     """
     total_cost = 0.0
+    transport_cost = 0.0
+    transship_cost = 0.0
     carbon_cost = 0.0
     dv = path.task.demand
 
@@ -502,15 +299,17 @@ def _calculate_single_task_cost(path, evaluator: Evaluator) -> Tuple[float, floa
 
         C_m = evaluator.unit_transport_cost.get(mode, 0.0)
         E_m = evaluator.unit_carbon_cost.get(mode, 0.0)
-        P = evaluator.unit_penalty_cost
+        P = evaluator.unit_operation_cost
 
         # 时间期望 (调用 FuzzyMath)
         exp_time = FuzzyMath.triangular_expected_value(*arc.fuzzy_transport_time)
 
-        segment_cost = dv * ((C_m + E_m) * d_ij + P * exp_time)
-        segment_carbon = dv * (E_m * d_ij)
+        segment_transport = C_m * dv * d_ij + P * exp_time
+        segment_carbon = E_m * dv * d_ij
+        segment_cost = segment_transport + segment_carbon
 
         total_cost += segment_cost
+        transport_cost += segment_transport
         carbon_cost += segment_carbon
 
     # 2. 枢纽成本
@@ -520,10 +319,12 @@ def _calculate_single_task_cost(path, evaluator: Evaluator) -> Tuple[float, floa
 
         exp_time = FuzzyMath.trapezoidal_expected_value(*hub.fuzzy_transshipment_time)
 
-        hub_cost = dv * (B_k + I_k * exp_time)
+        hub_cost = B_k * dv + I_k * exp_time
+
+        transship_cost += hub_cost
         total_cost += hub_cost
 
-    return total_cost, carbon_cost
+    return total_cost, transport_cost, transship_cost, carbon_cost
 
 
 def _calculate_single_task_risk(path, evaluator: Evaluator) -> float:

@@ -9,13 +9,14 @@ from typing import Dict, List, Tuple
 from matplotlib.lines import Line2D
 from app.core.network import TransportNetwork
 from app.core.solution import Solution
+from app.utils.visual_style import ColorPalette, get_color_by_key
 
 HAS_CTX = True
 
 
 class NetworkVisualizer:
     """
-    [View Layer] 网络可视化器 (最终修正版)
+    [View Layer] 网络可视化器
     职责：负责将 Network 对象和 Solution 对象转换为 SVG 图像。
     特性：自动投影、动态曲线避让、严格的形状/线型区分、节点标签显示。
     """
@@ -24,19 +25,28 @@ class NetworkVisualizer:
         self.network = network
         self.raw_pos = self._extract_raw_positions()
 
-        # --- 统一视觉风格配置 ---
+        # Color set
+        self.default_colors: List[Dict] = ColorPalette.DEFAULT_COLOR
+        self.network_colors: List[Dict] = ColorPalette.NETWORK_TOPOLOGY
+        self.task_colors: List[str] = ColorPalette.TASK_LOOP
+
         self.styles = {
             "figure_size": (14, 12),
             "node": {
-                "hub": {"color": "#E74C3C", "shape": "^", "size": 500, "alpha": 1.0},
+                "hub": {
+                    "color": get_color_by_key(self.network_colors, "HUB"),
+                    "shape": "^",
+                    "size": 500,
+                    "alpha": 1.0,
+                },
                 "non-hub": {
-                    "color": "#3498DB",
+                    "color": get_color_by_key(self.network_colors, "NON_HUB"),
                     "shape": "o",
                     "size": 250,
                     "alpha": 1.0,
                 },
                 "emergency_overlay": {
-                    "edgecolor": "#F1C40F",
+                    "edgecolor": get_color_by_key(self.network_colors, "EMERGENCY"),
                     "linewidth": 2.5,
                     "linestyle": "--",
                     "facecolor": "none",
@@ -44,15 +54,24 @@ class NetworkVisualizer:
             },
             "edge": {
                 # Road 实线, Railway 点划线
-                "road": {"color": "#95A5A6", "width": 2.0, "style": "-", "alpha": 0.7},
+                "road": {
+                    "color": get_color_by_key(self.network_colors, "ROAD"),
+                    "width": 2.0,
+                    "style": "-",
+                    "alpha": 0.7,
+                },
                 "railway": {
-                    "color": "#2C3E50",
+                    "color": get_color_by_key(self.network_colors, "RAILWAY"),
                     "width": 2.5,
                     "style": "-.",
                     "alpha": 0.8,
                 },
             },
-            "font": {"size": 9, "color": "#2C3E50", "weight": "bold"},
+            "font": {
+                "size": 9,
+                "color": get_color_by_key(self.default_colors, "BLACK"),
+                "weight": "bold",
+            },
         }
 
     def visualize_topology(
@@ -60,7 +79,6 @@ class NetworkVisualizer:
         save_dir: str,
         filename: str = "network_topology.svg",
         add_basemap: bool = True,
-        title: str = "Network Topology",
     ):
         """
         [Topology] 绘制基础拓扑结构。
@@ -83,18 +101,61 @@ class NetworkVisualizer:
         # 3. 添加底图
         if use_projection:
             self._add_basemap(ax)
+            pass
 
         # 4. 图例与保存
         self._add_topology_legend(ax)
-        self._save_plot(save_dir, filename, title)
+        self._save_plot(save_dir, filename)
 
     def visualize_routes(
         self,
+        solutions_map: Dict[str, Solution],
+        save_dir: str,
+        prefix: str = "route",
+    ):
+        """
+        [Visualizer] 批量生成特殊解的路线地图 (SVG)
+        使用 visual_style.py 中的 TASK_CYCLE 为所有任务生成统一的配色。
+        Args:
+            solutions_map: 字典 {"Opinion A": sol_a, "Opinion B": sol_b, ...}
+            save_dir: 保存目录
+            prefix: 文件名前缀（默认 "route"）
+        """
+        import logging
+
+        logging.info("Generating multiple route maps for special solutions...")
+
+        # 使用 visual_style.py 中的统一颜色（支持无限任务循环）
+        task_colors: List = self.task_colors
+
+        # 步骤3：遍历每个特殊解，生成独立路线图
+        for label, sol in solutions_map.items():
+            if not sol:  # 跳过空解（防御性编程）
+                logging.warning(f"Skipping empty solution for {label}")
+                continue
+
+            # 生成安全文件名：替换空格为空下划线，避免文件系统问题
+            safe_label = label.replace(" ", "_").replace("/", "_")
+            filename = f"{prefix}_{safe_label}.svg"
+
+            # 调用已有方法绘制单张路线图
+            self._draw_routes(
+                solution=sol,
+                task_colors=task_colors,  # 传入统一配色
+                save_dir=save_dir,
+                filename=filename,
+            )
+
+            logging.info(f"Route map saved: {filename}")
+
+        logging.info("Multiple route maps generation completed. 🌟🚀")
+
+    def _draw_routes(
+        self,
         solution: Solution,
-        task_colors: Dict[str, str],
+        task_colors: List[str],
         save_dir: str,
         filename: str,
-        title: str,
     ):
         """
         [Routes] 绘制特定解的路线图 (带箭头、曲线、线型区分)。
@@ -110,7 +171,32 @@ class NetworkVisualizer:
         fig, ax = plt.subplots(figsize=self.styles["figure_size"])
 
         # 1. 绘制淡化的背景节点，作为空间参考
-        nx.draw_networkx_nodes(G_bg, plot_pos, ax=ax, node_size=100, node_color="#BDC3C7", alpha=0.3)
+        nx.draw_networkx_nodes(
+            G_bg,
+            plot_pos,
+            ax=ax,
+            node_size=100,
+            node_color=get_color_by_key(self.default_colors, "GRAY"),
+            alpha=0.1,
+        )
+
+        # --- 构建 task_id（固定颜色的映射字典）---
+
+        # 收集当前解中出现的所有 task_id
+        appeared_task_ids = set()
+        for path in solution.path_selections.values():
+            if path.task and path.task.task_id is not None:
+                appeared_task_ids.add(path.task.task_id)
+
+        # 排序 task_id，确保全局一致（相同ID永远同位置）
+        sorted_task_ids = sorted(appeared_task_ids)
+
+        # 使用传入的 task_colors循环分配
+        # 这样 Task 1（最小ID）永远是 task_colors[0]，Task 2 是 [1]，以此类推
+        task_id_to_color = {}
+        for idx, tid in enumerate(sorted_task_ids):
+            color = task_colors[idx % len(task_colors)]  # 安全循环
+            task_id_to_color[tid] = color
 
         # 2. 绘制前景 Task 路线 (核心逻辑)
         legend_handles = []
@@ -133,7 +219,7 @@ class NetworkVisualizer:
 
         # 逐条绘制
         for i, (u, v, task_id, mode) in enumerate(all_task_edges):
-            color = task_colors.get(task_id, "#333333")
+            color = task_id_to_color.get(task_id, task_colors[0])
             linestyle = (
                 self.styles["edge"]["road"]["style"]
                 if mode == "road"
@@ -166,17 +252,18 @@ class NetworkVisualizer:
 
         # 绘制节点标签
         self._draw_labels(G_bg, plot_pos, ax)
-        
+
         # 添加底图
         if use_projection:
             self._add_basemap(ax)
+            pass
 
         # 添加图例 (路线图专有)
         legend_handles.append(
             Line2D(
                 [0],
                 [0],
-                color="gray",
+                color=get_color_by_key(self.default_colors, "GRAY"),
                 lw=2,
                 linestyle=self.styles["edge"]["road"]["style"],
                 label="Road Path",
@@ -186,7 +273,7 @@ class NetworkVisualizer:
             Line2D(
                 [0],
                 [0],
-                color="gray",
+                color=get_color_by_key(self.default_colors, "GRAY"),
                 lw=2,
                 linestyle=self.styles["edge"]["railway"]["style"],
                 label="Rail Path",
@@ -200,7 +287,7 @@ class NetworkVisualizer:
             shadow=True,
             title="Legend",
         )
-        self._save_plot(save_dir, filename, title)
+        self._save_plot(save_dir, filename)
 
     # --- 核心逻辑：动态曲率计算器 ---
 
@@ -351,8 +438,8 @@ class NetworkVisualizer:
     def _add_basemap(self, ax):
         if HAS_CTX:
             try:
-                # CartoDB.Voyager 通常比 Positron 更清晰，适合做导航背景
-                ctx.add_basemap(ax, source=ctx.providers.CartoDB.Voyager)
+                # 浅灰白背景，不容易产生颜色混淆
+                ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron)
             except Exception:
                 pass
 
@@ -362,7 +449,7 @@ class NetworkVisualizer:
                 [0],
                 [0],
                 marker="^",
-                color="w",
+                color=get_color_by_key(self.default_colors, "WHITE"),
                 label="Hub",
                 markerfacecolor=self.styles["node"]["hub"]["color"],
                 markersize=12,
@@ -371,7 +458,7 @@ class NetworkVisualizer:
                 [0],
                 [0],
                 marker="o",
-                color="w",
+                color=get_color_by_key(self.default_colors, "WHITE"),
                 label="Non-Hub",
                 markerfacecolor=self.styles["node"]["non-hub"]["color"],
                 markersize=10,
@@ -380,7 +467,7 @@ class NetworkVisualizer:
                 [0],
                 [0],
                 marker="^",
-                color="w",
+                color=get_color_by_key(self.default_colors, "WHITE"),
                 label="Emergency Center",
                 markerfacecolor="none",
                 markeredgecolor=self.styles["node"]["emergency_overlay"]["edgecolor"],
@@ -413,9 +500,7 @@ class NetworkVisualizer:
             shadow=True,
         )
 
-    def _save_plot(self, save_dir, filename, title):
-        ax = plt.gca()
-        ax.set_title(title, fontsize=16, pad=20)
+    def _save_plot(self, save_dir, filename):
         plt.axis("off")
         plt.tight_layout()
         plt.savefig(os.path.join(save_dir, filename), format="svg", bbox_inches="tight")

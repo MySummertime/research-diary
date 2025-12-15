@@ -119,8 +119,12 @@ class PathFinder:
         for task in self.network.tasks:
             paths = self.find_paths_for_task(task)
             candidate_paths_map[task.task_id] = paths
+
+        # 正确统计所有路径的总数
+        total_paths_count = sum(len(paths) for paths in candidate_paths_map.values())
+
         logging.info(
-            f"路径搜索完成。共为 {len(self.network.tasks)} 个任务找到了候选路径。"
+            f"路径搜索完成。共为 {len(self.network.tasks)} 个任务找到了 {total_paths_count} 条候选路径。"
         )
         return candidate_paths_map
 

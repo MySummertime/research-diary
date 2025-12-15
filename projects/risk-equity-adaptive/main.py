@@ -16,6 +16,9 @@ def main():
         # 1. 初始化(自动设置日志、备份、加载数据、预计算)
         exp = Experiment(config_path="config.json")
 
+        # 获取预计算时间 (仅由基于 candidate pool 的算法累加)
+        t_pre = exp.precompute_time
+
         # 2. 运行
         # --- 算法开始 ---
         algo_process_start = time.process_time()
@@ -44,15 +47,20 @@ def main():
         logging.info("============================================")
         logging.info(f"实验总壁钟时间: {wall_end - wall_start:.3f} 秒")
 
-        if "algo_process_start" in locals():  # 确保算法真的跑过
+        if "algo_process_end" in locals():  # 确保算法真的跑完
             process_time = algo_process_end - algo_process_start
             wall_algo_time = algo_wall_end - algo_wall_start
+            logging.info(f"预计算candidate pool时间: {t_pre:.4f} 秒")
             logging.info(f"算法纯CPU时间: {process_time:.4f} 秒")
             logging.info(f"算法壁钟时间: {wall_algo_time:.3f} 秒（含IO、Gurobi回调等）")
-            logging.info(f"CPU利用率估算: {(process_time / wall_algo_time) * 100:5.1f}%")
+            logging.info(
+                f"CPU利用率估算: {(process_time / wall_algo_time) * 100:5.1f}%"
+            )
 
             if wall_algo_time > 0:
-                logging.info(f"I/O与系统开销占比: {100 * (1 - process_time/wall_algo_time):.1f}%")
+                logging.info(
+                    f"I/O与系统开销占比: {100 * (1 - process_time / wall_algo_time):.1f}%"
+                )
 
         if exp and exp.save_dir:
             logging.info(f"所有结果已保存至: {exp.save_dir}")

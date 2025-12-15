@@ -38,8 +38,8 @@ class NSGA2:
         self.archive_size = algo.get("archive_size", 100)
         self.max_gen = algo.get("max_generations", 200)
         self.cx_prob = algo.get("crossover_prob", 0.9)
-        self.mut_prob = algo.get("operators", {}).get("mutation_prob_path", 0.05)
-        self.mix_ratio = algo.get("operators", {}).get("mix_ratio", 0.5)
+        self.mut_prob = algo.get("mutation_prob_path", 0.05)
+        self.mix_ratio = algo.get("mix_ratio", 0.5)
 
         self.archive: List[Solution] = []
         self.op_log = {"crossover": 0, "mutation": 0}

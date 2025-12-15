@@ -34,24 +34,24 @@ class Evaluator:
         self.risk_model = DynamicRiskModel(network, self.risk_config)
 
         # --- 获取确定性成本参数 ---
-        
+
         # 1. 单位运输成本 C (yuan/t*km)
         self.unit_transport_cost = self.cost_config.get(
             "unit_transport_cost", {"road": 0.55, "railway": 0.12}
         )
         # 2. 单位碳排放成本 E (yuan/t*km)
         self.unit_carbon_cost = self.cost_config.get(
-            "unit_carbon_cost", {"road": 90, "railway": 70}
+            "unit_carbon_cost", {"road": 0.05, "railway": 0.01}
         )
-        # 3. 运输超时单位惩罚成本 P (yuan/t*h)
-        self.unit_penalty_cost = self.cost_config.get("unit_penalty_cost", 5)
+        # 3. 单位运营成本 P (yuan/h)
+        self.unit_operation_cost = self.cost_config.get("unit_operation_cost", 150)
         # 4. 枢纽单位转运成本 B_k (yuan/t)
         self.unit_transshipment_cost = self.cost_config.get(
             "unit_transshipment_cost", 8
         )
-        # 5. 枢纽单位设备成本 I_k (yuan/t*h)
+        # 5. 枢纽单位运营成本 I_k (yuan/h)
         self.unit_transshipment_infra_cost = self.cost_config.get(
-            "unit_transshipment_infra_cost", 200
+            "unit_transshipment_infra_cost", 100
         )
 
     # =========================================================================
@@ -68,12 +68,120 @@ class Evaluator:
 
         # 2. 计算目标函数 f1 (CVaR 风险)
         # 这个函数会计算并填充 solution.eta_values
-        solution.f1_risk = self._calculate_f1_cvar_risk(solution)
+        real_risk = self._calculate_f1_cvar_risk(solution)
+        solution.f1_risk = real_risk
+
+        scale = self.risk_config.get("risk_objective_scale", 1.0)
+        solution.f1_risk_scaled = real_risk * scale
 
         # 3. 检查所有约束 (容量 + 模糊成本预算)
         is_feasible, violation = self._check_constraints(solution)
         solution.is_feasible = is_feasible
         solution.constraint_violation = violation
+
+    def calculate_cost_breakdown(self, solution: Solution) -> Dict[str, float]:
+        """
+        [Helper] 计算成本构成的详细拆解 (用于绘图)
+        返回: {'transport': val, 'transshipment': val, 'carbon': val}
+        """
+        breakdown = {"transport": 0.0, "transshipment": 0.0, "carbon": 0.0}
+
+        for task_id, path in solution.path_selections.items():
+            if not path.task:
+                continue
+            dv = path.task.demand
+
+            # 1. 弧段成本
+            for arc in path.arcs:
+                mode = arc.mode
+                d_ij = arc.length
+                C_m = self.unit_transport_cost.get(mode, 0.0)
+                E_m = self.unit_carbon_cost.get(mode, 0.0)
+                P = self.unit_operation_cost
+                expected_time = FuzzyMath.triangular_expected_value(
+                    *arc.fuzzy_transport_time
+                )
+
+                # 使用动态缩放后的模糊时间
+                scaled_time = self._get_scaled_fuzzy(
+                    arc.fuzzy_transport_time, "triangular"
+                )
+                expected_time = FuzzyMath.triangular_expected_value(*scaled_time)
+
+                # 拆分
+                breakdown["transport"] += (C_m * dv * d_ij + P * expected_time)
+                breakdown["carbon"] += E_m * dv * d_ij
+
+            # 2. 枢纽成本
+            for hub in path.transfer_hubs:
+                B_k = self.unit_transshipment_cost
+                I_k = self.unit_transshipment_infra_cost
+                expected_trans_time = FuzzyMath.trapezoidal_expected_value(
+                    *hub.fuzzy_transshipment_time
+                )
+
+                # 使用动态缩放后的模糊时间
+                scaled_trans_time = self._get_scaled_fuzzy(
+                    hub.fuzzy_transshipment_time, "trapezoidal"
+                )
+                expected_trans_time = FuzzyMath.trapezoidal_expected_value(
+                    *scaled_trans_time
+                )
+
+                # 全部算作转运成本
+                breakdown["transshipment"] += (B_k * dv + I_k * expected_trans_time)
+
+        return breakdown
+
+    def calculate_expected_risk(self, solution: Solution) -> float:
+        """
+        [Helper] 计算期望风险 (即 alpha=0 时的 CVaR)
+        用于对比 CVaR 和 Expected Risk（绘图）
+        """
+        # 保存当前的配置
+        original_alpha = self.risk_config.get("cvar_alpha")
+        # 强制设为 0 计算期望值
+        self.risk_config["cvar_alpha"] = 0.0
+
+        # 计算
+        exp_risk = self._calculate_f1_cvar_risk(solution)
+
+        # 恢复
+        if original_alpha is not None:
+            self.risk_config["cvar_alpha"] = original_alpha
+        else:
+            self.risk_config.pop("cvar_alpha", None)
+
+        return exp_risk
+
+    # --- 核心辅助函数: 不确定性动态缩放 ---
+    def _get_scaled_fuzzy(self, fuzzy_val: Tuple, shape: str) -> Tuple:
+        """
+        根据全局配置中的 'uncertainty_multiplier' (delta) 缩放模糊数区间。
+        delta = 1.0 (Default): 保持原样
+        delta = 0.0: 退化为确定性值 (区间宽度为0)
+        delta > 1.0: 区间变宽 (环境恶化)
+        """
+        delta = self.config.get("uncertainty_multiplier", 1.0)
+
+        if delta == 1.0:
+            return fuzzy_val
+
+        if shape == "triangular":
+            # (a, b, c) -> 缩放左右边界 a, c，保持核心 b 不变
+            a, b, c = fuzzy_val
+            a_new = b - (b - a) * delta
+            c_new = b + (c - b) * delta
+            return (a_new, b, c_new)
+
+        elif shape == "trapezoidal":
+            # (a, b, c, d) -> 缩放外边界 a, d，保持核心区间 [b, c] 不变
+            a, b, c, d = fuzzy_val
+            a_new = b - (b - a) * delta
+            d_new = c + (d - c) * delta
+            return (a_new, b, c, d_new)
+
+        return fuzzy_val
 
     # =========================================================================
     # Objective Function 1: Risk (CVaR)
@@ -90,9 +198,14 @@ class Evaluator:
         5. 将 eta* 存回 solution.eta_values 以供日志记录。
         """
         total_risk = 0.0
-        alpha = self.risk_config.get("cvar_alpha", 0.95)
 
-        if alpha >= 1.0 or alpha <= 0.0:
+        # 重新从 self.config 中读取，防止 self.risk_config 引用失效
+        current_risk_config = self.config.get("risk_model_f1", {})
+        alpha = current_risk_config.get("cvar_alpha", 0.95)
+
+        # 允许 alpha = 0.0 (此时 CVaR = Expected Value)
+        # 只拦截 alpha >= 1.0 (除以零) 和 alpha < 0.0 (无意义)
+        if alpha >= 1.0 or alpha < 0.0:
             return float("inf")
 
         one_minus_alpha = 1.0 - alpha
@@ -123,9 +236,9 @@ class Evaluator:
             for hub in path.transfer_hubs:
                 p_k = hub.accident_prob
                 c_base = self.risk_model.get_consequence(hub)
-                
+
                 c_k = c_base
-                
+
                 if p_k > 0 and c_k > 0:
                     p_c_pairs.append((p_k, c_k))
 
@@ -135,6 +248,8 @@ class Evaluator:
                 optimal_eta_v = 0.0
                 task_cvar = 0.0
             else:
+                # 如果 alpha=0，则 optimal_eta_v=0 (因为 sum(p) << 1.0)
+                # task_cvar = sum(p*c) / 1.0 = Expected Risk
                 optimal_eta_v, task_cvar = self._calc_cvar_for_path(
                     p_c_pairs, alpha, one_minus_alpha
                 )
@@ -156,112 +271,47 @@ class Evaluator:
         CVaR(X) = VaR_alpha(X) + (1 / (1-alpha)) * E[ (X - VaR_alpha(X))^+ ]
         最优的 eta* 就是 VaR_alpha(X)。
         """
-
         # 步骤 1: 按后果 c 升序排序
         # (p, c) -> (c, p)
         sorted_c_p_pairs = sorted([(c, p) for p, c in p_c_pairs])
 
+        # 增加 epsilon 防止除零 (虽然 alpha 通常 < 1.0)
+        epsilon = 1e-9
+        safe_denominator = one_minus_alpha + epsilon
+
         # 步骤 2: 找到 VaR (最优的 eta)
         # 需要找到最小的 c_i，使得 "超过它的概率" <= (1 - alpha)
+        # 当 alpha=0 (one_minus_alpha=1) 时, CVaR = E[L] / 1 = E[L]
         total_prob = sum(p for c, p in sorted_c_p_pairs)
+
+        # [Case 1] 绝大多数情况: total_prob (e.g. 0.0001) < 1-alpha (e.g. 0.05)
+        # 这意味着 VaR_alpha = 0 (无事故状态)
         if total_prob <= one_minus_alpha:
-            # 极端情况：所有事故概率之和都小于 (1-alpha)
-            # 这意味着 VaR(alpha) 为 0 (因为 P(X > 0) <= 1-alpha)
-            optimal_eta_v = 0.0
-        else:
-            prob_sum = 0.0
-            optimal_eta_v = sorted_c_p_pairs[-1][0]  # 默认为最大后果
+            expected_loss = sum(p * c for c, p in sorted_c_p_pairs)
+            # 此时 CVaR 退化为: Expected_Risk / (1 - alpha)
+            # 使用 safe_denominator 确保稳定性
+            return 0.0, expected_loss / safe_denominator
 
-            for i in range(len(sorted_c_p_pairs)):
-                c_i, p_i = sorted_c_p_pairs[i]
+        # [Case 2] (极少见) 事故概率总和非常高，或者 alpha 极其接近 1.0
+        prob_sum = 0.0
+        opt_eta = sorted_c_p_pairs[-1][0]
+        for c, p in sorted_c_p_pairs:
+            prob_sum += p
+            if total_prob - prob_sum <= one_minus_alpha:
+                opt_eta = c
+                break
 
-                # prob_sum 是 P(X <= c_i)
-                prob_sum += p_i
-
-                # P(X > c_i) = total_prob - prob_sum
-                prob_exceeding = total_prob - prob_sum
-
-                if prob_exceeding <= one_minus_alpha:
-                    # 找到的 c_i 就是第一个满足条件的 VaR(alpha)
-                    optimal_eta_v = c_i
-                    break
-
-        # 步骤 3: 计算 CVaR
-        # CVaR = eta* + (1 / (1-alpha)) * E[ (X - eta*)^+ ]
-        # E[ (X - eta*)^+ ] = Σ p_i * max(0, c_i - eta*)
-
-        expected_loss_over_eta = 0.0
-        for p_i, c_i in p_c_pairs:
-            loss = max(0.0, c_i - optimal_eta_v)
-            expected_loss_over_eta += p_i * loss
-
-        task_cvar = optimal_eta_v + (expected_loss_over_eta / one_minus_alpha)
-
-        return optimal_eta_v, task_cvar
+        # CVaR Formula
+        loss_sum = sum(p * max(0.0, c - opt_eta) for c, p in sorted_c_p_pairs)
+        return opt_eta, opt_eta + loss_sum / one_minus_alpha
 
     # =========================================================================
     # Objective Function 2: Cost (Expected Value)
     # =========================================================================z
 
     def _calculate_f2_expected_cost(self, solution: Solution) -> float:
-        """
-        计算 f2：总期望成本：
-        1. 运输段: C_m * d_ij + P * E[t_ij]
-        2. 碳排放: E_m * d_ij
-        3. 枢纽段: B_k + I_k * E[s_k]
-        """
-        total_cost: float = 0.0
-
-        for task_id, path in solution.path_selections.items():
-            if not path.task:
-                continue
-
-            # d^v: 任务运量
-            dv = path.task.demand
-
-            # --- Part 1 & 2: 弧段成本 (运输 + 惩罚 + 碳排放) ---
-            for arc in path.arcs:
-                mode = arc.mode  # 'road' or 'railway'
-                d_ij = arc.length
-
-                # 获取该模式的参数
-                C_m = self.unit_transport_cost.get(mode, 0.0)
-                E_m = self.unit_carbon_cost.get(mode, 0.0)
-                P = self.unit_penalty_cost
-
-                # 计算时间的期望值 E[t_ij]
-                expected_time = FuzzyMath.triangular_expected_value(
-                    *arc.fuzzy_transport_time
-                )
-
-                # 1. 纯运输成本 (运费 + 时间惩罚)
-                # Formula: d^v * (C_m * d_ij + P * E[t])
-                transport_cost = dv * (C_m * d_ij + P * expected_time)
-
-                # 2. 碳排放成本
-                # Formula: d^v * (E_m * d_ij)
-                carbon_cost = dv * (E_m * d_ij)
-
-                # 3. 该路段总成本
-                segment_cost = transport_cost + carbon_cost
-                total_cost += segment_cost
-
-            # --- Part 3: 枢纽成本 (转运 + 设备占用) ---
-            for hub in path.transfer_hubs:
-                # 获取枢纽参数
-                B_k = self.unit_transshipment_cost
-                I_k = self.unit_transshipment_infra_cost
-
-                # 计算转运时间的期望值 E[s_k]
-                expected_trans_time = FuzzyMath.trapezoidal_expected_value(
-                    *hub.fuzzy_transshipment_time
-                )
-
-                # 累计成本: d^v * (B_k + I_k * E[s_k])
-                hub_cost = dv * (B_k + I_k * expected_trans_time)
-                total_cost += hub_cost
-
-        return total_cost
+        bd = self.calculate_cost_breakdown(solution)
+        return bd["transport"] + bd["transshipment"] + bd["carbon"]
 
     # =========================================================================
     # Constraints Checking (约束检查)
@@ -272,97 +322,64 @@ class Evaluator:
         检查 1) 容量约束 和 2) 模糊成本约束。
         从 self.cost_config 读取参数。
         返回: (is_feasible, constraint_violation)
+
+        - 弧段 (Arc) 约束：检单车运量是否超过限重
+          物理含义：路面/桥梁的承重限制。
+        - 枢纽 (Hub) 约束：保持总流量累加，检查是否超过枢纽容量。
+          物理含义：中转站的吞吐/仓储能力限制。
         """
         total_violation = 0.0
 
-        # --- 1. 容量约束 (Arc & Node) ---
-        arc_flow: Dict[Tuple[str, str], float] = {}
-        node_flow: Dict[str, float] = {}
-
+        # 1. Arc Flow Accumulation (Only single task violation)
         for task_id, path in solution.path_selections.items():
             if not path.task:
                 continue
             demand = path.task.demand
-
-            # 累加弧段流量
             for arc in path.arcs:
-                arc_key = (arc.start.node_id, arc.end.node_id)
-                arc_flow[arc_key] = arc_flow.get(arc_key, 0.0) + demand
+                if demand > arc.capacity:
+                    violation = (demand - arc.capacity) / arc.capacity
+                    total_violation += violation
 
-            # 累加枢纽流量
+        # 2. Hub Capacity (Accumulated)
+        node_flow = {}
+        for path in solution.path_selections.values():
+            demand = path.task.demand
             for hub in path.transfer_hubs:
                 node_flow[hub.node_id] = node_flow.get(hub.node_id, 0.0) + demand
 
-        # 检查弧段容量
-        for (u_id, v_id), flow in arc_flow.items():
-            # 使用 public method get_arc(u, v) 而非私有属性访问
-            arc = self.network.get_arc(u_id, v_id)
-            
-            if arc and flow > arc.capacity:
-                violation = (
-                    (flow - arc.capacity) / arc.capacity if arc.capacity > 0 else flow
-                )
-                total_violation += violation
-
-        # 检查枢纽容量
-        for node_id, flow in node_flow.items():
-            # 使用 public method get_node(id) 而非私有属性访问
-            node = self.network.get_node(node_id)
-            
+        for nid, flow in node_flow.items():
+            node = self.network.get_node(nid)
             if node and flow > node.capacity:
-                violation = (
-                    (flow - node.capacity) / node.capacity
-                    if node.capacity > 0
-                    else flow
-                )
-                total_violation += violation
+                total_violation += (flow - node.capacity) / node.capacity
 
-        # --- 2. 模糊成本可靠性约束 (Chance Constraint) ---
-        # Cr{Cost <= Budget} >= alpha_c  <==>  Pessimistic_Value <= Budget
+        # 3. Fuzzy Cost
         pessimistic_cost = 0.0
-        alpha_c = self.cost_config.get("fuzzy_cost_alpha_c", 0.90)
-        bgt = self.cost_config.get("fuzzy_cost_budget", 5000000)
+        alpha_c = self.cost_config.get("fuzzy_cost_alpha_c", 0.999990)
+        bgt = self.cost_config.get("fuzzy_cost_budget", 1e12)
 
         for task_id, path in solution.path_selections.items():
-            if not path.task:
-                continue
             dv = path.task.demand
-
-            # 1. 弧段部分 (使用悲观时间)
             for arc in path.arcs:
                 mode = arc.mode
                 d_ij = arc.length
                 C_m = self.unit_transport_cost.get(mode, 0.0)
                 E_m = self.unit_carbon_cost.get(mode, 0.0)
-                P = self.unit_penalty_cost
-
-                # 计算 t_ij 的 α-悲观值
+                P = self.unit_operation_cost
                 pess_time = FuzzyMath.triangular_pessimistic_value(
                     *arc.fuzzy_transport_time, alpha_c
                 )
-
-                # 公式同 f2，但时间换成 pess_time
                 pessimistic_cost += dv * ((C_m + E_m) * d_ij + P * pess_time)
-
-            # 2. 枢纽部分 (使用悲观时间)
             for hub in path.transfer_hubs:
                 B_k = self.unit_transshipment_cost
                 I_k = self.unit_transshipment_infra_cost
-
-                # 计算 s_k 的 α-悲观值
                 pess_trans_time = FuzzyMath.trapezoidal_pessimistic_value(
                     *hub.fuzzy_transshipment_time, alpha_c
                 )
-
-                # 公式同 f2
                 pessimistic_cost += dv * (B_k + I_k * pess_trans_time)
 
-        # 检查是否超支
-        if pessimistic_cost > bgt:
-            cost_violation = (
-                (pessimistic_cost - bgt) / bgt if bgt > 0 else pessimistic_cost
-            )
-            total_violation += cost_violation
+        solution.pessimistic_cost = pessimistic_cost
 
-        is_feasible = total_violation == 0.0
-        return is_feasible, total_violation
+        if pessimistic_cost > bgt:
+            total_violation += (pessimistic_cost - bgt) / bgt
+
+        return total_violation == 0.0, total_violation
