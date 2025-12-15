@@ -10,6 +10,9 @@ from app.core.solution import Solution
 
 
 class MOEAUtils:
+
+    OPTIMIZATION_OBJECTIVES = ["f1_risk_scaled", "f2_cost"]
+
     @staticmethod
     def fast_non_dominated_sort(population: List[Solution]) -> List[List[Solution]]:
         """
@@ -21,7 +24,7 @@ class MOEAUtils:
         for s in population:
             # Key: (Risk, Cost, Violation)
             key = (
-                round(s.f1_risk, 6),
+                round(s.f1_risk_scaled, 6),
                 round(s.f2_cost, 6),
                 round(s.constraint_violation, 6),
             )
@@ -97,7 +100,7 @@ class MOEAUtils:
             return
 
         # 对每个目标函数进行计算
-        for attr in ["f1_risk", "f2_cost"]:
+        for attr in MOEAUtils.OPTIMIZATION_OBJECTIVES:
             # 按该目标值排序
             feasible_sols.sort(key=lambda s: getattr(s, attr))
 
@@ -133,7 +136,7 @@ class MOEAUtils:
         else:
             # 标准 Pareto 支配
             better_in_any = False
-            for attr in ["f1_risk", "f2_cost"]:
+            for attr in MOEAUtils.OPTIMIZATION_OBJECTIVES:
                 val_p = getattr(p, attr)
                 val_q = getattr(q, attr)
                 if val_p > val_q:

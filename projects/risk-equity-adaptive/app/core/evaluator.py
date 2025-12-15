@@ -43,15 +43,15 @@ class Evaluator:
         self.unit_carbon_cost = self.cost_config.get(
             "unit_carbon_cost", {"road": 0.05, "railway": 0.01}
         )
-        # 3. 运输超时单位惩罚成本 P (yuan/t*h)
-        self.unit_penalty_cost = self.cost_config.get("unit_penalty_cost", 1)
+        # 3. 单位运营成本 P (yuan/h)
+        self.unit_operation_cost = self.cost_config.get("unit_operation_cost", 150)
         # 4. 枢纽单位转运成本 B_k (yuan/t)
         self.unit_transshipment_cost = self.cost_config.get(
             "unit_transshipment_cost", 8
         )
-        # 5. 枢纽单位设备成本 I_k (yuan/t*h)
+        # 5. 枢纽单位运营成本 I_k (yuan/h)
         self.unit_transshipment_infra_cost = self.cost_config.get(
-            "unit_transshipment_infra_cost", 2
+            "unit_transshipment_infra_cost", 100
         )
 
     # =========================================================================
@@ -68,7 +68,11 @@ class Evaluator:
 
         # 2. 计算目标函数 f1 (CVaR 风险)
         # 这个函数会计算并填充 solution.eta_values
-        solution.f1_risk = self._calculate_f1_cvar_risk(solution)
+        real_risk = self._calculate_f1_cvar_risk(solution)
+        solution.f1_risk = real_risk
+
+        scale = self.risk_config.get("risk_objective_scale", 1.0)
+        solution.f1_risk_scaled = real_risk * scale
 
         # 3. 检查所有约束 (容量 + 模糊成本预算)
         is_feasible, violation = self._check_constraints(solution)
@@ -93,7 +97,7 @@ class Evaluator:
                 d_ij = arc.length
                 C_m = self.unit_transport_cost.get(mode, 0.0)
                 E_m = self.unit_carbon_cost.get(mode, 0.0)
-                P = self.unit_penalty_cost
+                P = self.unit_operation_cost
                 expected_time = FuzzyMath.triangular_expected_value(
                     *arc.fuzzy_transport_time
                 )
@@ -105,8 +109,8 @@ class Evaluator:
                 expected_time = FuzzyMath.triangular_expected_value(*scaled_time)
 
                 # 拆分
-                breakdown["transport"] += dv * (C_m * d_ij + P * expected_time)
-                breakdown["carbon"] += dv * (E_m * d_ij)
+                breakdown["transport"] += (C_m * dv * d_ij + P * expected_time)
+                breakdown["carbon"] += E_m * dv * d_ij
 
             # 2. 枢纽成本
             for hub in path.transfer_hubs:
@@ -125,7 +129,7 @@ class Evaluator:
                 )
 
                 # 全部算作转运成本
-                breakdown["transshipment"] += dv * (B_k + I_k * expected_trans_time)
+                breakdown["transshipment"] += (B_k * dv + I_k * expected_trans_time)
 
         return breakdown
 
@@ -267,7 +271,6 @@ class Evaluator:
         CVaR(X) = VaR_alpha(X) + (1 / (1-alpha)) * E[ (X - VaR_alpha(X))^+ ]
         最优的 eta* 就是 VaR_alpha(X)。
         """
-
         # 步骤 1: 按后果 c 升序排序
         # (p, c) -> (c, p)
         sorted_c_p_pairs = sorted([(c, p) for p, c in p_c_pairs])
@@ -351,8 +354,8 @@ class Evaluator:
 
         # 3. Fuzzy Cost
         pessimistic_cost = 0.0
-        alpha_c = self.cost_config.get("fuzzy_cost_alpha_c", 0.90)
-        bgt = self.cost_config.get("fuzzy_cost_budget", 5000000)
+        alpha_c = self.cost_config.get("fuzzy_cost_alpha_c", 0.999990)
+        bgt = self.cost_config.get("fuzzy_cost_budget", 1e12)
 
         for task_id, path in solution.path_selections.items():
             dv = path.task.demand
@@ -361,7 +364,7 @@ class Evaluator:
                 d_ij = arc.length
                 C_m = self.unit_transport_cost.get(mode, 0.0)
                 E_m = self.unit_carbon_cost.get(mode, 0.0)
-                P = self.unit_penalty_cost
+                P = self.unit_operation_cost
                 pess_time = FuzzyMath.triangular_pessimistic_value(
                     *arc.fuzzy_transport_time, alpha_c
                 )
@@ -373,6 +376,8 @@ class Evaluator:
                     *hub.fuzzy_transshipment_time, alpha_c
                 )
                 pessimistic_cost += dv * (B_k + I_k * pess_trans_time)
+
+        solution.pessimistic_cost = pessimistic_cost
 
         if pessimistic_cost > bgt:
             total_violation += (pessimistic_cost - bgt) / bgt

@@ -9,7 +9,6 @@
 """
 
 import os
-import numpy as np
 import logging
 from app.experiment_manager import Experiment
 from app.core.evaluator import Evaluator
@@ -28,13 +27,13 @@ def main():
     # 2. Run Experiments
 
     # Risk Aversion
-    perform_extreme_aversion_analysis(exp, sensitivity_dir)
+    # perform_extreme_aversion_analysis(exp, sensitivity_dir)
 
     # Reliability
     # perform_reliability_sensitivity(exp, sensitivity_dir)
 
     # Uncertainty
-    # perform_uncertainty_sensitivity(exp, sensitivity_dir)
+    perform_uncertain_response_time_sensitivity(exp, sensitivity_dir)
 
 
 def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
@@ -43,8 +42,8 @@ def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
     """
     logging.info(">>> Starting Experiment: Extreme Risk Aversion Analysis...")
 
-    # 极高精度的 Alpha 区间
-    alphas = np.linspace(0.999977, 0.999989, 5)
+    # 适宜精度的 Alpha 区间
+    alphas = [0.99945, 0.99948, 0.99951, 0.99954, 0.99957]
 
     pareto_fronts = {}
     cost_breakdown = {"transport": [], "transshipment": [], "carbon": []}
@@ -53,12 +52,12 @@ def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
 
     # 确保获取正确的配置 Key
     target_key = "risk_model_f1"
-    original_alpha = exp.config.get(target_key, {}).get("cvar_alpha", 0.95)
+    original_alpha = exp.config.get(target_key, {}).get("cvar_alpha", 0.99945)
 
     for alpha in alphas:
         alpha_val = float(alpha)
         # 格式化 label，保留足够的小数位
-        label_str = f"{alpha_val:.6f}"
+        label_str = f"{alpha_val:.5f}"
         logging.info(f"   Running for alpha = {label_str}")
 
         # 1. 动态修改配置
@@ -84,15 +83,15 @@ def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
             pareto_fronts[label_str] = feasible
 
             # B. 提取最安全的解
-            best_risk_sol = min(feasible, key=lambda s: s.f1_risk)
+            max_cost_sol = min(feasible, key=lambda s: s.f1_risk)
 
             # C. 计算成本构成
-            bd = exp.evaluator.calculate_cost_breakdown(best_risk_sol)
+            bd = exp.evaluator.calculate_cost_breakdown(max_cost_sol)
             cost_breakdown["transport"].append(bd["transport"])
             cost_breakdown["transshipment"].append(bd["transshipment"])
             cost_breakdown["carbon"].append(bd["carbon"])
 
-            min_risks.append(best_risk_sol.f1_risk)
+            min_risks.append(max_cost_sol.f1_risk)
             x_labels.append(label_str)
         else:
             logging.warning(f"No feasible solution found for alpha={alpha_val}")
@@ -120,24 +119,21 @@ def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
 def perform_reliability_sensitivity(exp: Experiment, save_dir: str):
     logging.info(">>> Starting Experiment: Reliability (Budget Confidence)...")
 
-    # 1. Warm-up: Determine Optimal Cost (C_opt)
-    # Using Loose Budget & Default Alpha
-    logging.info("   Finding C_opt with loose budget...")
-
-    # Backup
-    orig_bgt = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_budget", 1e9)
+    # Backup and set FIXED params
+    orig_bgt = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_budget", 1e12)
     orig_alpha_c = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_alpha_c", 0.9)
-    orig_cvar_alpha = exp.config.get("risk_model_f1", {}).get("cvar_alpha", 0.95)
+    orig_cvar_alpha = exp.config.get("risk_model_f1", {}).get("cvar_alpha", 0.99945)
 
-    # Set CVaR alpha to 0.999980 (Fixed)
+    # --- 1. Warm-up: 寻找 Min Expected Cost 解的悲观成本 ---
+
+    # 锁定 CVaR alpha (固定高风险厌恶度)
     if "risk_model_f1" not in exp.config:
         exp.config["risk_model_f1"] = {}
-    exp.config["risk_model_f1"]["cvar_alpha"] = 0.999980
+    exp.config["risk_model_f1"]["cvar_alpha"] = 0.99945
 
-    # Run with loose budget
-    if "cost_model_f2" not in exp.config:
-        exp.config["cost_model_f2"] = {}
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = 1e9  # Huge budget
+    # Warm-up 条件: 假设 alpha_c = 0.9, Delta = 1.0 (标准), 预算巨大
+    exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = 0.9  # 固定 Warm-up 时的 alpha_c
+    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = 1e12  # Huge budget
 
     exp.evaluator = Evaluator(exp.network, exp.config)
     exp.algorithm = NSGA2(
@@ -145,31 +141,43 @@ def perform_reliability_sensitivity(exp: Experiment, save_dir: str):
     )
 
     pop = exp.algorithm.run(callbacks=[], initial_population=None)
-    feasible = [s for s in pop if s.is_feasible]
+    # 聚焦 Rank 0 上的可行解
+    feasible_rank0 = [s for s in pop if s.is_feasible and s.rank == 0]
 
-    if not feasible:
-        logging.error(
-            "Warm-up failed: No feasible solution found even with loose budget."
-        )
+    if not feasible_rank0:
+        logging.error("Warm-up failed: No Rank 0 solution found.")
+        # 恢复配置
+        exp.config["cost_model_f2"]["fuzzy_cost_budget"] = orig_bgt
+        exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = orig_alpha_c
+        exp.config["risk_model_f1"]["cvar_alpha"] = orig_cvar_alpha
         return
 
-    c_opt = min(s.f2_cost for s in feasible)
-    logging.info(f"   Found C_opt = {c_opt:.2f}")
+    # 1. 找到 Min Expected Cost 的解 S_opt (Rank 0 上最便宜的)
+    min_cost_sol = min(feasible_rank0, key=lambda s: s.f2_cost)
 
-    # 2. Set Tight Budget
-    tight_budget = c_opt * 1.1
-    logging.info(f"   Setting Tight Budget = {tight_budget:.2f}")
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = tight_budget
+    # 2. 获取该解在 alpha_c=0.9 时的悲观成本 C_Pess_Star
+    C_Pess_Star = min_cost_sol.pessimistic_cost  # 直接读取 Evaluator 填充的值
 
-    # 3. Iterate alpha_c
-    alpha_cs = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99]
-    min_costs = []
-    min_risks = []
+    # 3. 设置 Tight Budget (冗余系数 epsilon = 1.05)
+    epsilon = 0.05
+    TIGHT_BUDGET = C_Pess_Star * (1.0 + epsilon)
+
+    logging.info(f"   Min Expected Cost (C_opt) = {min_cost_sol.f2_cost:.2f}")
+    logging.info(f"   Calculated Pessimistic Cost (alpha_c=0.9) = {C_Pess_Star:.2f}")
+    logging.info(f"   Setting TIGHT BUDGET = {TIGHT_BUDGET:.2f}")
+
+    # --- 2. Iterate alpha_c ---
+    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = TIGHT_BUDGET  # 启用紧预算
+
+    # 迭代 alpha_c
+    alpha_cs = [0.5, 0.6, 0.7, 0.8, 0.9]
+    costs = []
+    risks = []
 
     for ac in alpha_cs:
         logging.info(f"   Running for alpha_c = {ac}")
-        exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = ac
 
+        exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = ac  # 动态修改 alpha_c
         exp.evaluator = Evaluator(exp.network, exp.config)
         exp.algorithm = NSGA2(
             exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
@@ -179,14 +187,15 @@ def perform_reliability_sensitivity(exp: Experiment, save_dir: str):
         feasible = [s for s in pop if s.is_feasible and s.rank == 0]
 
         if feasible:
-            # Focus on Min Expected Cost (since we are testing cost reliability)
+            # 聚焦 Min Expected Cost (f2)
             best_cost_sol = min(feasible, key=lambda s: s.f2_cost)
-            min_costs.append(best_cost_sol.f2_cost)
-            min_risks.append(best_cost_sol.f1_risk)
+            costs.append(best_cost_sol.f2_cost)
+            risks.append(best_cost_sol.f1_risk)
         else:
+            # 预测：在 alpha_c > 某个数 时，可能找不到可行解
             logging.warning(f"   Infeasible for alpha_c={ac}")
-            min_costs.append(None)
-            min_risks.append(None)
+            costs.append(None)
+            risks.append(None)
 
     # Restore
     exp.config["cost_model_f2"]["fuzzy_cost_budget"] = orig_bgt
@@ -197,67 +206,125 @@ def perform_reliability_sensitivity(exp: Experiment, save_dir: str):
     plotter = SensitivityPlotter(save_dir)
     plotter.plot_dual_line_chart(
         alpha_cs,
-        min_costs,
-        min_risks,
+        costs,
+        risks,
         r"Budget Confidence Level $\alpha_c$",
         "Figure_Reliability_Sensitivity.svg",
         x_ticks=alpha_cs,
     )
 
 
-# --- Uncertainty Sensitivity ---
-def perform_uncertainty_sensitivity(exp: Experiment, save_dir: str):
-    logging.info(">>> Starting Experiment: Uncertainty Level (Delta)...")
+def perform_uncertain_response_time_sensitivity(
+    exp: Experiment, save_dir: str, mode: str = "2D_grid"
+):
+    logging.info(
+        ">>> Starting Experiment: Emergency Response Uncertainty Sensitivity Analysis... 🎯"
+    )
 
-    # 1. Warm-up for Budget (using Medium Budget)
-    # Re-using C_opt logic or just use config default if calibrated.
-    # Let's recalibrate to be safe.
-    logging.info("   Calibrating Budget for Uncertainty test...")
-
-    # Backup
-    orig_bgt = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_budget", 1e9)
+    # Backup original params
+    orig_bgt = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_budget", 1e12)
     orig_alpha_c = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_alpha_c", 0.9)
-    orig_cvar_alpha = exp.config.get("risk_model_f1", {}).get("cvar_alpha", 0.95)
-    orig_delta = exp.config.get("uncertainty_multiplier", 1.0)
+    orig_cvar_alpha = exp.config.get("risk_model_f1", {}).get("cvar_alpha", 0.99945)
+    orig_a_multi = exp.config.get("risk_model_f1", {}).get(
+        "emergency_a_multiplier", 0.0
+    )
+    orig_c_multi = exp.config.get("risk_model_f1", {}).get(
+        "emergency_c_multiplier", 0.0
+    )
 
-    # Fixed params
+    def restore_config(
+        exp: Experiment,
+        orig_bgt,
+        orig_alpha_c,
+        orig_cvar_alpha,
+        orig_opt,
+        orig_pes,
+    ):
+        """恢复实验前配置"""
+        exp.config["cost_model_f2"]["fuzzy_cost_budget"] = orig_bgt
+        exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = orig_alpha_c
+        exp.config["risk_model_f1"]["cvar_alpha"] = orig_cvar_alpha
+        exp.config["risk_model_f1"]["emergency_a_multiplier"] = orig_opt
+        exp.config["risk_model_f1"]["emergency_c_multiplier"] = orig_pes
+
+    # 固定参数设置，确保实验可控
     if "risk_model_f1" not in exp.config:
         exp.config["risk_model_f1"] = {}
-    exp.config["risk_model_f1"]["cvar_alpha"] = 0.999980
+    exp.config["risk_model_f1"]["cvar_alpha"] = 0.999945  # 高风险厌恶
+
     if "cost_model_f2" not in exp.config:
         exp.config["cost_model_f2"] = {}
     exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = 0.9
 
-    # Find C_opt with Delta=1.0 and Loose Budget
-    exp.config["uncertainty_multiplier"] = 1.0
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = 1e9
+    # --- 1. Warm-up: 在基准不确定性下找 Tight Budget ---
+    logging.info(
+        " Calibrating Tight Budget under baseline emergency uncertainty (δ_a=0.0, δ_c=0.0)..."
+    )
+    exp.config["risk_model_f1"]["emergency_a_multiplier"] = 0.0
+    exp.config["risk_model_f1"]["emergency_c_multiplier"] = 0.0
+    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = 1e12  # 松预算
 
     exp.evaluator = Evaluator(exp.network, exp.config)
     exp.algorithm = NSGA2(
         exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
     )
-
     pop = exp.algorithm.run(callbacks=[], initial_population=None)
-    feasible = [s for s in pop if s.is_feasible]
 
-    if not feasible:
-        logging.error("Warm-up failed.")
+    feasible_rank0 = [s for s in pop if s.is_feasible and s.rank == 0]
+    if not feasible_rank0:
+        logging.error("Warm-up failed: no feasible solutions.")
+        restore_config(
+            exp,
+            orig_bgt,
+            orig_alpha_c,
+            orig_cvar_alpha,
+            orig_a_multi,
+            orig_c_multi,
+        )
         return
 
-    c_opt = min(s.f2_cost for s in feasible)
-    # Medium Budget = 1.2 * C_opt
-    medium_budget = c_opt * 1.2
-    logging.info(f"   C_opt={c_opt:.2f}, Setting Medium Budget={medium_budget:.2f}")
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = medium_budget
+    min_cost_sol = min(feasible_rank0, key=lambda s: s.f2_cost)
+    C_Pess_Star = min_cost_sol.pessimistic_cost
 
-    # 2. Iterate Delta
-    deltas = [0.0, 0.5, 1.0, 1.5, 2.0]
-    min_costs = []
-    min_risks = []
+    # 设置 Tight Budget (冗余系数 epsilon = 1.05)
+    epsilon = 0.05
+    TIGHT_BUDGET = C_Pess_Star * (1.0 + epsilon)
+    logging.info(
+        f" Baseline Pessimistic Cost = {C_Pess_Star:.2f} → Tight Budget = {TIGHT_BUDGET:.2f} 💰"
+    )
 
-    for d in deltas:
-        logging.info(f"   Running for delta = {d}")
-        exp.config["uncertainty_multiplier"] = d
+    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = TIGHT_BUDGET
+
+    # --- 2. 选定非对称场景（用于双线图）---
+    selected_scenarios = [
+        (0.0, 0.0),  # 确定性响应
+        (0.5, 1.5),  # 乐观小，悲观大（现实拥堵场景）
+        (1.0, 1.0),  # 对称标准
+        (1.0, 2.0),  # 悲观侧更不确定
+        (0.5, 2.5),  # 极端非对称
+        (1.5, 0.5),  # 反过来：乐观侧更不确定（少见但可讨论）
+    ]
+
+    scenario_labels = [f"a={a:.1f},c={c:.1f}" for a, c in selected_scenarios]
+    scenario_costs = []
+    scenario_risks = []
+
+    # --- 3. 完整二维网格（用于热力图）---
+    delta_a_values = [0.0, 0.5, 1.0, 1.5, 2.0]
+    delta_c_values = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
+    cost_grid = [[None] * len(delta_c_values) for _ in delta_a_values]
+    risk_grid = [[None] * len(delta_c_values) for _ in delta_a_values]
+
+    total = len(delta_a_values) * len(delta_c_values) + len(selected_scenarios)
+    current = 0
+
+    # 先跑选定的非对称场景（同时填网格）
+    for da, dc in selected_scenarios:
+        current += 1
+        logging.info(f" Scenario {current}/{total} | δ_a={da:.1f}, δ_c={dc:.1f}")
+
+        exp.config["risk_model_f1"]["emergency_a_multiplier"] = da
+        exp.config["risk_model_f1"]["emergency_c_multiplier"] = dc
 
         exp.evaluator = Evaluator(exp.network, exp.config)
         exp.algorithm = NSGA2(
@@ -268,32 +335,80 @@ def perform_uncertainty_sensitivity(exp: Experiment, save_dir: str):
         feasible = [s for s in pop if s.is_feasible and s.rank == 0]
 
         if feasible:
-            # When uncertainty increases, costs usually go up.
-            # We track the cheapest feasible option to see if we are forced to switch.
-            best_cost_sol = min(feasible, key=lambda s: s.f2_cost)
-            min_costs.append(best_cost_sol.f2_cost)
-            min_risks.append(best_cost_sol.f1_risk)
+            best = min(feasible, key=lambda s: s.f2_cost)
+            cost = best.f2_cost
+            risk = best.f1_risk
+            scenario_costs.append(cost)
+            scenario_risks.append(risk)
+
+            # 如果这个点在网格里，也填上
+            if da in delta_a_values and dc in delta_c_values:
+                i = delta_a_values.index(da)
+                j = delta_c_values.index(dc)
+                cost_grid[i][j] = cost
+                risk_grid[i][j] = risk
         else:
-            logging.warning(f"   Infeasible for delta={d}")
-            min_costs.append(None)
-            min_risks.append(None)
+            scenario_costs.append(None)
+            scenario_risks.append(None)
 
-    # Restore
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = orig_bgt
-    exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = orig_alpha_c
-    exp.config["risk_model_f1"]["cvar_alpha"] = orig_cvar_alpha
-    exp.config["uncertainty_multiplier"] = orig_delta
+    # 再补全整个网格
+    for i, da in enumerate(delta_a_values):
+        for j, dc in enumerate(delta_c_values):
+            if cost_grid[i][j] is not None:  # 已算过，跳过
+                continue
+            current += 1
+            logging.info(f" Grid {current}/{total} | δ_a={da:.1f}, δ_c={dc:.1f}")
 
-    # Plot
+            exp.config["risk_model_f1"]["emergency_a_multiplier"] = da
+            exp.config["risk_model_f1"]["emergency_c_multiplier"] = dc
+            exp.evaluator = Evaluator(exp.network, exp.config)
+            exp.algorithm = NSGA2(
+                exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
+            )
+            pop = exp.algorithm.run(callbacks=[], initial_population=None)
+            feasible = [s for s in pop if s.is_feasible and s.rank == 0]
+
+            if feasible:
+                best = min(feasible, key=lambda s: s.f2_cost)
+                cost_grid[i][j] = best.f2_cost
+                risk_val = best.f1_risk
+                risk_grid[i][j] = risk_val
+            # else: remain None
+
+    # --- 4. 可视化 ---
     plotter = SensitivityPlotter(save_dir)
-    plotter.plot_dual_line_chart(
-        deltas,
-        min_costs,
-        min_risks,
-        r"Uncertainty Level $\delta$",
-        "Figure_Uncertainty_Sensitivity.svg",
-        x_ticks=deltas,
+
+    # 自定义标签双线图
+    x_indices = list(range(len(selected_scenarios)))
+    plotter.plot_dual_line_chart_with_custom_labels(
+        x_indices=x_indices,
+        cost_data=scenario_costs,
+        risk_data=scenario_risks,
+        custom_x_labels=scenario_labels,
+        xlabel="Emergency Response Time Uncertainty Scenarios",
+        filename="Figure_Uncertain_Response_Time_Asymmetric_Scenarios.svg",
     )
+
+    # 4.2 热力图（完整网格）
+    plotter.plot_emergency_uncertainty_heatmap(
+        delta_a_values=delta_a_values,
+        delta_c_values=delta_c_values,
+        cost_grid=cost_grid,
+        risk_grid=risk_grid,
+        prefix="Figure_Emergency_Asymmetric",
+    )
+
+    # --- 5. Restore ---
+    restore_config(
+        exp,
+        orig_bgt,
+        orig_alpha_c,
+        orig_cvar_alpha,
+        orig_a_multi,
+        orig_c_multi,
+    )
+
+    logging.info("Ultimate Asymmetric Sensitivity Analysis Completed 🌟🔥🚀")
 
 
 if __name__ == "__main__":

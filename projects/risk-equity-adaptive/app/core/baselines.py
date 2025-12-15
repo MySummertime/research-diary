@@ -9,7 +9,9 @@
 
 import numpy as np
 import logging
-from typing import List, Dict
+import gurobipy as gp
+from gurobipy import GRB
+from typing import List, Dict, Tuple, Any
 
 # Pymoo
 from pymoo.core.problem import ElementwiseProblem
@@ -21,15 +23,6 @@ from pymoo.operators.crossover.sbx import SBX
 from pymoo.operators.mutation.pm import PM
 from pymoo.operators.repair.rounding import RoundingRepair
 from pymoo.termination import get_termination
-
-# Gurobi
-try:
-    import gurobipy as gp
-    from gurobipy import GRB
-
-    HAS_GUROBI = True
-except ImportError:
-    HAS_GUROBI = False
 
 # Project
 from app.core.solution import Solution
@@ -84,6 +77,7 @@ class PymooHazmatProblem(ElementwiseProblem):
         # 针对 NSGA-II, SPEA2 的微小扰动 (Jitter)
         # 防止所有个体成本完全相同导致除零错误
         import random
+
         epsilon = 1e-6
 
         # 处理无穷大：防止计算报错
@@ -221,26 +215,30 @@ class GurobiSolver:
     """
 
     def __init__(self, network, evaluator, candidate_paths_map, config):
-        if not HAS_GUROBI:
-            raise ImportError("Gurobipy not installed. Cannot use GurobiSolver.")
-
         self.network = network
         self.evaluator = evaluator
         self.candidate_paths_map = candidate_paths_map
         self.config = config
         self.task_ids = sorted([t.task_id for t in network.tasks])
 
-        self.path_metrics = {}
+        self.path_metrics: Dict[str, List[Dict[str, Any]]] = {}
+        #
+        # 记录每项任务的 min/max 路径属性 (用于全局归一化)
+        self.task_min_metrics: Dict[str, Dict[str, float]] = {}
+        self.task_max_metrics: Dict[str, Dict[str, float]] = {}
+
+        # 枢纽路径索引映射: {hub_id: [(task_id, path_idx, demand), ...]}
+        self.hub_path_map: Dict[str, List[Tuple[str, int, float]]] = {}
+
         self._precompute_metrics()
 
     def _precompute_metrics(self):
-        """预计算指标"""
+        """预计算指标，并建立枢纽容量占用索引"""
         logging.info("Gurobi: Pre-computing metrics for all candidate paths...")
         alpha_c = self.evaluator.cost_config.get("fuzzy_cost_alpha_c", 0.90)
 
-        # 用于归一化的极值记录
-        self.min_risk, self.max_risk = float("inf"), float("-inf")
-        self.min_cost, self.max_cost = float("inf"), float("-inf")
+        # 初始化枢纽路径索引映射
+        self.hub_path_map = {h.node_id: [] for h in self.network.get_hubs()}
 
         for tid in self.task_ids:
             paths = self.candidate_paths_map[tid]
@@ -257,8 +255,8 @@ class GurobiSolver:
                     )
                     C_m = self.evaluator.unit_transport_cost.get(arc.mode, 0)
                     E_m = self.evaluator.unit_carbon_cost.get(arc.mode, 0)
-                    P = self.evaluator.unit_penalty_cost
-                    cost_exp += dv * ((C_m + E_m) * arc.length + P * t_exp)
+                    P = self.evaluator.unit_operation_cost
+                    cost_exp += ((C_m + E_m) * dv * arc.length) + P * t_exp
 
                 for hub in path.transfer_hubs:
                     s_exp = FuzzyMath.trapezoidal_expected_value(
@@ -266,7 +264,7 @@ class GurobiSolver:
                     )
                     B_k = self.evaluator.unit_transshipment_cost
                     I_k = self.evaluator.unit_transshipment_infra_cost
-                    cost_exp += dv * (B_k + I_k * s_exp)
+                    cost_exp += B_k * dv + I_k * s_exp
 
                 # 2. Risk (CVaR)
                 dummy_sol = Solution()
@@ -281,8 +279,8 @@ class GurobiSolver:
                     )
                     C_m = self.evaluator.unit_transport_cost.get(arc.mode, 0)
                     E_m = self.evaluator.unit_carbon_cost.get(arc.mode, 0)
-                    P = self.evaluator.unit_penalty_cost
-                    cost_pess += dv * ((C_m + E_m) * arc.length + P * t_pess)
+                    P = self.evaluator.unit_operation_cost
+                    cost_pess += ((C_m + E_m) * dv * arc.length) + P * t_pess
 
                 for hub in path.transfer_hubs:
                     s_pess = FuzzyMath.trapezoidal_pessimistic_value(
@@ -290,13 +288,30 @@ class GurobiSolver:
                     )
                     B_k = self.evaluator.unit_transshipment_cost
                     I_k = self.evaluator.unit_transshipment_infra_cost
-                    cost_pess += dv * (B_k + I_k * s_pess)
+                    cost_pess += B_k * dv + I_k * s_pess
 
-                # 更新极值
-                self.min_risk = min(self.min_risk, risk_cvar)
-                self.max_risk = max(self.max_risk, risk_cvar)
-                self.min_cost = min(self.min_cost, cost_exp)
-                self.max_cost = max(self.max_cost, cost_exp)
+                # 4. 容量占用索引记录
+                path_key = (tid, p_idx, dv)  # (任务ID, 路径索引, 需求量)
+                for hub in path.transfer_hubs:
+                    self.hub_path_map[hub.node_id].append(path_key)
+
+                # 5. 更新单任务的极值
+                if tid not in self.task_min_metrics:
+                    self.task_min_metrics[tid] = {"risk": risk_cvar, "cost": cost_exp}
+                    self.task_max_metrics[tid] = {"risk": risk_cvar, "cost": cost_exp}
+                else:
+                    self.task_min_metrics[tid]["risk"] = min(
+                        self.task_min_metrics[tid]["risk"], risk_cvar
+                    )
+                    self.task_max_metrics[tid]["risk"] = max(
+                        self.task_max_metrics[tid]["risk"], risk_cvar
+                    )
+                    self.task_min_metrics[tid]["cost"] = min(
+                        self.task_min_metrics[tid]["cost"], cost_exp
+                    )
+                    self.task_max_metrics[tid]["cost"] = max(
+                        self.task_max_metrics[tid]["cost"], cost_exp
+                    )
 
                 self.path_metrics[tid].append(
                     {
@@ -309,7 +324,7 @@ class GurobiSolver:
 
     def solve_weighted_sum(self, num_points: int = 10) -> List[Solution]:
         """
-        通过改变权重 w (0 -> 1)，求解多次 MILP，得到近似 Pareto 前沿
+        通过改变权重 w (0 -> 1)，求解多次 MILP，得到 Pareto Frontier
         """
         logging.info(f"Gurobi: Starting Weighted Sum with {num_points} points...")
         solutions = []
@@ -317,12 +332,26 @@ class GurobiSolver:
         # 预算约束
         budget = self.evaluator.cost_config.get("fuzzy_cost_budget", 1e9)
 
-        # 权重列表 (从纯Cost 到 纯Risk)
+        # 权重列表 (从纯 Cost 到纯 Risk)
         weights = np.linspace(0, 1, num_points)
 
-        # 归一化分母
-        range_risk = max(self.max_risk - self.min_risk, 1e-6)
-        range_cost = max(self.max_cost - self.min_cost, 1e-6)
+        # 1. 计算全局 Ideal 和 Nadir 点 (基于单任务极值之和)
+        total_min_risk = sum(
+            self.task_min_metrics[tid]["risk"] for tid in self.task_ids
+        )
+        total_max_risk = sum(
+            self.task_max_metrics[tid]["risk"] for tid in self.task_ids
+        )
+        total_min_cost = sum(
+            self.task_min_metrics[tid]["cost"] for tid in self.task_ids
+        )
+        total_max_cost = sum(
+            self.task_max_metrics[tid]["cost"] for tid in self.task_ids
+        )
+
+        # 归一化分母和理想点
+        range_risk = max(total_max_risk - total_min_risk, 1e-6)
+        range_cost = max(total_max_cost - total_min_cost, 1e-6)
 
         for w in weights:
             # 建立模型
@@ -355,8 +384,23 @@ class GurobiSolver:
             )
             model.addConstr(total_pess_cost <= budget, name="Budget")
 
-            # Const 3: Arc Capacity 约束
-            # 由于单任务超限检查在 Candidate Path Generation 阶段就已经完成。
+            # Const 3.1: Arc Capacity 约束（单任务超限约束）
+            # 单任务超限检查在 Candidate Path Generation 阶段就已经完成
+
+            # Const 3.2: 枢纽容量约束 (累加约束)
+            for hub_id, path_keys in self.hub_path_map.items():
+                hub_node = self.network.get_node(hub_id)
+
+                # 流量累加项：sum_{v,p: k in p} (Demand_v * x_{v,p})
+                flow_through_hub = gp.quicksum(
+                    path_key[2] * x[path_key[0], path_key[1]] for path_key in path_keys
+                )
+
+                # 容量约束: Total Flow <= Hub Capacity
+                if hub_node:
+                    model.addConstr(
+                        flow_through_hub <= hub_node.capacity, name=f"Hub_Cap_{hub_id}"
+                    )
 
             # 目标函数 (带归一化)
             obj_risk_raw = gp.quicksum(
@@ -370,11 +414,9 @@ class GurobiSolver:
                 for p_idx in range(len(self.candidate_paths_map[tid]))
             )
 
-            # 归一化后的目标: (val - min) / range
-            norm_risk = (
-                obj_risk_raw - self.min_risk * len(self.task_ids)
-            ) / range_risk  # 粗略归一化
-            norm_cost = (obj_cost_raw - self.min_cost * len(self.task_ids)) / range_cost
+            # 归一化后的目标: (val - Ideal) / Range
+            norm_risk = (obj_risk_raw - total_min_risk) / range_risk
+            norm_cost = (obj_cost_raw - total_min_cost) / range_cost
 
             model.setObjective(
                 w * norm_risk + (1 - w) * norm_cost,
@@ -391,6 +433,7 @@ class GurobiSolver:
                             path = self.path_metrics[tid][p_idx]["path_obj"]
                             sol.path_selections[tid] = path
                             break
+                # 重新评估以填充所有目标值和可行性状态
                 self.evaluator.evaluate(sol)
                 sol.rank = 0
                 solutions.append(sol)

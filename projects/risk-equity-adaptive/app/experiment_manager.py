@@ -5,8 +5,7 @@ import random
 import logging
 import json
 import numpy as np
-import matplotlib.pyplot as plt
-from typing import List, Dict
+from typing import List
 
 # --- Core Modules ---
 from app.core.path import PathFinder
@@ -23,7 +22,11 @@ from app.utils.result_keeper import (
     create_experiment_directory,
     setup_logging,
 )
-from app.utils.analyzer import find_knee_point, generate_routing_scheme_comparison
+from app.utils.analyzer import (
+    find_knee_point,
+    generate_routing_scheme_comparison,
+    calculate_solution_gini,
+)
 
 
 class Experiment:
@@ -85,9 +88,20 @@ class Experiment:
         network = generator.generate()
         network.summary()
 
+        # 引入 time 模块
+        import time
+
+        start_time = time.process_time()
+
         # 路径搜索
         path_finder = PathFinder(network)
         paths_map = path_finder.find_all_candidate_paths()
+
+        end_time = time.process_time()
+
+        # 保存预计算时间
+        self.precompute_time = end_time - start_time
+        logging.info(f"Path Pre-computation Time: {self.precompute_time:.4f}s")
 
         evaluator = Evaluator(network, self.config)
         return network, evaluator, paths_map
@@ -117,69 +131,54 @@ class Experiment:
             logging.warning("No feasible Rank 0 solutions.")
             return
 
-        # 1. 准备特殊解 (A, B, C)
+        # 1. 筛选出所有具有 Gini value 的可行解 List of (Solution, Gini_Value)
+        solutions_with_gini = []
+
+        for sol in self.final_front:  # 对所有可行解计算，确保 Gini Trade-off 散点图完整
+            if sol.is_feasible:
+                # 确保 solution.py 中已添加 self.gini_coefficient 属性
+                sol.gini_coefficient = calculate_solution_gini(sol, self.evaluator)
+
+            # 仅将可行解纳入绘图数据
+            if sol.is_feasible:
+                solutions_with_gini.append((sol, sol.gini_coefficient))
+
+        # 2. 准备特殊解 (A, B, C)
         sol_a = min(rank_0, key=lambda s: s.f2_cost)  # Min Cost
         sol_b = min(rank_0, key=lambda s: s.f1_risk)  # Min Risk
         sol_c = find_knee_point(rank_0)  # Knee Point
 
         special_solutions = {"Opinion A": sol_a, "Opinion B": sol_b, "Opinion C": sol_c}
 
-        # 2. 绘制 Pareto 前沿 (传入 special_solutions 以便高亮)
+        # 3. 绘制 Pareto 前沿 (传入 special_solutions 以便高亮)
         self.plotter.plot(
             self.final_front,
             file_name="pareto_frontier.svg",
             special_solutions=special_solutions,
         )
 
-        # 3. 生成对比表格 (Table 1)
+        # 4.1 绘制 Gini Trade-off 图
+        # 需要所有可行解数据，以便绘制完整的散点图和 Rank 0 前沿
+        self.plotter.plot_gini_tradeoff(
+            solutions_with_gini, file_name="Figure_Gini_Risk_Cost_Tradeoff.svg"
+        )
+
+        # 4.2 绘制平行坐标图
+        # 只传入 Rank 0 可行解
+        rank_0_solutions = [s for s, g in solutions_with_gini if s.rank == 0]
+        self.plotter.plot_parallel_coordinates(
+            rank_0_solutions,
+            gini_calculator=calculate_solution_gini,
+            evaluator=self.evaluator,
+            file_name="Figure_Parallel_Coordinates_Rank0.svg",
+        )
+
+        # 5. 生成对比表格
         generate_routing_scheme_comparison(
             special_solutions, self.evaluator, self.save_dir
         )
 
-        # 4. 生成路线地图
-        self._generate_route_maps(special_solutions)
+        # 6. 生成路线地图
+        self.visualizer.visualize_routes(special_solutions, self.save_dir)
 
         logging.info(f"All results saved to: {self.save_dir}")
-
-    def _generate_route_maps(self, solutions_map: Dict[str, Solution]):
-        """
-        [Visualizer] 批量生成特殊解的路线地图 (SVG)。
-
-        Args:
-            solutions_map: 字典 {"Opinion A": sol_a, "Opinion B": sol_b, ...}
-        """
-        logging.info("Generating route maps for special solutions...")
-
-        # 1. 为每个任务生成固定的颜色 (保持视觉一致性)
-        # 获取所有任务ID并排序
-        task_ids = sorted([t.task_id for t in self.network.tasks])
-        cmap = plt.get_cmap("Set1")  # 使用 Set1 配色方案 (颜色鲜明)
-
-        task_colors = {}
-        for i, tid in enumerate(task_ids):
-            # 将 Matplotlib 的 RGBA 转为 Hex 颜色
-            rgb = cmap(i % 9)[:3]
-            hex_color = "#{:02x}{:02x}{:02x}".format(
-                int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
-            )
-            task_colors[tid] = hex_color
-
-        # 2. 遍历字典生成地图
-        for label, sol in solutions_map.items():
-            if not sol:
-                continue
-
-            # --- 智能生成标题和文件名 ---
-            # 把 "Opinion_A/B/C" 用作文件名
-            safe_label = label.replace(" ", "_")
-            filename = f"route_{safe_label}.svg"
-
-            # --- 调用 Visualizer ---
-            self.visualizer.visualize_routes(
-                solution=sol,
-                task_colors=task_colors,
-                save_dir=self.save_dir,
-                filename=filename,
-            )
-
-        logging.info("Route maps generation completed.")

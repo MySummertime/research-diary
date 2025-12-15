@@ -64,6 +64,9 @@ def main():
     # -------------------------------------------------------
     exp = Experiment(config_path="config.json")
 
+    # 获取预计算时间 (只加给基于池的算法)
+    t_pre = exp.precompute_time
+
     # 设置 benchmark 输出目录
     benchmark_dir = os.path.join(exp.save_dir, "benchmark")
     os.makedirs(benchmark_dir, exist_ok=True)
@@ -132,7 +135,7 @@ def main():
         # 强制不传入 initial_population 以确保随机初始化
         # 此时内部的 random.choice 会受上面的 seed 影响
         proposed_pop = exp.algorithm.run(callbacks=[logger], initial_population=None)
-        duration = time.process_time() - start
+        duration = time.process_time() - start + t_pre
 
         # 同时过滤可行性 AND Rank 0 (非支配解)
         feasible_prop = [s for s in proposed_pop if s.is_feasible and s.rank == 0]
@@ -157,7 +160,7 @@ def main():
 
             start = time.process_time()
             res = solver.run_algorithm(base_name, save_history=True)
-            duration = time.process_time() - start
+            duration = time.process_time() - start + t_pre
 
             finals = PymooSolver.convert_to_solutions(res, solver)
 

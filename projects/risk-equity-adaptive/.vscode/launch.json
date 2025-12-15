@@ -14,7 +14,7 @@
         // set PYTHONPATH as the current workspace，letting Python to find packages
         "PYTHONPATH": "${workspaceFolder}/envs/python.exe"
       },
-      "justMyCode": false
+      "justMyCode": true
     }
   ]
 }

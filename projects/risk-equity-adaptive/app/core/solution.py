@@ -26,33 +26,18 @@ class Solution:
         self.eta_values: Dict[str, float] = {}
 
         # --- 2. 适应度 (Fitness) ---
-        # 由 Evaluator (评估器) 计算并填充。
-
-        # 目标函数 f1 (风险)
-        # 对应论文中的 min f1 = Σ CVaR_α(v)
         self.f1_risk: float = float("inf")
-
-        # 目标函数 f2 (成本)
-        # 对应论文中的 min E[f2]
+        self.f1_risk_scaled: float = float("inf")
         self.f2_cost: float = float("inf")
+        self.gini_coefficient: float = float("inf")
 
         # --- 3. 可行性与约束 ---
-        # 由 Evaluator 计算并填充。
-
-        # 该解是否可行 (是否违反容量约束或预算约束)
+        self.pessimistic_cost: float = float("inf")
         self.is_feasible: bool = False
-
-        # 约束违反度 (NSGA-II 需要)
-        # 0.0 = 可行; > 0.0 = 不可行
         self.constraint_violation: float = float("inf")
 
         # --- 4. NSGA-II 排序指标 ---
-        # 由主算法循环计算并填充。
-
-        # 非支配排序的等级 (Rank 0 是最好的)
         self.rank: int = 0
-
-        # 拥挤度距离
         self.crowding_distance: float = 0.0
 
     def clone(self) -> "Solution":
@@ -61,22 +46,27 @@ class Solution:
         手动复制关键数据结构，避免 copy.deepcopy 带来的巨大开销。
         """
         new_sol = Solution()
-        
+
         # 1. 浅拷贝路径选择字典 (Dict[str, Path])
         # Path 对象本身是只读/共享的，不需要深拷贝
         new_sol.path_selections = self.path_selections.copy()
-        
+
         # 2. 复制 eta 缓存
         new_sol.eta_values = self.eta_values.copy()
-        
+
         # 3. 复制标量属性
         new_sol.f1_risk = self.f1_risk
+        new_sol.f1_risk_scaled = self.f1_risk_scaled
         new_sol.f2_cost = self.f2_cost
+        new_sol.gini_coefficient = self.gini_coefficient
+
+        new_sol.pessimistic_cost = self.pessimistic_cost
         new_sol.is_feasible = self.is_feasible
         new_sol.constraint_violation = self.constraint_violation
+
         new_sol.rank = self.rank
         new_sol.crowding_distance = self.crowding_distance
-        
+
         return new_sol
 
     def __repr__(self):
