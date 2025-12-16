@@ -28,10 +28,10 @@ def main():
     # 2. Run Experiments
 
     # Risk Aversion
-    # perform_extreme_aversion_analysis(exp, sensitivity_dir)
+    perform_extreme_aversion_analysis(exp, sensitivity_dir)
 
     # Reliability
-    perform_reliability_sensitivity(exp, sensitivity_dir)
+    # perform_reliability_sensitivity(exp, sensitivity_dir)
 
     # Uncertainty
     # perform_uncertain_response_time_sensitivity(exp, sensitivity_dir)
@@ -342,11 +342,11 @@ def perform_uncertain_response_time_sensitivity(
     # --- 2. 选定非对称场景（用于双线图）---
     selected_scenarios = [
         (0.0, 0.0),  # 确定性响应
-        (0.5, 1.5),  # 乐观小，悲观大（现实拥堵场景）
+        (0.5, 0.5),  # 乐观小，悲观大（现实拥堵场景）
         (1.0, 1.0),  # 对称标准
-        (1.0, 2.0),  # 悲观侧更不确定
-        (0.5, 2.5),  # 极端非对称
-        (1.5, 0.5),  # 反过来：乐观侧更不确定（少见但可讨论）
+        (1.5, 1.5),  # 悲观侧更不确定
+        (2.0, 2.0),  # 极端非对称
+        (2.5, 2.5),  # 反过来：乐观侧更不确定（少见但可讨论）
     ]
 
     scenario_labels = [f"a={a:.1f},c={c:.1f}" for a, c in selected_scenarios]

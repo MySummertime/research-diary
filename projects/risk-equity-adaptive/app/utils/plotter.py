@@ -1088,6 +1088,49 @@ class SensitivityPlotter(BasePlotter):
             zorder=6,
         )
 
+        # --- 3. 添加百分比标签 ---
+
+        # 1. 计算所有成本占总成本的百分比
+        total_costs_np = np.array(total_costs)
+        # 避免除以零或无穷大
+        valid_totals = np.where(total_costs_np > 1e-9, total_costs_np, 1.0)
+
+        trans_perc = (trans / valid_totals) * 100
+        ship_perc = (ship / valid_totals) * 100
+        carb_perc = (carb / valid_totals) * 100
+
+        # 2. 准备标签位置 (每段的中心点)
+        trans_y = trans / 2.0
+        ship_y = trans + ship / 2.0
+        carb_y = trans + ship + carb / 2.0
+
+        # 3. 循环添加文本注释
+        cost_components = [
+            (trans_perc, trans_y, "Transport Cost"),
+            (ship_perc, ship_y, "Transshipment Cost"),
+            (carb_perc, carb_y, "Carbon Cost"),
+        ]
+
+        for i in range(len(x_labels)):
+            if total_costs_np[i] < 1e-9:
+                continue
+
+            annot_style = dict(
+                ha="center",
+                va="center",
+                fontsize=12,
+                color=get_color_by_key(self.default_colors, "WHITE"),
+            )
+
+            for j, (perc_array, center_y_array, label) in enumerate(cost_components):
+                percentage = perc_array[i]
+                center_y = center_y_array[i]
+
+                # 只在百分比大于 2.0% 时显示标签
+                if percentage > 2.0:
+                    text_label = f"{percentage:.1f}%"
+                    ax1.text(x[i], center_y, text_label, **annot_style)
+
         ax1.set_ylabel("Total Cost (yuan)", fontweight="bold", color=c_trend)
         ax1.tick_params(axis="y", labelcolor=c_trend)
         ax1.set_xticks(x)
