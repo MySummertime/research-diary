@@ -10,6 +10,7 @@
 
 import os
 import logging
+from typing import List, Dict
 from app.experiment_manager import Experiment
 from app.core.evaluator import Evaluator
 from app.core.nsga2 import NSGA2
@@ -30,10 +31,10 @@ def main():
     # perform_extreme_aversion_analysis(exp, sensitivity_dir)
 
     # Reliability
-    # perform_reliability_sensitivity(exp, sensitivity_dir)
+    perform_reliability_sensitivity(exp, sensitivity_dir)
 
     # Uncertainty
-    perform_uncertain_response_time_sensitivity(exp, sensitivity_dir)
+    # perform_uncertain_response_time_sensitivity(exp, sensitivity_dir)
 
 
 def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
@@ -170,9 +171,13 @@ def perform_reliability_sensitivity(exp: Experiment, save_dir: str):
     exp.config["cost_model_f2"]["fuzzy_cost_budget"] = TIGHT_BUDGET  # 启用紧预算
 
     # 迭代 alpha_c
-    alpha_cs = [0.5, 0.6, 0.7, 0.8, 0.9]
+    alpha_cs = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99]
+    # alpha_cs = [0.1, 0.2]
     costs = []
     risks = []
+
+    # 存储所有边界解的详细数据 (用于 CSV)
+    full_boundary_data = []
 
     for ac in alpha_cs:
         logging.info(f"   Running for alpha_c = {ac}")
@@ -189,13 +194,38 @@ def perform_reliability_sensitivity(exp: Experiment, save_dir: str):
         if feasible:
             # 聚焦 Min Expected Cost (f2)
             best_cost_sol = min(feasible, key=lambda s: s.f2_cost)
+            # 聚焦 Min Risk (f1)
+            best_risk_sol = min(feasible, key=lambda s: s.f1_risk)
+
+            # 追踪 Cost 边界
             costs.append(best_cost_sol.f2_cost)
-            risks.append(best_cost_sol.f1_risk)
+            # 追踪 Risk 边界
+            risks.append(best_risk_sol.f1_risk)
+
+            # 记录 CSV 数据
+            full_boundary_data.append(
+                {
+                    "alpha_c": ac,
+                    "min_cost_sol_cost": best_cost_sol.f2_cost,
+                    "min_cost_sol_risk": best_cost_sol.f1_risk,
+                    "min_risk_sol_risk": best_risk_sol.f1_risk,
+                    "min_risk_sol_cost": best_risk_sol.f2_cost,
+                }
+            )
         else:
             # 预测：在 alpha_c > 某个数 时，可能找不到可行解
             logging.warning(f"   Infeasible for alpha_c={ac}")
             costs.append(None)
             risks.append(None)
+            full_boundary_data.append(
+                {
+                    "alpha_c": ac,
+                    "min_cost_sol_cost": None,
+                    "min_cost_sol_risk": None,
+                    "min_risk_sol_risk": None,
+                    "min_risk_sol_cost": None,
+                }
+            )
 
     # Restore
     exp.config["cost_model_f2"]["fuzzy_cost_budget"] = orig_bgt
@@ -211,6 +241,20 @@ def perform_reliability_sensitivity(exp: Experiment, save_dir: str):
         r"Budget Confidence Level $\alpha_c$",
         "Figure_Reliability_Sensitivity.svg",
         x_ticks=alpha_cs,
+    )
+
+    # Output
+    save_csv_report(
+        save_dir,
+        full_boundary_data,
+        [
+            "alpha_c",
+            "min_cost_sol_cost",
+            "min_cost_sol_risk",
+            "min_risk_sol_risk",
+            "min_risk_sol_cost",
+        ],
+        "Table_Reliability_Sensitivity_Boundary_Data.csv",
     )
 
 
@@ -409,6 +453,24 @@ def perform_uncertain_response_time_sensitivity(
     )
 
     logging.info("Ultimate Asymmetric Sensitivity Analysis Completed 🌟🔥🚀")
+
+
+def save_csv_report(
+    save_dir: str, data: List[Dict], fieldnames: List[str], filename: str
+):
+    """[Helper] Saves a list of dictionaries to a CSV file."""
+    import csv
+
+    full_path = os.path.join(save_dir, filename)
+
+    try:
+        with open(full_path, "w", newline="", encoding="utf-8") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(data)
+        logging.info(f"CSV report saved successfully: {full_path}")
+    except Exception as e:
+        logging.error(f"Failed to save CSV report {filename}: {e}")
 
 
 if __name__ == "__main__":

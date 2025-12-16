@@ -8,13 +8,17 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from typing import List, Dict, Optional, Tuple
-from matplotlib.ticker import ScalarFormatter
-
-# from scipy.interpolate import make_interp_spline # it may cause over-speculating
+from matplotlib.ticker import ScalarFormatter, MultipleLocator
 from scipy.interpolate import PchipInterpolator
 from app.core.solution import Solution
 from app.core.evaluator import Evaluator
 from app.utils.visual_style import ColorPalette, get_color_by_key
+
+# --- 全局 Matplotlib Formatter ---
+# 仅对超出 10^-2 到 10^3 的范围的数值使用科学计数法
+# 设置 useMathText=True 则为 1.xx * 10^x 样式，否则为 1.xx 1ex 样式
+FMT = ScalarFormatter(useMathText=True)
+FMT.set_powerlimits((-2, 3))
 
 
 # --- 全局绘图风格设置 ---
@@ -45,22 +49,121 @@ def apply_academic_style():
 apply_academic_style()
 
 
-class ParetoPlotter:
+class BasePlotter:
+    """
+    所有 Plotter 的抽象基类，用于统一管理全局设置和辅助方法。
+    """
+
+    def __init__(self, save_dir: str = "results"):
+        self.save_dir = save_dir
+        os.makedirs(self.save_dir, exist_ok=True)
+
+        # Color set
+        self.default_colors = ColorPalette.DEFAULT_COLOR
+        self.pareto_colors: List[Dict] = ColorPalette.PARETO
+        self.pareto_colors_by_algo: List[Dict] = ColorPalette.PARETO_BY_ALGO
+        self.pareto_colors_loop: List[str] = ColorPalette.PARETO_LOOP
+        self.violin_colors: List[str] = ColorPalette.VIOLIN_LOOP
+        self.stacked_bar_chart_colors = ColorPalette.STACKED_BAR
+        self.dual_line_chart_colors = ColorPalette.DUAL_LINE
+        self.heapmap_colors = ColorPalette.HEATMAP
+
+    def _format_axes(self, ax):
+        """
+        [辅助] 统一格式化轴刻度，使用全局 FMT 科学计数法规则
+        """
+        ax.xaxis.set_major_formatter(FMT)
+        ax.yaxis.set_major_formatter(FMT)
+        ax.grid(True, linestyle="--", alpha=0.5)
+
+    def _set_dynamic_xlim(self, ax, data, margin=0.05):
+        """辅助：设置动态 X 轴范围 (基于边距)"""
+        if not data:
+            return
+        x_min, x_max = min(data), max(data)
+        # 简单计算边距并设置 X 轴范围
+        dx = (x_max - x_min) * margin if x_max != x_min else x_min * margin
+        ax.set_xlim(x_min - dx, x_max + dx)
+
+    def _set_dynamic_ylim(
+        self,
+        ax,
+        data,
+        margin_ratio: float = 0.1,
+        is_bar: bool = False,
+        lower_multiplier: Optional[float] = None,
+        upper_multiplier: Optional[float] = None,
+    ):
+        """
+        [辅助] 动态设置 Y 轴范围 (支持截断和聚焦模式)
+
+        该函数根据数据波动率自动决定是否启用"聚焦模式":
+        - 波动率 < 5% (0.05)：启用聚焦，以放大微小波动。
+        - 波动率 > 5%：采用常规的 10% 边距。
+
+        参数:
+            ax (Axes): Matplotlib Axes 对象。
+            data (List[float]): 需要绘制的数据列表。
+            margin_ratio (float): 正常波动时的边距比例 (默认为 0.1, 即 10%)。
+            is_bar (bool): 是否为柱状图。若为 True，则强制 Y 轴从 0 开始。
+            lower_multiplier (Optional[float]): 聚焦模式下，Ymin 边界的边距乘数。
+                                                (边距 = (Max-Min) * 乘数)。
+                                                例如，设置为 0.5，则 Ymin = Min - (波动 * 0.5)。
+                                                设置为 1.0，则 Ymin = Min - 波动。
+                                                如果为 None (默认)，则使用 1.0。
+            upper_multiplier (Optional[float]): 聚焦模式下，Ymax 边界的边距乘数。
+                                                如果为 None (默认)，则使用 1.0。
+        """
+        if len(data) == 0:
+            return
+        ymin, ymax = min(data), max(data)
+
+        # 1. 柱状图强制从 0 开始
+        if is_bar:
+            ax.set_ylim(0, ymax * 1.1)
+            return
+
+        # 2. 计算波动率
+        if ymax > 0:
+            diff = ymax - ymin
+            variation = diff / ymax
+
+            # 3. 启用聚焦模式 (波动率 < 5%)
+            if variation < 0.05:
+                # 聚焦微小变化
+                margin = diff if diff > 0 else ymax * 0.01
+
+                # 默认值: 使用 1.0 (即边距 = 波动范围)
+                LOWER_MULTIPLIER = (
+                    lower_multiplier if lower_multiplier is not None else 1.0
+                )
+                UPPER_MULTIPLIER = (
+                    upper_multiplier if upper_multiplier is not None else 1.0
+                )
+
+                # 如果乘数设置为 0，则直接贴合数据点
+                lower = max(0, ymin - margin * LOWER_MULTIPLIER)
+                upper = ymax + margin * UPPER_MULTIPLIER
+
+                ax.set_ylim(lower, upper)
+            else:
+                # 4. 常规模式 (波动率 >= 5%)
+                margin = diff * margin_ratio
+                ax.set_ylim(max(0, ymin - margin), ymax + margin)
+
+
+class ParetoPlotter(BasePlotter):
     """
     [View Layer] 通用 Pareto Frontier 绘图器
     职责：绘制目标空间 (Objective Space) 的散点图。
     """
 
     def __init__(self, title: str = "", save_dir: str = "results"):
+        super().__init__(save_dir)
+
         self.title = title
         self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
-
-        # Color set
-        self.default_colors: List[Dict] = ColorPalette.DEFAULT_COLOR
-        self.pareto_colors: List[Dict] = ColorPalette.PARETO
-        self.pareto_colors_by_algo: List[Dict] = ColorPalette.PARETO_BY_ALGO
-        self.pareto_colors_loop: List[str] = ColorPalette.PARETO_LOOP
 
     def plot(
         self,
@@ -309,10 +412,7 @@ class ParetoPlotter:
         ax.set_xlabel(xlabel, fontweight="bold")
         ax.set_ylabel(ylabel, fontweight="bold")
 
-        formatter = ScalarFormatter(useMathText=True)
-        formatter.set_powerlimits((-2, 3))
-        ax.xaxis.set_major_formatter(formatter)
-        ax.yaxis.set_major_formatter(formatter)
+        self._format_axes(ax)
 
         ax.legend(loc="upper right", frameon=True, framealpha=0.9, fancybox=True)
 
@@ -373,7 +473,8 @@ class ParetoPlotter:
         ax.set_ylabel(r"Total Cost (yuan)", fontweight="bold")
 
         self._format_axes(ax)
-        self._set_dynamic_limits(ax, all_x, all_y)
+        self._set_dynamic_xlim(ax, all_x)
+        self._set_dynamic_ylim(ax, all_y)
 
         ax.legend(loc="upper right", frameon=True, fancybox=True)
         plt.tight_layout()
@@ -471,14 +572,16 @@ class ParetoPlotter:
         # 5. 添加颜色条 (Color Bar)
         cbar = fig.colorbar(scatter, ax=ax, shrink=0.7)
         cbar.set_label(r"Total Cost $f_2$ (yuan)", fontweight="bold")
+        cbar.ax.yaxis.set_major_formatter(FMT)  # 颜色条也格式化
 
         # 6. 格式化
         ax.set_xlabel(r"Total Risk $f_1$ (people)", fontweight="bold")
         ax.set_ylabel("Gini Coefficient (Social Equity)", fontweight="bold")
         ax.set_title("Trade-off between Total Risk and Risk Equity", fontsize=15)
 
-        self._format_axes(ax)  # 调用统一格式化
-        self._set_dynamic_limits(ax, r0_risk, r0_gini)
+        self._format_axes(ax)
+        self._set_dynamic_xlim(ax, r0_risk)
+        self._set_dynamic_ylim(ax, r0_gini)
 
         ax.legend(loc="upper right", frameon=True, fancybox=True)
         plt.tight_layout()
@@ -497,9 +600,10 @@ class ParetoPlotter:
     ):
         """
         绘制平行坐标图，展示整个 Pareto 前沿 (Rank 0) 的三目标联动关系。
-        1. 使用平滑曲线
+        1. 使用保界平滑曲线 (PCHIP)
         2. 线条颜色映射到 Total Risk
-        3. 线宽映射到拥挤距离 (CD)：厚度与 CD 成正比，越厚表示该解在 Frontier 的邻域越稀疏
+        3. 线宽映射到拥挤距离 (CD)
+        4. 刻度原始值使用科学计数法格式化
         """
         # 1. 收集和归一化数据 (Risk, Cost, Gini, CD)
         data_list = []
@@ -546,10 +650,6 @@ class ParetoPlotter:
                 normalized_cd_raw = (cd_array - min_cd) / range_cd
 
                 # 2. 应用对数缩放 (Lognormal Scaling)
-                # 这会夸大低值区域的差异，并压缩高值区域的差异。
-                # 目标是凸显那些在边缘的罕见高 CD 解。
-                # 如果 CD 值都非常小，使用 log(x + small_epsilon)
-
                 # 避免 log(0)
                 epsilon = 1e-6
                 log_scaled_cd = np.log(normalized_cd_raw + epsilon)
@@ -592,7 +692,7 @@ class ParetoPlotter:
             # 离散点 (axes=0, 1, 2)
             y_points = row.values
 
-            # --- 平滑处理 (样条插值) ---
+            # --- 平滑处理 (PCHIP 保界性插值) ---
             # X轴插值范围，增加平滑点数 (100个点)
             x_interp = np.linspace(axes.min(), axes.max(), 100)
 
@@ -616,6 +716,7 @@ class ParetoPlotter:
         ax.set_ylim(0, 1)
 
         # 6. 添加原始值刻度 (增强可读性)
+        # --- 使用 FMT.pprint_val 进行科学计数法格式化 ---
         for i, (label, min_val, max_val) in enumerate(zip(labels, min_vals, max_vals)):
             ax.axvline(x=axes[i], color="k", linestyle="--", linewidth=1, zorder=0)
 
@@ -623,7 +724,7 @@ class ParetoPlotter:
             ax.text(
                 axes[i] - 0.05,
                 0.0,
-                f"{min_val:,.0f}",
+                FMT.pprint_val(min_val),
                 fontsize=10,
                 ha="right",
                 va="center",
@@ -632,7 +733,7 @@ class ParetoPlotter:
             ax.text(
                 axes[i] - 0.05,
                 1.0,
-                f"{max_val:,.0f}",
+                FMT.pprint_val(max_val),
                 fontsize=10,
                 ha="right",
                 va="center",
@@ -643,8 +744,13 @@ class ParetoPlotter:
         sm.set_array(normalized_data[:, 0])  # 映射到 Risk
         cbar = fig.colorbar(sm, ax=ax, shrink=0.7)
         cbar.set_label(r"Total Risk $f_1$ (people)", fontweight="bold")
+        cbar.ax.yaxis.set_major_formatter(FMT)  # 颜色条也格式化
 
+        # 统一格式化
         ax.grid(True, linestyle="--", alpha=0.5)
+
+        # 移除 ax.yaxis.set_major_formatter(FMT) 因为它会作用于归一化后的 [0, 1] 轴
+
         plt.tight_layout()
         plt.savefig(
             os.path.join(self.save_dir, file_name), format="svg", bbox_inches="tight"
@@ -657,13 +763,10 @@ class ParetoPlotter:
     def _highlight_special_solutions(
         self, color: str, solutions_map: Dict[str, Solution], ax
     ):
-        """
-        [辅助] 在当前图上标记特殊点
-        """
+        """[辅助] 在当前图上标记特殊点"""
         for label, sol in solutions_map.items():
             if not sol:
                 continue
-
             # 绘制特殊点的虚线外框
             ax.scatter(
                 [sol.f1_risk],
@@ -675,26 +778,6 @@ class ParetoPlotter:
                 linewidths=2,
                 zorder=4,
             )
-
-    def _format_axes(self, ax):
-        formatter = ScalarFormatter(useMathText=True)
-        formatter.set_powerlimits((-2, 3))
-        ax.xaxis.set_major_formatter(formatter)
-        ax.yaxis.set_major_formatter(formatter)
-        ax.grid(True, linestyle="--", alpha=0.5)
-
-    def _set_dynamic_limits(self, ax, x_data, y_data, margin=0.05):
-        """辅助：设置动态坐标轴范围"""
-        if not x_data or not y_data:
-            return
-        x_min, x_max = min(x_data), max(x_data)
-        y_min, y_max = min(y_data), max(y_data)
-
-        dx = (x_max - x_min) * margin if x_max != x_min else x_min * margin
-        dy = (y_max - y_min) * margin if y_max != y_min else y_min * margin
-
-        ax.set_xlim(x_min - dx, x_max + dx)
-        ax.set_ylim(y_min - dy, y_max + dy)
 
     def _normalize_metrics_for_comparison(
         self, solutions_data: List[Tuple[float, float, float]]
@@ -716,18 +799,16 @@ class ParetoPlotter:
         return normalized, min_vals, max_vals
 
 
-class BenchmarkPlotter:
+class BenchmarkPlotter(BasePlotter):
     """
     [View Layer] 专门负责 Benchmark 实验的绘图
     """
 
     def __init__(self, save_dir: str):
+        super().__init__(save_dir)
+
         self.save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
-
-        # Color set
-        self.default_colors: List[Dict] = ColorPalette.DEFAULT_COLOR
-        self.violin_colors: List[str] = ColorPalette.VIOLIN_LOOP
 
     def plot_metrics_comparison(self, stats_data: Dict[str, Dict[str, List[float]]]):
         """
@@ -852,6 +933,9 @@ class BenchmarkPlotter:
         ax.set_xticks(range(1, len(algo_names) + 1))
         ax.set_xticklabels(labels, fontweight="bold")
 
+        # 应用科学计数法格式
+        ax.yaxis.set_major_formatter(FMT)
+
         plt.tight_layout()
         save_path = os.path.join(self.save_dir, f"comparison_{metric}.svg")
         plt.savefig(save_path, dpi=300)
@@ -859,20 +943,16 @@ class BenchmarkPlotter:
         logging.info(f"Generated comparison plot: {save_path}")
 
 
-class SensitivityPlotter:
+class SensitivityPlotter(BasePlotter):
     """
     [View Layer] 负责 Sensitivity Analysis 的绘图 (支持动态缩放)
     """
 
     def __init__(self, save_dir: str):
+        super().__init__(save_dir)
+
         self.save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
-
-        # Color set
-        self.default_colors = ColorPalette.DEFAULT_COLOR
-        self.stacked_bar_chart_colors = ColorPalette.STACKED_BAR
-        self.dual_line_chart_colors = ColorPalette.DUAL_LINE
-        self.heapmap_colors = ColorPalette.HEATMAP
 
     def plot_cost_structure_dual_axis(
         self,
@@ -1037,11 +1117,9 @@ class SensitivityPlotter:
         # [Auto-Scale Risk]
         self._set_dynamic_ylim(ax2, risk_data)
 
-        # Format
-        fmt = ScalarFormatter(useMathText=True)
-        fmt.set_powerlimits((-2, 3))
-        ax1.yaxis.set_major_formatter(fmt)
-        ax2.yaxis.set_major_formatter(fmt)
+        # Format (应用全局 FMT)
+        self._format_axes(ax1)  # Formats x-axis and ax1 y-axis
+        ax2.yaxis.set_major_formatter(FMT)
 
         # Legend
         h1, l1 = ax1.get_legend_handles_labels()
@@ -1111,7 +1189,7 @@ class SensitivityPlotter:
             ax1.set_xticks(xs)
 
         # Auto-Scale Cost
-        self._set_dynamic_ylim(ax1, ys_cost)
+        self._set_dynamic_ylim(ax1, ys_cost, 0.04, False, 0.5, 0.5)
 
         # --- 右轴 Risk ---
         ax2 = ax1.twinx()
@@ -1137,10 +1215,19 @@ class SensitivityPlotter:
         ax1.legend(lines, labels, loc="upper left", frameon=True, fancybox=True)
         ax1.grid(True, linestyle="--", alpha=0.5)
 
-        fmt = ScalarFormatter(useMathText=True)
-        fmt.set_powerlimits((-2, 3))
-        ax1.yaxis.set_major_formatter(fmt)
-        ax2.yaxis.set_major_formatter(fmt)
+        # 1. 应用全局格式
+        self._format_axes(ax1)  # 保持全局格式化 X 轴和部分通用设置
+
+        # 2. 局部强制覆盖：确保 ax1 和 ax2 使用科学计数法，并使用 10^xx 格式
+        ax1.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
+        ax2.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
+
+        # 3. 强制刻度密度 (MultipleLocator 必须在 ticklabel_format 之后)
+
+        # Cost (ax1) 的刻度间隔 (1000)
+        ax1.yaxis.set_major_locator(MultipleLocator(1000))
+        # Risk (ax2) 的刻度间隔 (100，以保证密度)
+        ax2.yaxis.set_major_locator(MultipleLocator(100))
 
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, filename))
@@ -1160,9 +1247,6 @@ class SensitivityPlotter:
         升级版双线图：完全继承 plot_dual_line_chart 风格 + 支持自定义 x 轴字符串标签 🎉
         用于非对称不确定性场景展示。
         """
-        import matplotlib.pyplot as plt
-        from matplotlib.ticker import ScalarFormatter
-
         # 过滤有效点（None 跳过）
         valid_indices = [
             i
@@ -1205,7 +1289,7 @@ class SensitivityPlotter:
         )
 
         # Auto-Scale Cost
-        self._set_dynamic_ylim(ax1, ys_cost)
+        self._set_dynamic_ylim(ax1, ys_cost, 0.04, False, 0.5, 0.5)
 
         # --- 右轴 Risk  ---
         ax2 = ax1.twinx()
@@ -1235,11 +1319,19 @@ class SensitivityPlotter:
         )
         ax1.grid(True, linestyle="--", alpha=0.5)
 
-        fmt = ScalarFormatter(useMathText=True)
-        fmt.set_powerlimits((-2, 3))
-        ax1.yaxis.set_major_formatter(fmt)
-        ax2.yaxis.set_major_formatter(fmt)
+        # 1. 应用全局格式
+        self._format_axes(ax1)  # 保持全局格式化 X 轴和部分通用设置
 
+        # 2. 局部强制覆盖：确保 ax1 和 ax2 使用科学计数法，并使用 10^xx 格式
+        ax1.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
+        ax2.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
+
+        # 3. 强制刻度密度 (MultipleLocator 必须在 ticklabel_format 之后)
+
+        # Cost (ax1) 的刻度间隔 (1000)
+        ax1.yaxis.set_major_locator(MultipleLocator(1000))
+        # Risk (ax2) 的刻度间隔 (100，以保证密度)
+        ax2.yaxis.set_major_locator(MultipleLocator(100))
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, filename), dpi=300)
         plt.close()
@@ -1269,75 +1361,66 @@ class SensitivityPlotter:
         cost_df = cost_df.fillna(np.nan)
         risk_df = risk_df.fillna(np.nan)
 
-        # 图1: Min Cost Heatmap
-        plt.figure(figsize=(11, 8.5))
+        # --- 图1: Min Cost Heatmap ---
+        fig, ax = plt.subplots(figsize=(11, 8.5))
+
+        # 确定格式化字符串：由于数值可能很大，用 FMT 来处理
+        cost_annot_fmt = lambda x: FMT.pprint_val(x) if not np.isnan(x) else ""
+        cost_annot_values = cost_df.applymap(cost_annot_fmt)
+
         sns.heatmap(
             cost_df,
-            annot=True,
-            fmt=".0f",
+            annot=cost_annot_values,
+            fmt="s",  # 使用字符串格式，因为它已经被 FMT 处理了
             cmap=cost_cmap,
             linewidths=0.5,
             cbar_kws={"label": "Min Cost (yuan)", "shrink": 0.8},
             mask=cost_df.isna(),  # None 区域不显示颜色
             annot_kws={"size": 10},
+            ax=ax,
         )
+
+        # 格式化颜色条
+        cbar = ax.collections[0].colorbar
+        cbar.ax.yaxis.set_major_formatter(FMT)
+
         plt.xlabel(r"Pessimistic Multiplier $\delta_c$", fontweight="bold", fontsize=12)
         plt.ylabel(r"Optimistic Multiplier $\delta_a$", fontweight="bold", fontsize=12)
 
         plt.tight_layout()
         cost_filename = f"{prefix}_Cost_Heatmap.svg"
         plt.savefig(os.path.join(self.save_dir, cost_filename), dpi=300)
-        plt.close()
+        plt.close(fig)
         logging.info(f"Enhanced Cost heatmap saved: {cost_filename} 🌡️✨")
 
-        # 图2: Min Risk Heatmap
-        plt.figure(figsize=(11, 8.5))
+        # --- 图2: Min Risk Heatmap ---
+        fig, ax = plt.subplots(figsize=(11, 8.5))
+
+        # 确定格式化字符串
+        risk_annot_fmt = lambda x: FMT.pprint_val(x) if not np.isnan(x) else ""
+        risk_annot_values = risk_df.applymap(risk_annot_fmt)
+
         sns.heatmap(
             risk_df,
-            annot=True,
-            fmt=".2f",
+            annot=risk_annot_values,
+            fmt="s",
             cmap=risk_cmap,
             linewidths=0.5,
             cbar_kws={"label": "Min Risk (people)", "shrink": 0.8},
             mask=risk_df.isna(),
             annot_kws={"size": 10},
+            ax=ax,
         )
+
+        # 格式化颜色条
+        cbar = ax.collections[0].colorbar
+        cbar.ax.yaxis.set_major_formatter(FMT)
+
         plt.xlabel(r"Pessimistic Multiplier $\delta_c$", fontweight="bold", fontsize=12)
         plt.ylabel(r"Optimistic Multiplier $\delta_a$", fontweight="bold", fontsize=12)
+
         plt.tight_layout()
         risk_filename = f"{prefix}_Risk_Heatmap.svg"
         plt.savefig(os.path.join(self.save_dir, risk_filename), dpi=300)
-        plt.close()
+        plt.close(fig)
         logging.info(f"Enhanced Risk heatmap saved: {risk_filename} 🔥✨")
-
-    # --- Helper function ---
-
-    def _set_dynamic_ylim(self, ax, data, margin_ratio=0.1, is_bar=False):
-        """
-        [辅助] 动态设置 Y 轴范围 (支持截断模式)
-        """
-        if len(data) == 0:
-            return
-        ymin, ymax = min(data), max(data)
-
-        # 柱状图强制从 0 开始
-        if is_bar:
-            ax.set_ylim(0, ymax * 1.1)
-            return
-
-        # 其他图（折线图）使用动态缩放
-        if ymax > 0:
-            diff = ymax - ymin
-            variation = diff / ymax
-
-            # 如果变化率极小 (<5%)，启用聚焦模式
-            if variation < 0.05:
-                # 聚焦微小变化
-                margin = diff if diff > 0 else ymax * 0.01
-                lower = max(0, ymin - margin * 2)
-                upper = ymax + margin * 2
-                ax.set_ylim(lower, upper)
-            else:
-                # 正常波动，预留 10% 边距
-                margin = diff * 0.1
-                ax.set_ylim(max(0, ymin - margin), ymax + margin)

@@ -24,7 +24,7 @@ from typing import List, Dict
 # --- Project Imports ---
 from app.experiment_manager import Experiment
 from app.core.solution import Solution
-from app.core.baselines import PymooSolver, GurobiSolver, HAS_GUROBI
+from app.core.baselines import PymooSolver, GurobiSolver
 from app.utils.metrics import MetricCalculator, build_reference_front
 from app.utils.result_keeper import setup_logging
 from app.utils.plotter import ParetoPlotter, BenchmarkPlotter
@@ -176,28 +176,25 @@ def main():
             )
 
         # --- C. Exact Baseline: Gurobi ---
-        if HAS_GUROBI:
-            logging.info("Running Gurobi...")
-            g_solver = GurobiSolver(
-                exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
-            )
+        logging.info("Running Gurobi...")
+        g_solver = GurobiSolver(
+            exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
+        )
 
-            start = time.process_time()
-            g_sols = g_solver.solve_weighted_sum(num_points=200)
-            duration = time.process_time() - start
+        start = time.process_time()
+        g_sols = g_solver.solve_weighted_sum(num_points=200)
+        duration = time.process_time() - start
 
-            _record_run_data(
-                run_idx,
-                n_runs,
-                "Gurobi",
-                g_sols,
-                duration,
-                stats_data,
-                all_known_solutions_F,
-                last_run_finals,
-            )
-        else:
-            logging.warning("Skipping Gurobi (Not installed).")
+        _record_run_data(
+            run_idx,
+            n_runs,
+            "Gurobi",
+            g_sols,
+            duration,
+            stats_data,
+            all_known_solutions_F,
+            last_run_finals,
+        )
 
     # -------------------------------------------------------
     # 4. 全局分析与绘图 (Global Analysis & Plotting)
