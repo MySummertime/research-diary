@@ -423,10 +423,11 @@ class ParetoPlotter(BasePlotter):
         plt.close(fig)
         logging.info(f"Comparison plot saved to: {full_path}")
 
-    def plot_frontier_comparison_by_cvar_alpha(
+    def plot_frontier_comparison(
         self,
         frontiers: Dict[str, List[Solution]],
         file_name: str = "pareto_comparison_by_cvar_alpha.svg",
+        x_prefix: str = ""
     ):
         """
         绘制不同 CVaR alpha 下的 Pareto Frontier 对比图。
@@ -461,7 +462,7 @@ class ParetoPlotter(BasePlotter):
             ax.scatter(
                 x_vals,
                 y_vals,
-                label=rf"$\alpha$={label}",
+                label=f"{x_prefix}{label}",
                 color=color,
                 marker=marker,
                 s=50,
@@ -724,7 +725,7 @@ class ParetoPlotter(BasePlotter):
             ax.text(
                 axes[i] - 0.05,
                 0.0,
-                FMT.pprint_val(min_val),
+                f"{min_val:.2e}",
                 fontsize=10,
                 ha="right",
                 va="center",
@@ -733,7 +734,7 @@ class ParetoPlotter(BasePlotter):
             ax.text(
                 axes[i] - 0.05,
                 1.0,
-                FMT.pprint_val(max_val),
+                f"{max_val:.2e}",
                 fontsize=10,
                 ha="right",
                 va="center",
@@ -959,6 +960,7 @@ class SensitivityPlotter(BasePlotter):
         x_labels: List[str],
         cost_data: Dict[str, List[float]],
         risk_data: List[float],
+        xlabel: str,
         filename: str,
     ):
         """
@@ -970,7 +972,7 @@ class SensitivityPlotter(BasePlotter):
         fig, ax1 = plt.subplots(figsize=(10, 8))
 
         x = np.arange(len(x_labels))
-        width = 0.2  # 柱状图宽度
+        width = 0.4  # 柱状图宽度
 
         colors = self.stacked_bar_chart_colors
         c_transport = get_color_by_key(colors, "TRANSPORT_COLOR")
@@ -1119,7 +1121,7 @@ class SensitivityPlotter(BasePlotter):
                 ha="center",
                 va="center",
                 fontsize=12,
-                color=get_color_by_key(self.default_colors, "WHITE"),
+                color=get_color_by_key(self.default_colors, "BLACK"),
             )
 
             for j, (perc_array, center_y_array, label) in enumerate(cost_components):
@@ -1131,11 +1133,8 @@ class SensitivityPlotter(BasePlotter):
                     text_label = f"{percentage:.1f}%"
                     ax1.text(x[i], center_y, text_label, **annot_style)
 
-        ax1.set_ylabel("Total Cost (yuan)", fontweight="bold", color=c_trend)
+        ax1.set_ylabel("Min Cost (yuan)", fontweight="bold", color=c_trend)
         ax1.tick_params(axis="y", labelcolor=c_trend)
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(x_labels, rotation=25, ha="right")
-        ax1.set_xlabel(r"CVaR Confidence Level $\alpha$", fontweight="bold")
 
         # [Auto-Scale Cost: Broken Axis Effect]
         self._set_dynamic_ylim(ax1, total_costs, is_bar=True)
@@ -1164,6 +1163,18 @@ class SensitivityPlotter(BasePlotter):
         self._format_axes(ax1)  # Formats x-axis and ax1 y-axis
         ax2.yaxis.set_major_formatter(FMT)
 
+        # 局部强制覆盖：确保 ax1 和 ax2 使用科学计数法，并使用 10^xx 格式
+        ax1.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
+        ax2.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
+
+        # 强制显示左轴的科学计数法乘数
+        ax1.yaxis.get_offset_text().set_visible(True)
+
+        # X轴刻度设置必须在所有格式化之后
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(x_labels, rotation=25, ha="right")
+        ax1.set_xlabel(xlabel, fontweight="bold")
+
         # Legend
         h1, l1 = ax1.get_legend_handles_labels()
         h2, l2 = ax2.get_legend_handles_labels()
@@ -1184,12 +1195,11 @@ class SensitivityPlotter(BasePlotter):
 
     def plot_dual_line_chart(
         self,
-        x_vals: List[float],
+        x_vals: List[str],
         cost_data: List[float],
         risk_data: List[float],
         xlabel: str,
         filename: str,
-        x_ticks: Optional[List[float]] = None,
     ):
         """
         左轴: Cost (Teal Line), 右轴: Risk (Orange Line)
@@ -1224,15 +1234,9 @@ class SensitivityPlotter(BasePlotter):
         )
         ax1.set_ylabel(r"Min Cost (yuan)", color=c_cost, fontweight="bold")
         ax1.tick_params(axis="y", labelcolor=c_cost)
-        ax1.set_xlabel(xlabel, fontweight="bold")
-
-        if x_ticks:
-            ax1.set_xticks(x_ticks)
-        else:
-            ax1.set_xticks(xs)
 
         # Auto-Scale Cost
-        self._set_dynamic_ylim(ax1, ys_cost, 0.04, False, 0.5, 0.5)
+        self._set_dynamic_ylim(ax1, ys_cost)
 
         # --- 右轴 Risk ---
         ax2 = ax1.twinx()
@@ -1252,12 +1256,6 @@ class SensitivityPlotter(BasePlotter):
         # Auto-Scale Risk
         self._set_dynamic_ylim(ax2, ys_risk)
 
-        # Legend
-        lines = line1 + line2
-        labels = [l.get_label() for l in lines]
-        ax1.legend(lines, labels, loc="upper left", frameon=True, fancybox=True)
-        ax1.grid(True, linestyle="--", alpha=0.5)
-
         # 1. 应用全局格式
         self._format_axes(ax1)  # 保持全局格式化 X 轴和部分通用设置
 
@@ -1267,10 +1265,22 @@ class SensitivityPlotter(BasePlotter):
 
         # 3. 强制刻度密度 (MultipleLocator 必须在 ticklabel_format 之后)
 
-        # Cost (ax1) 的刻度间隔 (1000)
-        ax1.yaxis.set_major_locator(MultipleLocator(1000))
-        # Risk (ax2) 的刻度间隔 (100，以保证密度)
-        ax2.yaxis.set_major_locator(MultipleLocator(100))
+        # Cost (ax1) 的刻度间隔 (5000)
+        ax1.yaxis.set_major_locator(MultipleLocator(5000))
+        # Risk (ax2) 的刻度间隔 (1000，以保证密度)
+        ax2.yaxis.set_major_locator(MultipleLocator(1000))
+
+        # 设置x轴刻度的位置
+        ax1.set_xticks(xs)
+        # 设置x轴每个刻度的标签
+        ax1.set_xticklabels(xs, rotation=25, ha="right")
+        ax1.set_xlabel(xlabel, fontweight="bold")
+
+        # Legend
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax1.legend(lines, labels, loc="upper left", frameon=True, fancybox=True)
+        ax1.grid(True, linestyle="--", alpha=0.5)
 
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, filename))
@@ -1279,7 +1289,7 @@ class SensitivityPlotter(BasePlotter):
 
     def plot_dual_line_chart_with_custom_labels(
         self,
-        x_indices: List[int],  # 有效点的索引 [0,1,2,...]
+        x_indices: List[float],
         cost_data: List[float],
         risk_data: List[float],
         custom_x_labels: List[str],  # 自定义标签，必须和有效点顺序一致
@@ -1300,7 +1310,7 @@ class SensitivityPlotter(BasePlotter):
             logging.warning("No valid data for custom dual line chart.")
             return
 
-        xs = [x_indices[i] for i in valid_indices]  # 用整数索引占位
+        xs = [x_indices[i] for i in valid_indices]  # 索引占位
         ys_cost = [cost_data[i] for i in valid_indices]
         ys_risk = [risk_data[i] for i in valid_indices]
         labels = [custom_x_labels[i] for i in valid_indices]
@@ -1323,13 +1333,11 @@ class SensitivityPlotter(BasePlotter):
         )
         ax1.set_ylabel(r"Min Cost (yuan)", color=c_cost, fontweight="bold", fontsize=12)
         ax1.tick_params(axis="y", labelcolor=c_cost)
-        ax1.set_xlabel(xlabel, fontweight="bold", fontsize=12)
+        ax1.set_xlabel(xlabel, fontweight="bold")
 
         # 自定义 x 标签
         ax1.set_xticks(xs)
-        ax1.set_xticklabels(
-            labels, rotation=45, ha="right", fontweight="bold", fontsize=11
-        )
+        ax1.set_xticklabels(labels, rotation=45, ha="right", fontweight="bold")
 
         # Auto-Scale Cost
         self._set_dynamic_ylim(ax1, ys_cost, 0.04, False, 0.5, 0.5)
@@ -1373,8 +1381,8 @@ class SensitivityPlotter(BasePlotter):
 
         # Cost (ax1) 的刻度间隔 (1000)
         ax1.yaxis.set_major_locator(MultipleLocator(1000))
-        # Risk (ax2) 的刻度间隔 (100，以保证密度)
-        ax2.yaxis.set_major_locator(MultipleLocator(100))
+        # Risk (ax2) 的刻度间隔 (1000，以保证密度)
+        ax2.yaxis.set_major_locator(MultipleLocator(1000))
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, filename), dpi=300)
         plt.close()

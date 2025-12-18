@@ -242,19 +242,15 @@ def _get_node_risk_exposure(
         if not path.task:
             continue
 
-        # 任务运量 dv
-        dv = path.task.demand
-
         # 1. 收集弧段风险贡献
         for arc in path.arcs:
             # 弧段事故概率 p_ijm
             p_ijm = arc.accident_prob_per_km * arc.length
             # 弧段后果 c_ijm (动态后果)
             c_base = evaluator.risk_model.get_consequence(arc)
-            c_ijm_final = c_base * dv
 
             # 贡献风险 = 概率 * 后果
-            risk_contrib = p_ijm * c_ijm_final
+            risk_contrib = p_ijm * c_base
 
             # 将弧段风险贡献平均分配给弧段的两个端点作为区域风险暴露
             # 这是一个常见的简化，将弧段风险转化为节点/区域风险
@@ -270,10 +266,9 @@ def _get_node_risk_exposure(
             p_k = hub.accident_prob
             # 枢纽后果 c_k (动态后果)
             c_base = evaluator.risk_model.get_consequence(hub)
-            c_k_final = c_base * dv
 
             # 贡献风险 = 概率 * 后果
-            risk_contrib = p_k * c_k_final
+            risk_contrib = p_k * c_base
 
             node_risk_map[hub.node_id] = (
                 node_risk_map.get(hub.node_id, 0.0) + risk_contrib
@@ -331,26 +326,25 @@ def _calculate_single_task_risk(path, evaluator: Evaluator) -> float:
     """
     [Helper] 重新计算单个任务的 CVaR 风险
     """
-    dv = path.task.demand
     p_c_pairs = []
 
     # 1. 收集 Arc 风险
     for arc in path.arcs:
         c_base = evaluator.risk_model.get_consequence(arc)
+        c_actual = c_base
         p_ij = arc.accident_prob_per_km * arc.length
 
-        c_final = c_base * dv
-        if p_ij > 0 and c_final > 0:
-            p_c_pairs.append((p_ij, c_final))
+        if p_ij > 0 and c_actual > 0:
+            p_c_pairs.append((p_ij, c_base))
 
     # 2. 收集 Hub 风险
     for hub in path.transfer_hubs:
         c_base = evaluator.risk_model.get_consequence(hub)
+        c_actual = c_base
         p_k = hub.accident_prob
 
-        c_final = c_base * dv
-        if p_k > 0 and c_final > 0:
-            p_c_pairs.append((p_k, c_final))
+        if p_k > 0 and c_actual > 0:
+            p_c_pairs.append((p_k, c_base))
 
     if not p_c_pairs:
         return 0.0

@@ -100,7 +100,7 @@ class NetworkVisualizer:
 
         # 3. 添加底图
         if use_projection:
-            self._add_basemap(ax)
+            #self._add_basemap(ax)
             pass
 
         # 4. 图例与保存
@@ -255,7 +255,7 @@ class NetworkVisualizer:
 
         # 添加底图
         if use_projection:
-            self._add_basemap(ax)
+            #self._add_basemap(ax)
             pass
 
         # 添加图例 (路线图专有)

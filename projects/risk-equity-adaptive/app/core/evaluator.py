@@ -29,9 +29,12 @@ class Evaluator:
         # 提取各自关心的配置分组，提高内聚性
         self.risk_config = self.config.get("risk_model_f1", {})
         self.cost_config = self.config.get("cost_model_f2", {})
+        self.experiment_config = self.config.get("experiment", {})
 
         # 初始化物理风险模型
         self.risk_model = DynamicRiskModel(network, self.risk_config)
+
+        self.delta = self.cost_config.get("cost_uncertainty_multiplier", 1.0)
 
         # --- 获取确定性成本参数 ---
 
@@ -63,10 +66,17 @@ class Evaluator:
         [主方法] 评估一个解 (Solution) 的所有属性。
         """
 
-        # 1. 计算目标函数 f2 (期望成本)
-        solution.f2_cost = self._calculate_f2_expected_cost(solution)
+        # 1. 计算真实期望成本
+        solution.f2_cost = self._calculate_f2_expected_cost(solution, False)
 
-        # 2. 计算目标函数 f1 (CVaR 风险)
+        # 2. 计算缩放后的期望成本 (用于算法搜索引导和 budget 灵敏度分析)
+        # 如果 delta == 1.0，则 f2_cost_scaled 等于 f2_cost
+        if self.delta != 1.0:
+            solution.f2_cost_scaled = self._calculate_f2_expected_cost(solution, True)
+        else:
+            solution.f2_cost_scaled = solution.f2_cost
+
+        # 3. 计算目标函数 f1 (CVaR 风险)
         # 这个函数会计算并填充 solution.eta_values
         real_risk = self._calculate_f1_cvar_risk(solution)
         solution.f1_risk = real_risk
@@ -74,12 +84,14 @@ class Evaluator:
         scale = self.risk_config.get("risk_objective_scale", 1.0)
         solution.f1_risk_scaled = real_risk * scale
 
-        # 3. 检查所有约束 (容量 + 模糊成本预算)
+        # 4. 检查所有约束 (容量 + 模糊成本预算)
         is_feasible, violation = self._check_constraints(solution)
         solution.is_feasible = is_feasible
         solution.constraint_violation = violation
 
-    def calculate_cost_breakdown(self, solution: Solution) -> Dict[str, float]:
+    def calculate_cost_breakdown(
+        self, solution: Solution, use_scaling: bool = False
+    ) -> Dict[str, float]:
         """
         [Helper] 计算成本构成的详细拆解 (用于绘图)
         返回: {'transport': val, 'transshipment': val, 'carbon': val}
@@ -104,12 +116,12 @@ class Evaluator:
 
                 # 使用动态缩放后的模糊时间
                 scaled_time = self._get_scaled_fuzzy(
-                    arc.fuzzy_transport_time, "triangular"
+                    arc.fuzzy_transport_time, "triangular", use_scaling
                 )
                 expected_time = FuzzyMath.triangular_expected_value(*scaled_time)
 
                 # 拆分
-                breakdown["transport"] += (C_m * dv * d_ij + P * expected_time)
+                breakdown["transport"] += C_m * dv * d_ij + P * expected_time
                 breakdown["carbon"] += E_m * dv * d_ij
 
             # 2. 枢纽成本
@@ -122,14 +134,14 @@ class Evaluator:
 
                 # 使用动态缩放后的模糊时间
                 scaled_trans_time = self._get_scaled_fuzzy(
-                    hub.fuzzy_transshipment_time, "trapezoidal"
+                    hub.fuzzy_transshipment_time, "trapezoidal", use_scaling
                 )
                 expected_trans_time = FuzzyMath.trapezoidal_expected_value(
                     *scaled_trans_time
                 )
 
                 # 全部算作转运成本
-                breakdown["transshipment"] += (B_k * dv + I_k * expected_trans_time)
+                breakdown["transshipment"] += B_k * dv + I_k * expected_trans_time
 
         return breakdown
 
@@ -155,31 +167,27 @@ class Evaluator:
         return exp_risk
 
     # --- 核心辅助函数: 不确定性动态缩放 ---
-    def _get_scaled_fuzzy(self, fuzzy_val: Tuple, shape: str) -> Tuple:
+    def _get_scaled_fuzzy(
+        self, fuzzy_val: Tuple, shape: str, use_scaling: bool = False
+    ) -> Tuple:
         """
         根据全局配置中的 'uncertainty_multiplier' (delta) 缩放模糊数区间。
-        delta = 1.0 (Default): 保持原样
-        delta = 0.0: 退化为确定性值 (区间宽度为0)
+        delta = 1.0 (Default): 确定性值
         delta > 1.0: 区间变宽 (环境恶化)
         """
-        delta = self.config.get("uncertainty_multiplier", 1.0)
-
-        if delta == 1.0:
+        delta = self.delta
+        if not use_scaling or delta == 1.0:
             return fuzzy_val
 
+        # 采用比例缩放：研究 '不确定性环境整体恶化' 的标准做法
         if shape == "triangular":
-            # (a, b, c) -> 缩放左右边界 a, c，保持核心 b 不变
             a, b, c = fuzzy_val
-            a_new = b - (b - a) * delta
-            c_new = b + (c - b) * delta
-            return (a_new, b, c_new)
+            # 整体按比例向右推移并扩张
+            return (a * delta, b * delta, c * delta)
 
         elif shape == "trapezoidal":
-            # (a, b, c, d) -> 缩放外边界 a, d，保持核心区间 [b, c] 不变
             a, b, c, d = fuzzy_val
-            a_new = b - (b - a) * delta
-            d_new = c + (d - c) * delta
-            return (a_new, b, c, d_new)
+            return (a * delta, b * delta, c * delta, d * delta)
 
         return fuzzy_val
 
@@ -309,8 +317,10 @@ class Evaluator:
     # Objective Function 2: Cost (Expected Value)
     # =========================================================================z
 
-    def _calculate_f2_expected_cost(self, solution: Solution) -> float:
-        bd = self.calculate_cost_breakdown(solution)
+    def _calculate_f2_expected_cost(
+        self, solution: Solution, use_scaling: bool = False
+    ) -> float:
+        bd = self.calculate_cost_breakdown(solution, use_scaling)
         return bd["transport"] + bd["transshipment"] + bd["carbon"]
 
     # =========================================================================
@@ -353,9 +363,9 @@ class Evaluator:
                 total_violation += (flow - node.capacity) / node.capacity
 
         # 3. Fuzzy Cost
-        pessimistic_cost = 0.0
-        alpha_c = self.cost_config.get("fuzzy_cost_alpha_c", 0.999990)
-        bgt = self.cost_config.get("fuzzy_cost_budget", 1e12)
+        pessimistic_cost_scaled = 0.0
+        alpha_c = self.cost_config.get("fuzzy_cost_alpha_c", 0.99960)
+        bgt = self.cost_config.get("fuzzy_cost_budget", 1e15)
 
         for task_id, path in solution.path_selections.items():
             dv = path.task.demand
@@ -365,21 +375,29 @@ class Evaluator:
                 C_m = self.unit_transport_cost.get(mode, 0.0)
                 E_m = self.unit_carbon_cost.get(mode, 0.0)
                 P = self.unit_operation_cost
-                pess_time = FuzzyMath.triangular_pessimistic_value(
-                    *arc.fuzzy_transport_time, alpha_c
+
+                scaled_time = self._get_scaled_fuzzy(
+                    arc.fuzzy_transport_time, "triangular", True
                 )
-                pessimistic_cost += dv * ((C_m + E_m) * d_ij + P * pess_time)
+                pess_time = FuzzyMath.triangular_pessimistic_value(
+                    *scaled_time, alpha_c
+                )
+                pessimistic_cost_scaled += (C_m + E_m) * dv * d_ij + P * pess_time
             for hub in path.transfer_hubs:
                 B_k = self.unit_transshipment_cost
                 I_k = self.unit_transshipment_infra_cost
-                pess_trans_time = FuzzyMath.trapezoidal_pessimistic_value(
-                    *hub.fuzzy_transshipment_time, alpha_c
+
+                scaled_trans_time = self._get_scaled_fuzzy(
+                    hub.fuzzy_transshipment_time, "trapezoidal", True
                 )
-                pessimistic_cost += dv * (B_k + I_k * pess_trans_time)
+                pess_trans_time = FuzzyMath.trapezoidal_pessimistic_value(
+                    *scaled_trans_time, alpha_c
+                )
+                pessimistic_cost_scaled += B_k * dv + I_k * pess_trans_time
 
-        solution.pessimistic_cost = pessimistic_cost
+        solution.pessimistic_cost = pessimistic_cost_scaled
 
-        if pessimistic_cost > bgt:
-            total_violation += (pessimistic_cost - bgt) / bgt
+        if pessimistic_cost_scaled > bgt:
+            total_violation += (pessimistic_cost_scaled - bgt) / bgt
 
         return total_violation == 0.0, total_violation

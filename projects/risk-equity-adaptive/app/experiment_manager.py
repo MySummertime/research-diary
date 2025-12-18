@@ -12,7 +12,7 @@ from app.core.path import PathFinder
 from app.core.evaluator import Evaluator
 from app.core.nsga2 import NSGA2
 from app.core.solution import Solution
-from app.core.generator import JSONNetworkGenerator
+from app.core.network_generator import JSONNetworkGenerator
 
 # --- Utils ---
 from app.utils.callback import GenerationalLogger, GenerationalFileLogger
@@ -88,13 +88,17 @@ class Experiment:
         network = generator.generate()
         network.summary()
 
+        # 初始化 Evaluator
+        # PathFinder 的多准则搜索（特别是 fast_response 策略）依赖 risk_model 的预计算结果
+        evaluator = Evaluator(network, self.config)
+
         # 引入 time 模块
         import time
 
         start_time = time.process_time()
 
-        # 路径搜索
-        path_finder = PathFinder(network)
+        # 将 evaluator 传入 PathFinder
+        path_finder = PathFinder(network, evaluator)
         paths_map = path_finder.find_all_candidate_paths()
 
         end_time = time.process_time()
@@ -103,7 +107,7 @@ class Experiment:
         self.precompute_time = end_time - start_time
         logging.info(f"Path Pre-computation Time: {self.precompute_time:.4f}s")
 
-        evaluator = Evaluator(network, self.config)
+        # 返回顺序保持不变，但内部逻辑已调整
         return network, evaluator, paths_map
 
     def run(self):
