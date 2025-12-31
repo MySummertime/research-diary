@@ -427,7 +427,7 @@ class ParetoPlotter(BasePlotter):
         self,
         frontiers: Dict[str, List[Solution]],
         file_name: str = "pareto_comparison_by_cvar_alpha.svg",
-        x_prefix: str = ""
+        x_prefix: str = "",
     ):
         """
         绘制不同 CVaR alpha 下的 Pareto Frontier 对比图。
@@ -1287,107 +1287,6 @@ class SensitivityPlotter(BasePlotter):
         plt.close()
         logging.info(f"Dual line chart saved: {filename}")
 
-    def plot_dual_line_chart_with_custom_labels(
-        self,
-        x_indices: List[float],
-        cost_data: List[float],
-        risk_data: List[float],
-        custom_x_labels: List[str],  # 自定义标签，必须和有效点顺序一致
-        xlabel: str,
-        filename: str,
-    ):
-        """
-        升级版双线图：完全继承 plot_dual_line_chart 风格 + 支持自定义 x 轴字符串标签 🎉
-        用于非对称不确定性场景展示。
-        """
-        # 过滤有效点（None 跳过）
-        valid_indices = [
-            i
-            for i, (c, r) in enumerate(zip(cost_data, risk_data))
-            if c is not None and r is not None
-        ]
-        if not valid_indices:
-            logging.warning("No valid data for custom dual line chart.")
-            return
-
-        xs = [x_indices[i] for i in valid_indices]  # 索引占位
-        ys_cost = [cost_data[i] for i in valid_indices]
-        ys_risk = [risk_data[i] for i in valid_indices]
-        labels = [custom_x_labels[i] for i in valid_indices]
-
-        fig, ax1 = plt.subplots(figsize=(12, 7))  # 稍微宽一点，标签旋转不挤
-
-        colors = self.dual_line_chart_colors
-        c_cost = get_color_by_key(colors, "COST_LINE")
-        c_risk = get_color_by_key(colors, "RISK_LINE")
-
-        # --- 左轴 Cost  ---
-        line1 = ax1.plot(
-            xs,
-            ys_cost,
-            color=c_cost,
-            marker="o",
-            markersize=5,
-            linewidth=2,
-            label="Min Cost",
-        )
-        ax1.set_ylabel(r"Min Cost (yuan)", color=c_cost, fontweight="bold", fontsize=12)
-        ax1.tick_params(axis="y", labelcolor=c_cost)
-        ax1.set_xlabel(xlabel, fontweight="bold")
-
-        # 自定义 x 标签
-        ax1.set_xticks(xs)
-        ax1.set_xticklabels(labels, rotation=45, ha="right", fontweight="bold")
-
-        # Auto-Scale Cost
-        self._set_dynamic_ylim(ax1, ys_cost, 0.04, False, 0.5, 0.5)
-
-        # --- 右轴 Risk  ---
-        ax2 = ax1.twinx()
-        line2 = ax2.plot(
-            xs,
-            ys_risk,
-            color=c_risk,
-            marker="D",
-            markersize=5,
-            linewidth=2,
-            linestyle="--",
-            label="Min Risk",
-        )
-        ax2.set_ylabel(
-            r"Min Risk (people)", color=c_risk, fontweight="bold", fontsize=12
-        )
-        ax2.tick_params(axis="y", labelcolor=c_risk)
-
-        # Auto-Scale Risk
-        self._set_dynamic_ylim(ax2, ys_risk)
-
-        # Legend + Grid + Formatter
-        lines = line1 + line2
-        labs = [l.get_label() for l in lines]
-        ax1.legend(
-            lines, labs, loc="upper left", frameon=True, fancybox=True, fontsize=11
-        )
-        ax1.grid(True, linestyle="--", alpha=0.5)
-
-        # 1. 应用全局格式
-        self._format_axes(ax1)  # 保持全局格式化 X 轴和部分通用设置
-
-        # 2. 局部强制覆盖：确保 ax1 和 ax2 使用科学计数法，并使用 10^xx 格式
-        ax1.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
-        ax2.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
-
-        # 3. 强制刻度密度 (MultipleLocator 必须在 ticklabel_format 之后)
-
-        # Cost (ax1) 的刻度间隔 (1000)
-        ax1.yaxis.set_major_locator(MultipleLocator(1000))
-        # Risk (ax2) 的刻度间隔 (1000，以保证密度)
-        ax2.yaxis.set_major_locator(MultipleLocator(1000))
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.save_dir, filename), dpi=300)
-        plt.close()
-        logging.info(f"Custom label dual line chart saved: {filename} 🎨🚀")
-
     def plot_emergency_uncertainty_heatmap(
         self,
         delta_a_values: List[float],
@@ -1398,57 +1297,61 @@ class SensitivityPlotter(BasePlotter):
     ):
         """
         绘制两张热力图: Min Cost 和 Min Risk（在 δ_a * δ_c 网格上）。
-        使用 seaborn 风格，带数值标注，支持 infeasible 区域显示。
         """
-        # 转为 DataFrame
+        # 1. 转换为 DataFrame
         cost_df = pd.DataFrame(cost_grid, index=delta_a_values, columns=delta_c_values)
         risk_df = pd.DataFrame(risk_grid, index=delta_a_values, columns=delta_c_values)
 
+        # 2. 获取颜色配置
         colors = self.heapmap_colors
-        cost_cmap = get_color_by_key(colors, "COST_CMAP")
-        risk_cmap = get_color_by_key(colors, "RISK_CMAP")
+        # 尝试获取配置好的 CMAP，如果失败则使用学术常用的 GnBu 和 OrRd
+        cost_cmap = get_color_by_key(colors, "COST_CMAP") if colors else "GnBu"
+        risk_cmap = get_color_by_key(colors, "RISK_CMAP") if colors else "OrRd"
 
-        # 处理 None 值：用 np.nan 替代，便于 heatmap 显示为空白
+        # 3. 处理无效值 (None 或 np.nan 在热力图中显示为空白)
         cost_df = cost_df.fillna(np.nan)
         risk_df = risk_df.fillna(np.nan)
 
         # --- 图1: Min Cost Heatmap ---
         fig, ax = plt.subplots(figsize=(11, 8.5))
 
-        # 确定格式化字符串：由于数值可能很大，用 FMT 来处理
-        cost_annot_fmt = lambda x: FMT.pprint_val(x) if not np.isnan(x) else ""
+        # 使用标准 f-string 科学计数法格式化标注，保留 2 位小数
+        cost_annot_fmt = lambda x: f"{x:.2e}" if not np.isnan(x) else ""
         cost_annot_values = cost_df.applymap(cost_annot_fmt)
 
         sns.heatmap(
             cost_df,
             annot=cost_annot_values,
-            fmt="s",  # 使用字符串格式，因为它已经被 FMT 处理了
+            fmt="s",  # 声明标注是字符串类型
             cmap=cost_cmap,
             linewidths=0.5,
             cbar_kws={"label": "Min Cost (yuan)", "shrink": 0.8},
-            mask=cost_df.isna(),  # None 区域不显示颜色
+            mask=cost_df.isna(),
             annot_kws={"size": 10},
             ax=ax,
         )
 
-        # 格式化颜色条
+        # 格式化颜色条 (Colorbar) 使用我们定义的科学计数法 FMT
         cbar = ax.collections[0].colorbar
         cbar.ax.yaxis.set_major_formatter(FMT)
 
         plt.xlabel(r"Pessimistic Multiplier $\delta_c$", fontweight="bold", fontsize=12)
         plt.ylabel(r"Optimistic Multiplier $\delta_a$", fontweight="bold", fontsize=12)
+        plt.title(
+            "System Cost Sensitivity Under Asymmetric Uncertainty", fontsize=15, pad=20
+        )
 
         plt.tight_layout()
         cost_filename = f"{prefix}_Cost_Heatmap.svg"
         plt.savefig(os.path.join(self.save_dir, cost_filename), dpi=300)
         plt.close(fig)
-        logging.info(f"Enhanced Cost heatmap saved: {cost_filename} 🌡️✨")
+        logging.info(f"Fixed Cost heatmap saved: {cost_filename} 🌡️✨")
 
         # --- 图2: Min Risk Heatmap ---
         fig, ax = plt.subplots(figsize=(11, 8.5))
 
-        # 确定格式化字符串
-        risk_annot_fmt = lambda x: FMT.pprint_val(x) if not np.isnan(x) else ""
+        # 风险热力图使用科学计数法标注
+        risk_annot_fmt = lambda x: f"{x:.2e}" if not np.isnan(x) else ""
         risk_annot_values = risk_df.applymap(risk_annot_fmt)
 
         sns.heatmap(
@@ -1463,15 +1366,17 @@ class SensitivityPlotter(BasePlotter):
             ax=ax,
         )
 
-        # 格式化颜色条
         cbar = ax.collections[0].colorbar
         cbar.ax.yaxis.set_major_formatter(FMT)
 
         plt.xlabel(r"Pessimistic Multiplier $\delta_c$", fontweight="bold", fontsize=12)
         plt.ylabel(r"Optimistic Multiplier $\delta_a$", fontweight="bold", fontsize=12)
+        plt.title(
+            "System Risk Sensitivity Under Asymmetric Uncertainty", fontsize=15, pad=20
+        )
 
         plt.tight_layout()
         risk_filename = f"{prefix}_Risk_Heatmap.svg"
         plt.savefig(os.path.join(self.save_dir, risk_filename), dpi=300)
         plt.close(fig)
-        logging.info(f"Enhanced Risk heatmap saved: {risk_filename} 🔥✨")
+        logging.info(f"Fixed Risk heatmap saved: {risk_filename} 🔥✨")

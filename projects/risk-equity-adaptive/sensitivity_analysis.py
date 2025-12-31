@@ -26,15 +26,12 @@ def main():
     setup_logging(log_dir=sensitivity_dir, log_name="sensitivity.log")
 
     # 2. Run Experiments
-
+    
     # Risk Aversion
-    # perform_cvar_sensitivity(exp, sensitivity_dir)
+    perform_cvar_sensitivity(exp, sensitivity_dir)
 
     # Reliability
     perform_budget_sensitivity(exp, sensitivity_dir)
-
-    # Uncertainty
-    # perform_uncertain_response_time_sensitivity(exp, sensitivity_dir)
 
 
 def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
@@ -69,7 +66,7 @@ def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
 
     # 确保获取正确的配置 Key
     target_key = "risk_model_f1"
-    original_alpha = exp.config.get(target_key, {}).get("cvar_alpha", 0.99980)
+    original_alpha = exp.config.get(target_key, {}).get("cvar_alpha", 0.99960)
 
     for alpha in alphas:
         alpha_val = float(alpha)
@@ -373,138 +370,6 @@ def perform_budget_sensitivity(exp: Experiment, save_dir: str):
             x_prefix=r"$\alpha_c$=",
         )
 
-
-def perform_uncertain_response_time_sensitivity(exp: Experiment, save_dir: str):
-    logging.info(
-        ">>> Starting Sensitivity Experiment: Emergency Response Time Uncertainty..."
-    )
-
-    # Backup original params
-    orig_bgt = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_budget", 1e15)
-    orig_b_multi = exp.config.get("risk_model_f1", {}).get(
-        "emergency_b_multiplier", 1.0
-    )
-
-    # 2. 环境预设
-    # --- 步骤 A: 寻找基准下的 Tight Budget ---
-    logging.info(" Calibrating Tight Budget at b_multiplier = 1.0...")
-    exp.config["risk_model_f1"]["emergency_b_multiplier"] = 1.0
-
-    # 热加载 Evaluator 以触发 RiskModel 的预计算
-    exp.evaluator = Evaluator(exp.network, exp.config)
-    exp.algorithm = NSGA2(
-        exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
-    )
-
-    pop = exp.algorithm.run(callbacks=[], initial_population=None)
-    feasible_rank0 = [s for s in pop if s.is_feasible and s.rank == 0]
-
-    if not feasible_rank0:
-        logging.error(
-            "Warm-up for Uncertain Response Time sensitivity experiment failed."
-        )
-        return
-
-    # 使用决策成本 (scaled cost) 寻找最经济解作为预算基准
-    min_cost_sol_warm = min(feasible_rank0, key=lambda s: s.f2_cost_scaled)
-    epsilon = 0.08
-    TIGHT_BUDGET = min_cost_sol_warm.pessimistic_cost * (1.0 + epsilon)
-    logging.info(f"Setting TIGHT BUDGET = {TIGHT_BUDGET:.2f}")
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = TIGHT_BUDGET
-
-    # --- 步骤 B: 迭代 b_multiplier ---
-    b_multipliers = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
-    results = {
-        "x_labels": [],
-        "min_cost_risks": [],
-        "min_cost_totals": [],
-        "min_cost_bd": {"transport": [], "transshipment": [], "carbon": []},
-        "min_risk_totals": [],
-        "min_risk_costs": [],
-        "min_risk_bd": {"transport": [], "transshipment": [], "carbon": []},
-    }
-    pareto_fronts = {}
-
-    for b_multi in b_multipliers:
-        label = f"{b_multi:.2f}"
-        logging.info(f" Running for b_multiplier = {label}")
-
-        exp.config["risk_model_f1"]["emergency_b_multiplier"] = b_multi
-        exp.evaluator = Evaluator(exp.network, exp.config)
-        exp.algorithm = NSGA2(
-            exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
-        )
-
-        final_pop = exp.algorithm.run(callbacks=[], initial_population=None)
-        feasible = [s for s in final_pop if s.is_feasible and s.rank == 0]
-
-        if feasible:
-            feasible.sort(key=lambda s: s.f1_risk)
-            pareto_fronts[label] = feasible
-
-            # 统一使用决策空间最优解 (Scaled)
-            sol_mc = min(feasible, key=lambda s: s.f2_cost_scaled)
-            sol_mr = min(feasible, key=lambda s: s.f1_risk_scaled)
-
-            # 收集 Min Cost 解数据 (存储物理真实值 f2_cost 用于展示)
-            results["min_cost_risks"].append(sol_mc.f1_risk)
-            results["min_cost_totals"].append(sol_mc.f2_cost)
-            bd_mc = exp.evaluator.calculate_cost_breakdown(sol_mc)
-            for k in bd_mc:
-                results["min_cost_bd"][k].append(bd_mc[k])
-
-            # 收集 Min Risk 解数据
-            results["min_risk_totals"].append(sol_mr.f1_risk)
-            results["min_risk_costs"].append(sol_mr.f2_cost)
-            bd_mr = exp.evaluator.calculate_cost_breakdown(sol_mr)
-            for k in bd_mr:
-                results["min_risk_bd"][k].append(bd_mr[k])
-
-            results["x_labels"].append(label)
-
-    # --- 步骤 C: CSV 输出 ---
-    df_data = {
-        "b_multiplier": results["x_labels"],
-        "min_cost_sol_risk": results["min_cost_risks"],
-        "min_cost_sol_cost": results["min_cost_totals"],
-        "min_cost_sol_transport": results["min_cost_bd"]["transport"],
-        "min_cost_sol_transshipment": results["min_cost_bd"]["transshipment"],
-        "min_cost_sol_carbon": results["min_cost_bd"]["carbon"],
-        "min_risk_sol_risk": results["min_risk_totals"],
-        "min_risk_sol_cost": results["min_risk_costs"],
-        "min_risk_sol_transport": results["min_risk_bd"]["transport"],
-        "min_risk_sol_transshipment": results["min_risk_bd"]["transshipment"],
-        "min_risk_sol_carbon": results["min_risk_bd"]["carbon"],
-    }
-    pd.DataFrame(df_data).to_csv(
-        os.path.join(save_dir, "Sensitivity_B_Multiplier_Data.csv"), index=False
-    )
-
-    # --- 步骤 D: 绘图 ---
-    plotter = SensitivityPlotter(save_dir)
-    pareto_plotter = ParetoPlotter(save_dir)
-
-    plotter.plot_dual_line_chart_with_custom_labels(
-        x_indices=[float(x) for x in results["x_labels"]],
-        cost_data=results["min_cost_totals"],
-        risk_data=results["min_risk_totals"],
-        custom_x_labels=results["x_labels"],
-        xlabel="Emergency Response Time Multiplier (b)",
-        filename="Figure_B_Multiplier_Cost_Risk_Trend.svg",
-    )
-
-    pareto_plotter.plot_frontier_comparison(
-        pareto_fronts,
-        file_name="Figure_B_Multiplier_Pareto_Shift.svg",
-        x_prefix=r"$\delta_b$=",
-    )
-
-    # --- 恢复初始配置 ---
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = orig_bgt
-    exp.config["risk_model_f1"]["emergency_b_multiplier"] = orig_b_multi
-    exp.evaluator = Evaluator(exp.network, exp.config)
-
-    logging.info("Uncertain Response Time Sensitivity Experiment Completed. 🚀")
 
 
 if __name__ == "__main__":
