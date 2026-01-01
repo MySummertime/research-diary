@@ -1,0 +1,65 @@
+{
+  "terminal.integrated.cwd": "${workspaceFolder}",
+  "python.defaultInterpreterPath": "${workspaceFolder}/envs/python.exe",
+  "python.languageServer": "Pylance",
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.aiCodeActions": {
+    "implementAbstractClasses": true
+  },
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true,
+    "**/envs": true
+  },
+  "latex-workshop.latex.tools": [
+    // 中文配置
+    {
+      "name": "xelatex",
+      "command": "xelatex",
+      "args": ["-synctex=1", "-interaction=nonstopmode", "-file-line-error", "%DOC%"],
+      "env": {}
+    },
+    // 英文配置
+    {
+      "name": "pdflatex",
+      "command": "pdflatex",
+      "args": ["-synctex=1", "-interaction=nonstopmode", "-file-line-error", "%DOC%"]
+    },
+    // 参考文献配置
+    {
+      "name": "bibtex",
+      "command": "bibtex",
+      "args": ["%DOCFILE%"]
+    }
+  ],
+  "latex-workshop.latex.recipes": [
+    {
+      "name": "🇨🇳 中文论文 → XeLaTeX + BibTeX",
+      "tools": ["xelatex", "bibtex", "xelatex", "xelatex"]
+    },
+    {
+      "name": "🇬🇧 英文论文 → pdfLaTeX + BibTeX",
+      "tools": ["pdflatex", "bibtex", "pdflatex", "pdflatex"]
+    },
+    // 纯编译，方便快速浏览
+    {
+      "name": "快速预览 → XeLaTeX",
+      "tools": ["xelatex", "xelatex", "xelatex"]
+    }
+  ],
+  "latex-workshop.view.pdf.viewer": "tab",
+  "latex-workshop.latex.autoBuild.run": "onSave",
+  "latex-workshop.message.error.show": true,
+  "latex-workshop.synctex.afterBuild.enabled": true,
+  "latex-workshop.latex.autoClean.run": "onBuilt" // 自动清理 aux/log 文件
+}

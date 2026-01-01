@@ -1,17 +1,19 @@
 # --- coding: utf-8 ---
 # --- app/utils/plotter.py ---
-import os
 import logging
+import os
+from typing import Dict, List, Optional, Tuple
+
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from typing import List, Dict, Optional, Tuple
-from matplotlib.ticker import ScalarFormatter, MultipleLocator
+from matplotlib.ticker import MultipleLocator, ScalarFormatter
 from scipy.interpolate import PchipInterpolator
-from app.core.solution import Solution
+
 from app.core.evaluator import Evaluator
+from app.core.solution import Solution
 from app.utils.visual_style import ColorPalette, get_color_by_key
 
 # --- 全局 Matplotlib Formatter ---
@@ -482,6 +484,62 @@ class ParetoPlotter(BasePlotter):
         plt.savefig(os.path.join(self.save_dir, file_name))
         plt.close(fig)
         logging.info(f"Pareto comparison saved: {file_name}")
+
+    def plot_value_comparison(
+        self,
+        dyn_front: List[Solution],
+        static_reevaluated: List[Solution],
+        file_name: str,
+    ):
+        """
+        动态模型价值对比图。
+        展示 Proposed (线+点) 与 Static (散点) 在真实动态环境下的差异。
+        """
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        # 1. 绘制 Proposed 前沿 (蓝色实线 + 空心圆)
+        dyn_front.sort(key=lambda s: s.f1_risk)
+        dyn_risk = [s.f1_risk for s in dyn_front]
+        dyn_cost = [s.f2_cost for s in dyn_front]
+
+        ax.plot(
+            dyn_risk,
+            dyn_cost,
+            color=get_color_by_key(self.pareto_colors_by_algo, "PROPOSED"),
+            linestyle="-",
+            marker="o",
+            markerfacecolor="white",
+            markersize=7,
+            label="Proposed Model (Uncertain Consequence)",
+            zorder=3,
+        )
+
+        # 2. 绘制静态解回测点 (红色叉号)
+        static_risk = [s.f1_risk for s in static_reevaluated]
+        static_cost = [s.f2_cost for s in static_reevaluated]
+
+        ax.scatter(
+            static_risk,
+            static_cost,
+            color=get_color_by_key(self.pareto_colors_by_algo, "EXACT"),
+            marker="x",
+            s=80,
+            label="Static Model (Static Consequence)",
+            zorder=2,
+        )
+
+        ax.set_xlabel(r"Total Risk $f_1$ (people)", fontweight="bold")
+        ax.set_ylabel(r"Total Cost $f_2$ (yuan)", fontweight="bold")
+        self._format_axes(ax)
+
+        # 自动聚焦 Y 轴范围
+        self._set_dynamic_ylim(ax, dyn_cost + static_cost, margin_ratio=0.15)
+
+        ax.legend(loc="upper right", frameon=True, shadow=True)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.save_dir, file_name), format="svg")
+        plt.close(fig)
+        logging.info(f"Value comparison Pareto chart saved: {file_name} 📈")
 
     def plot_gini_tradeoff(
         self,
@@ -1287,96 +1345,44 @@ class SensitivityPlotter(BasePlotter):
         plt.close()
         logging.info(f"Dual line chart saved: {filename}")
 
-    def plot_emergency_uncertainty_heatmap(
-        self,
-        delta_a_values: List[float],
-        delta_c_values: List[float],
-        cost_grid: List[List[float]],
-        risk_grid: List[List[float]],
-        prefix: str = "Figure_Emergency_Asymmetric",
+
+class ModelComparisonPlotter(BasePlotter):
+    """
+    [View Layer] 负责 Comparison of Models 的绘图
+    """
+
+    def __init__(self, save_dir: str):
+        super().__init__(save_dir)
+
+    def plot_comparison_heatmap(
+        self, task_ids, model_labels, data, cbar_label, filename, cmap_key
     ):
-        """
-        绘制两张热力图: Min Cost 和 Min Risk（在 δ_a * δ_c 网格上）。
-        """
-        # 1. 转换为 DataFrame
-        cost_df = pd.DataFrame(cost_grid, index=delta_a_values, columns=delta_c_values)
-        risk_df = pd.DataFrame(risk_grid, index=delta_a_values, columns=delta_c_values)
+        df = pd.DataFrame(data, index=model_labels, columns=task_ids)
+        fig, ax = plt.subplots(figsize=(10, 8))
 
-        # 2. 获取颜色配置
-        colors = self.heapmap_colors
-        # 尝试获取配置好的 CMAP，如果失败则使用学术常用的 GnBu 和 OrRd
-        cost_cmap = get_color_by_key(colors, "COST_CMAP") if colors else "GnBu"
-        risk_cmap = get_color_by_key(colors, "RISK_CMAP") if colors else "OrRd"
+        # 1. 强制全局 FMT 针对所有数值生效 (0, 0) 代表所有量级都开启科学计数法
+        FMT.set_powerlimits((0, 0))
 
-        # 3. 处理无效值 (None 或 np.nan 在热力图中显示为空白)
-        cost_df = cost_df.fillna(np.nan)
-        risk_df = risk_df.fillna(np.nan)
-
-        # --- 图1: Min Cost Heatmap ---
-        fig, ax = plt.subplots(figsize=(11, 8.5))
-
-        # 使用标准 f-string 科学计数法格式化标注，保留 2 位小数
-        cost_annot_fmt = lambda x: f"{x:.2e}" if not np.isnan(x) else ""
-        cost_annot_values = cost_df.applymap(cost_annot_fmt)
+        # 2. 准备热图标注数据：复用 FMT 的格式化逻辑
+        # 使格子里的数字也呈现出标准的 1.xx * 10^x 风格
+        annot_data = np.vectorize(lambda x: f"${FMT.format_data(x)}$")(data)
 
         sns.heatmap(
-            cost_df,
-            annot=cost_annot_values,
-            fmt="s",  # 声明标注是字符串类型
-            cmap=cost_cmap,
-            linewidths=0.5,
-            cbar_kws={"label": "Min Cost (yuan)", "shrink": 0.8},
-            mask=cost_df.isna(),
-            annot_kws={"size": 10},
+            df,
+            annot=annot_data,  # 传入格式化后的文本矩阵
+            fmt="",  # 因为已经是字符串，这里传空
+            cmap=get_color_by_key(self.heapmap_colors, cmap_key),
+            linewidths=1.5,
+            cbar_kws={"label": cbar_label},
             ax=ax,
         )
 
-        # 格式化颜色条 (Colorbar) 使用我们定义的科学计数法 FMT
+        # 3. 复用全局 FMT 到 Colorbar 的坐标轴
         cbar = ax.collections[0].colorbar
         cbar.ax.yaxis.set_major_formatter(FMT)
 
-        plt.xlabel(r"Pessimistic Multiplier $\delta_c$", fontweight="bold", fontsize=12)
-        plt.ylabel(r"Optimistic Multiplier $\delta_a$", fontweight="bold", fontsize=12)
-        plt.title(
-            "System Cost Sensitivity Under Asymmetric Uncertainty", fontsize=15, pad=20
-        )
-
+        plt.xlabel("Transport Task IDs", fontweight="bold")
+        plt.ylabel("Model Strategy", fontweight="bold")
         plt.tight_layout()
-        cost_filename = f"{prefix}_Cost_Heatmap.svg"
-        plt.savefig(os.path.join(self.save_dir, cost_filename), dpi=300)
+        plt.savefig(os.path.join(self.save_dir, filename), format="svg")
         plt.close(fig)
-        logging.info(f"Fixed Cost heatmap saved: {cost_filename} 🌡️✨")
-
-        # --- 图2: Min Risk Heatmap ---
-        fig, ax = plt.subplots(figsize=(11, 8.5))
-
-        # 风险热力图使用科学计数法标注
-        risk_annot_fmt = lambda x: f"{x:.2e}" if not np.isnan(x) else ""
-        risk_annot_values = risk_df.applymap(risk_annot_fmt)
-
-        sns.heatmap(
-            risk_df,
-            annot=risk_annot_values,
-            fmt="s",
-            cmap=risk_cmap,
-            linewidths=0.5,
-            cbar_kws={"label": "Min Risk (people)", "shrink": 0.8},
-            mask=risk_df.isna(),
-            annot_kws={"size": 10},
-            ax=ax,
-        )
-
-        cbar = ax.collections[0].colorbar
-        cbar.ax.yaxis.set_major_formatter(FMT)
-
-        plt.xlabel(r"Pessimistic Multiplier $\delta_c$", fontweight="bold", fontsize=12)
-        plt.ylabel(r"Optimistic Multiplier $\delta_a$", fontweight="bold", fontsize=12)
-        plt.title(
-            "System Risk Sensitivity Under Asymmetric Uncertainty", fontsize=15, pad=20
-        )
-
-        plt.tight_layout()
-        risk_filename = f"{prefix}_Risk_Heatmap.svg"
-        plt.savefig(os.path.join(self.save_dir, risk_filename), dpi=300)
-        plt.close(fig)
-        logging.info(f"Fixed Risk heatmap saved: {risk_filename} 🔥✨")

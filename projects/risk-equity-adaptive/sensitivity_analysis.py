@@ -28,7 +28,7 @@ def main():
     # 2. Run Experiments
     
     # Risk Aversion
-    perform_cvar_sensitivity(exp, sensitivity_dir)
+    # perform_cvar_sensitivity(exp, sensitivity_dir)
 
     # Reliability
     perform_budget_sensitivity(exp, sensitivity_dir)

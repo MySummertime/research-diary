@@ -152,7 +152,7 @@ class Experiment:
         sol_b = min(rank_0, key=lambda s: s.f1_risk)  # Min Risk
         sol_c = find_knee_point(rank_0)  # Knee Point
 
-        special_solutions = {"Opinion A": sol_a, "Opinion B": sol_b, "Opinion C": sol_c}
+        special_solutions = {"Opinion A(Min Risk)": sol_a, "Opinion B(Knee)": sol_b, "Opinion C(Min Cost)": sol_c}
 
         # 3. 绘制 Pareto 前沿 (传入 special_solutions 以便高亮)
         self.plotter.plot(

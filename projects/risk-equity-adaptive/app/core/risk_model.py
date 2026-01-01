@@ -44,11 +44,31 @@ class DynamicRiskModel:
         # 初始化时立即进行预计算
         self._precompute_emergency_response_times()
 
-    def get_consequence(self, entity: Arc | Node) -> float:
+        # 加载静态后果数据（若有）
+        self.static_consequences = {}
+        try:
+            import json
+
+            with open("data/consequence.json", "r") as f:
+                self.static_consequences = json.load(f)
+        except FileNotFoundError:
+            logging.warning("data/consequence.json not found, using base calculation.")
+
+    def get_consequence(self, entity: Arc | Node, is_static: bool = False) -> float:
         """
-        计算给定实体（弧段或节点）的动态事故后果。
+        计算给定实体（弧段或节点）的动态事故后果，支持静态事故后果计算。
         Formula: C(t) = (A_base + A_spread(t)) * rho
         """
+        if is_static:
+            # 直接返回基于历史统计的常数
+            # 弧段取两端点的平均静态后果（模拟经过该区域的平均人口暴露）
+            if isinstance(entity, Arc):
+                c_i = float(self.static_consequences.get(entity.start.node_id, 0))
+                c_j = float(self.static_consequences.get(entity.end.node_id, 0))
+                return (c_i + c_j) / 2.0
+            else:
+                return float(self.static_consequences.get(entity.node_id, 0))
+
         lambda_m = self.config.get("accident_lambda", 100.0)
         gamma = self.config.get("accident_gamma", 0.1)
         q = self.config.get("accident_q", 5.0)
