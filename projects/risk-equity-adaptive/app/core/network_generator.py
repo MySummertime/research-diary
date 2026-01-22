@@ -1,11 +1,12 @@
 # --- coding: utf-8 ---
 # --- app/core/generator.py ---
 import json
-import os
 import logging
+import os
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
-from app.core.network import Node, TransportTask, TransportNetwork
+from typing import Any, Dict, List
+
+from app.core.network import Node, TransportNetwork, TransportTask
 
 
 class AbstractNetworkGenerator(ABC):

@@ -23,6 +23,7 @@ from app.experiment_manager import Experiment
 from app.utils.analyzer import (
     _calculate_single_task_cost,
     _calculate_single_task_risk,
+    calculate_solution_gini,
     find_knee_point,
 )
 from app.utils.plotter import ModelComparisonPlotter
@@ -73,7 +74,7 @@ def export_detailed_routing_csv(
     solutions_dict: Dict[str, Solution], evaluator: Evaluator, filename: str
 ):
     """
-    [任务1] 将不同策略下的路径细节总结到 CSV
+    [任务1] 将 2 种模型在 3 种策略下的路径细节总结到 CSV，并包含 Gini Coefficient 数据列
     """
     header = [
         "Opinion",
@@ -82,6 +83,7 @@ def export_detailed_routing_csv(
         "Destination",
         "Total_Risk",
         "Total_Cost",
+        "Gini_Coefficient",
         "Transport_Cost",
         "Transshipment_Cost",
         "Carbon_Cost",
@@ -93,24 +95,21 @@ def export_detailed_routing_csv(
 
     rows = []
     for opinion_name, sol in solutions_dict.items():
+        # 为该 Opinion 计算 Gini (使用 evaluator 确保动态回测准确)
+        gini_val = calculate_solution_gini(sol, evaluator)
+
         for task in evaluator.network.tasks:
             tid = task.task_id
             path = sol.path_selections[tid]
-
-            # 计算各项成本与风险
             total_c, trans_c, ship_c, carb_c = _calculate_single_task_cost(
                 path, evaluator
             )
             risk = _calculate_single_task_risk(path, evaluator)
 
-            # 统计模式比例与路径
+            # 模式比例
             road_len = sum(a.length for a in path.arcs if a.mode == "road")
             rail_len = sum(a.length for a in path.arcs if a.mode == "railway")
-            total_len = road_len + rail_len
-            ratio_str = f"{road_len / total_len:.0%} / {rail_len / total_len:.0%}"
-
-            hubs_str = ", ".join([h.node_id for h in path.transfer_hubs])
-            path_str = " -> ".join([n.node_id for n in path.nodes])
+            ratio_str = f"{road_len / (road_len + rail_len):.0%} / {rail_len / (road_len + rail_len):.0%}"
 
             rows.append(
                 [
@@ -120,13 +119,14 @@ def export_detailed_routing_csv(
                     path.task.destination.node_id,
                     f"{risk:.4f}",
                     f"{total_c:.2f}",
+                    f"{gini_val:.6f}",
                     f"{trans_c:.2f}",
                     f"{ship_c:.2f}",
                     f"{carb_c:.2f}",
                     len(path.transfer_hubs),
                     ratio_str,
-                    hubs_str,
-                    path_str,
+                    ", ".join([h.node_id for h in path.transfer_hubs]),
+                    " -> ".join([n.node_id for n in path.nodes]),
                 ]
             )
 
@@ -138,23 +138,22 @@ def export_detailed_routing_csv(
 
 
 def export_comparison_metrics_csv(
-    tasks: List[str], risk_mat: np.ndarray, cost_mat: np.ndarray, filename: str
+    task_ids: List[str], metrics_data: List[Dict], filename: str
 ):
     """
-    [任务2] 保存每个 Task 的 Risk 和 Cost 数据
+    [任务2] 保存每个 Task 的 Risk, Cost, Decision Type, 和 Gini Coefficient 数据
     """
-    header = ["Model", "Metric"] + tasks
-    model_names = ["Proposed (Dynamic)", "Static (Traditional)"]
+    header = ["Model", "Decision_Type", "Metric", "Gini"] + task_ids
 
     with open(filename, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(header)
-        # 写入 Risk 数据
-        writer.writerow([model_names[0], "Risk"] + list(risk_mat[0]))
-        writer.writerow([model_names[1], "Risk"] + list(risk_mat[1]))
-        # 写入 Cost 数据
-        writer.writerow([model_names[0], "Cost"] + list(cost_mat[0]))
-        writer.writerow([model_names[1], "Cost"] + list(cost_mat[1]))
+        for item in metrics_data:
+            # item 包含: model, dec_type, metric, gini, values(list)
+            writer.writerow(
+                [item["model"], item["dec_type"], item["metric"], f"{item['gini']:.6f}"]
+                + item["values"]
+            )
     logging.info(f"Task metrics CSV saved: {filename} 📊")
 
 
@@ -191,71 +190,120 @@ def run_value_analysis():
     val_dir = os.path.join(exp.save_dir, "value_analysis")
     os.makedirs(val_dir, exist_ok=True)
 
-    # 1. 求解两个模型
+    # 1. 求解模型
     dyn_front = solve_proposed_dynamic_model(exp)
     sta_front = solve_traditional_static_model(exp)
 
-    # 2. 回测评估
-    perform_backtest_reevaluation(sta_front, exp.evaluator)
-
-    # 3. 提取折衷解 (Knee Point) 用于深入对比
+    # 2. 多决策点提取逻辑
+    # 从动态模型提取
+    dyn_min_risk = min(dyn_front, key=lambda s: s.f1_risk)
+    dyn_min_cost = min(dyn_front, key=lambda s: s.f2_cost)
     dyn_kp = find_knee_point(dyn_front)
+
+    # 从静态模型提取 (静态环境下评估值)
+    sta_min_risk = min(sta_front, key=lambda s: s.f1_risk)
+    sta_min_cost = min(sta_front, key=lambda s: s.f2_cost)
     sta_kp = find_knee_point(sta_front)
 
-    if not (dyn_kp and sta_kp):
-        logging.warning("未能找到足够的有效解进行对比。")
-        return
+    # 3. 执行回测 (将静态解放入动态环境中重新评估真实风险)
+    perform_backtest_reevaluation([sta_min_risk, sta_min_cost, sta_kp], exp.evaluator)
 
-    # 4. 准备数据
-    tasks, risk_mat, cost_mat = prepare_value_comparison_matrices(
-        dyn_kp, sta_kp, exp.evaluator
-    )
-
-    # 5. 调用 plotter 生成两张热图
-    plotter = ModelComparisonPlotter(save_dir=val_dir)
+    # 4. 准备数据矩阵用于热图和 CSV
+    tasks = [t.task_id for t in exp.network.tasks]
+    labels = ["Min Risk", "Knee", "Min Cost"]
     model_names = ["Proposed (Dynamic)", "Static (Traditional)"]
 
-    # Risk 热图 (使用红橙暖色调)
+    # 构造 Opinion 字典用于导出
+    opinion_sols = {
+        "Proposed (Min Risk)": dyn_min_risk,
+        "Proposed (Knee)": dyn_kp,
+        "Proposed (Min Cost)": dyn_min_cost,
+        "Static (Min Risk)": sta_min_risk,
+        "Static (Knee)": sta_kp,
+        "Static (Min Cost)": sta_min_cost,
+    }
+
+    # 准备热图矩阵 (6行)
+    risk_matrix = np.zeros((6, len(tasks)))
+    cost_matrix = np.zeros((6, len(tasks)))
+    metrics_csv_data = []
+
+    for i, (name, sol) in enumerate(opinion_sols.items()):
+        m_name = model_names[0] if "Proposed" in name else model_names[1]
+        d_type = (
+            "Min Risk"
+            if "Min Risk" in name
+            else ("Min Cost" if "Min Cost" in name else "Knee")
+        )
+
+        # 计算 Gini 系数
+        g_val = calculate_solution_gini(sol, exp.evaluator)
+
+        task_risks, task_costs = [], []
+        for j, tid in enumerate(tasks):
+            path = sol.path_selections[tid]
+            r = _calculate_single_task_risk(path, exp.evaluator)
+            c = _calculate_single_task_cost(path, exp.evaluator)[0]
+            risk_matrix[i, j], cost_matrix[i, j] = r, c
+            task_risks.append(r)
+            task_costs.append(c)
+
+        metrics_csv_data.append(
+            {
+                "model": m_name,
+                "dec_type": d_type,
+                "metric": "Risk",
+                "gini": g_val,
+                "values": task_risks,
+            }
+        )
+        metrics_csv_data.append(
+            {
+                "model": m_name,
+                "dec_type": d_type,
+                "metric": "Cost",
+                "gini": g_val,
+                "values": task_costs,
+            }
+        )
+
+    # 5. 可视化与导出
+    plotter = ModelComparisonPlotter(save_dir=val_dir)
+    heatmap_labels = list(opinion_sols.keys())
+
     plotter.plot_comparison_heatmap(
         tasks,
-        model_names,
-        risk_mat,
+        heatmap_labels,
+        risk_matrix,
         "Real Risk (people)",
-        "Figure_5_4_Risk_Heatmap.svg",
+        "Figure_Risk_Heatmap.svg",
         "RISK_CMAP",
     )
-
-    # Cost 热图 (使用青绿冷色调)
     plotter.plot_comparison_heatmap(
         tasks,
-        model_names,
-        cost_mat,
+        heatmap_labels,
+        cost_matrix,
         "Cost (yuan)",
-        "Figure_5_4_Cost_Heatmap.svg",
+        "Figure_Cost_Heatmap.svg",
         "COST_CMAP",
     )
 
-    # 6. 路径可视化
-    exp.visualizer.visualize_routes(
-        {"Proposed_KneePoint": dyn_kp, "Static_KneePoint": sta_kp},
-        save_dir=val_dir,
-        prefix="Value_Map",
-    )
-    logging.info(f"价值分析实验圆满完成！✨ 结果已存档至: {val_dir}")
-
-    # 准备特殊解字典用于导出
-    special_sols = {
-        "Opinion A (Proposed Knee)": dyn_kp,
-        "Opinion B (Static Knee-Backtest)": sta_kp,
-    }
     export_detailed_routing_csv(
-        special_sols, exp.evaluator, os.path.join(val_dir, "detailed_routes.csv")
+        opinion_sols,
+        exp.evaluator,
+        os.path.join(val_dir, "detailed_routes.csv"),
+    )
+    export_comparison_metrics_csv(
+        tasks,
+        metrics_csv_data,
+        os.path.join(val_dir, "task_metrics_comparison.csv"),
     )
 
-    # 导出热图背后的原始数据
-    export_comparison_metrics_csv(
-        tasks, risk_mat, cost_mat, os.path.join(val_dir, "task_metrics_comparison.csv")
+    # 路径图
+    exp.visualizer.visualize_routes(
+        opinion_sols, save_dir=val_dir, prefix="Figure_Routes_"
     )
+    logging.info(f"价值分析全量实验完成！结果已存至: {val_dir} 🚀🌟")
 
 
 if __name__ == "__main__":

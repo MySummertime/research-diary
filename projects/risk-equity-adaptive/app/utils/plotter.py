@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib.ticker import MultipleLocator, ScalarFormatter
+from matplotlib.ticker import ScalarFormatter
 from scipy.interpolate import PchipInterpolator
 
 from app.core.evaluator import Evaluator
@@ -66,9 +66,10 @@ class BasePlotter:
         self.pareto_colors_by_algo: List[Dict] = ColorPalette.PARETO_BY_ALGO
         self.pareto_colors_loop: List[str] = ColorPalette.PARETO_LOOP
         self.violin_colors: List[str] = ColorPalette.VIOLIN_LOOP
+        self.grouped_bar_colors: List[str] = ColorPalette.GROUPED_BAR
         self.stacked_bar_chart_colors = ColorPalette.STACKED_BAR
         self.dual_line_chart_colors = ColorPalette.DUAL_LINE
-        self.heapmap_colors = ColorPalette.HEATMAP
+        self.heatmap_colors = ColorPalette.HEATMAP
 
     def _format_axes(self, ax):
         """
@@ -341,39 +342,66 @@ class ParetoPlotter(BasePlotter):
             frontiers: 字典 { "Algorithm Name": [Solution List], ... }
             file_name: 保存文件名
         """
+
+        # 空解集保护逻辑
+        valid_algos = {
+            algo: sols for algo, sols in frontiers.items() if sols and len(sols) > 0
+        }
+        if not valid_algos:
+            logging.warning(
+                f"Plotter: No valid solutions found in any algorithm for {file_name}. Skipping plot."
+            )
+            return
+
         fig, ax = plt.subplots(figsize=(10, 8))
 
-        # 定义各算法的样式
+        # 定义 7 种算法样式表，确保色彩具有连贯性
         styles = {
             "Gurobi": {
                 "c": get_color_by_key(self.pareto_colors_by_algo, "EXACT"),
                 "marker": "*",
-                "s": 20,
+                "s": 50,
                 "label": "Gurobi",
-                "zorder": 5,
-                "edgecolors": get_color_by_key(self.pareto_colors_by_algo, "BLACK"),
-                "linewidths": 1.5,
+                "zorder": 10,  # 最高层
             },
-            "Improved NSGA-II": {
+            "NSGA-II (Imp)": {
                 "c": get_color_by_key(self.pareto_colors_by_algo, "PROPOSED"),
                 "marker": "o",
-                "s": 30,
-                "label": "Improved NSGA-II",
+                "s": 110,
+                "label": "NSGA-II (Imp)",
                 "zorder": 4,
             },
-            "NSGA-II": {
-                "c": get_color_by_key(self.pareto_colors_by_algo, "BASELINE1"),
+            # --- 消融实验 Alation experiments ---
+            # NSGA-II_Basic
+            "NSGA-II (1)": {
+                "c": get_color_by_key(self.pareto_colors_by_algo, "ABLATION_1"),
                 "marker": "^",
                 "s": 50,
-                "label": "NSGA-II",
-                "zorder": 3,
+                "label": "Ablation 0",
+                "zorder": 8,
+            },
+            "NSGA-II (2)": {
+                "c": get_color_by_key(self.pareto_colors_by_algo, "ABLATION_2"),
+                "marker": "v",
+                "s": 65,
+                "label": "Ablation 1",
+                "zorder": 7,
+                "alpha": 0.9,
+            },
+            "NSGA-II (3)": {
+                "c": get_color_by_key(self.pareto_colors_by_algo, "ABLATION_3"),
+                "marker": "<",
+                "s": 80,
+                "label": "Ablation 2",
+                "zorder": 6,
+                "alpha": 0.8,
             },
             "SPEA2": {
-                "c": get_color_by_key(self.pareto_colors_by_algo, "BASELINE2"),
-                "marker": "s",
-                "s": 60,
+                "c": get_color_by_key(self.pareto_colors_by_algo, "BASELINE_1"),
+                "marker": "D",
+                "s": 110,
                 "label": "SPEA2",
-                "zorder": 2,
+                "zorder": 4,
             },
         }
 
@@ -545,6 +573,7 @@ class ParetoPlotter(BasePlotter):
         self,
         solutions_with_gini: List[Tuple[Solution, float]],
         file_name: str = "Figure_Gini_Risk_Tradeoff.svg",
+        special_solutions=None,
     ):
         """
         绘制总风险 (Total Risk) 与基尼系数 (Gini Coefficient) 的权衡图。
@@ -628,6 +657,25 @@ class ParetoPlotter(BasePlotter):
             zorder=3,
         )
 
+        # 高亮特殊解 (Opinion A, B, C)
+        if special_solutions:
+            highlight_color = get_color_by_key(self.pareto_colors, "SPECIAL_POINT")
+            for label, sol in special_solutions.items():
+                if not sol:
+                    continue
+                # 此时 y 轴是 Gini 系数，需从 sol 属性或 solutions_with_gini 中获取
+                g_val = getattr(sol, "gini_coefficient", 0.0)
+                ax.scatter(
+                    [sol.f1_risk],
+                    [g_val],
+                    facecolors="none",
+                    edgecolors=highlight_color,
+                    s=220,  # 外扩尺寸
+                    linestyle=":",  # 虚线风格
+                    linewidths=2,  # 线宽
+                    zorder=5,  # 置顶显示
+                )
+
         # 5. 添加颜色条 (Color Bar)
         cbar = fig.colorbar(scatter, ax=ax, shrink=0.7)
         cbar.set_label(r"Total Cost $f_2$ (yuan)", fontweight="bold")
@@ -636,7 +684,6 @@ class ParetoPlotter(BasePlotter):
         # 6. 格式化
         ax.set_xlabel(r"Total Risk $f_1$ (people)", fontweight="bold")
         ax.set_ylabel("Gini Coefficient (Social Equity)", fontweight="bold")
-        ax.set_title("Trade-off between Total Risk and Risk Equity", fontsize=15)
 
         self._format_axes(ax)
         self._set_dynamic_xlim(ax, r0_risk)
@@ -872,16 +919,27 @@ class BenchmarkPlotter(BasePlotter):
     def plot_metrics_comparison(self, stats_data: Dict[str, Dict[str, List[float]]]):
         """
         绘制多算法对比的小提琴图。
-        生成 4 张独立的图: HV_Comparison.svg, IGD_Comparison.svg, ...
+        生成独立的图: HV_Comparison.svg, IGD_Comparison.svg, ...
         每张图中 X 轴是算法，Y 轴是指标分布。
         """
         metrics = ["HV", "IGD", "SM", "CPU Time"]
-        algo_names = list(stats_data.keys())
 
-        # 确保 Proposed 排在第一个 (为了好看)
-        if "Improved NSGA-II" in algo_names:
-            algo_names.remove("Improved NSGA-II")
-            algo_names.insert(0, "Improved NSGA-II")
+        # 定义优先级排序数组，体现从 Proposed 到退化到基准的递进关系
+        PRIORITY = [
+            "NSGA-II (Imp)",
+            "NSGA-II (1)",
+            "NSGA-II (2)",
+            "NSGA-II (3)",
+            "SPEA2",
+            "Gurobi",
+        ]
+
+        # 过滤当前数据中存在的算法
+        algo_names = [a for a in PRIORITY if a in stats_data.keys()]
+        # 处理可能出现的未定义算法
+        for a in stats_data.keys():
+            if a not in algo_names:
+                algo_names.append(a)
 
         for metric in metrics:
             self._plot_single_metric_violin(metric, algo_names, stats_data)
@@ -962,7 +1020,8 @@ class BenchmarkPlotter(BasePlotter):
                     edgecolor=get_color_by_key(self.default_colors, "BLACK"),
                 ),
                 medianprops=dict(
-                    color=get_color_by_key(self.default_colors, "BLACK"), linewidth=1.5
+                    color=get_color_by_key(self.default_colors, "BLACK"),
+                    linewidth=1.5,
                 ),
                 whiskerprops=dict(color=get_color_by_key(self.default_colors, "BLACK")),
                 capprops=dict(color=get_color_by_key(self.default_colors, "BLACK")),
@@ -978,7 +1037,7 @@ class BenchmarkPlotter(BasePlotter):
             if len(d) == 0:
                 continue
             y = d
-            x = np.random.normal(i + 1, 0.04, size=len(y))
+            x = np.random.normal(i + 1, 0.1, size=len(y))
             ax.scatter(
                 x,
                 y,
@@ -990,7 +1049,12 @@ class BenchmarkPlotter(BasePlotter):
 
         # 装饰
         ax.set_xticks(range(1, len(algo_names) + 1))
-        ax.set_xticklabels(labels, fontweight="bold")
+        ax.set_xticklabels(
+            labels,
+            fontweight="bold",
+            rotation=45,  # 倾斜45度
+            ha="right",  # 水平对齐方式设为右侧，防止标签中心对准刻度导致偏离
+        )
 
         # 应用科学计数法格式
         ax.yaxis.set_major_formatter(FMT)
@@ -1000,6 +1064,222 @@ class BenchmarkPlotter(BasePlotter):
         plt.savefig(save_path, dpi=300)
         plt.close()
         logging.info(f"Generated comparison plot: {save_path}")
+
+    def plot_normalized_metrics_bar(
+        self, stats_data, file_name: str = "normalized_bar_comparison.svg"
+    ):
+        """
+        归一化综合对比柱状图。
+        将所有指标统一映射到 [0.2, 1.0] 空间，方便在同一个坐标系下比较。
+        """
+        metrics = ["HV", "IGD", "SM", "CPU Time"]
+        algo_names = list(stats_data.keys())
+        n_algos = len(algo_names)
+        n_metrics = len(metrics)
+
+        # 1. 提取均值并进行极性反转归一化
+        mean_matrix = np.array(
+            [[np.mean(stats_data[algo][m]) for m in metrics] for algo in algo_names]
+        )
+        norm_matrix = np.zeros_like(mean_matrix)
+
+        for i, m in enumerate(metrics):
+            vals = mean_matrix[:, i]
+            v_min, v_max = np.min(vals), np.max(vals)
+            if v_max == v_min:
+                norm_matrix[:, i] = 1.0
+            else:
+                if m in ["HV", "PD", "SM"]:  # 越大越好
+                    norm_matrix[:, i] = (vals - v_min) / (v_max - v_min)
+                else:  # 越小越好 (IGD, SM, CPU Time) 进行反转
+                    norm_matrix[:, i] = (v_max - vals) / (v_max - v_min)
+
+        # 加上 0.2 的基础高度保护，防止表现最差的指标“柱子消失”
+        norm_matrix = 0.2 + 0.8 * norm_matrix
+
+        # 2. 绘图
+        fig, ax = plt.subplots(figsize=(14, 7))
+        x = np.arange(n_algos)
+        width = 0.13  # 每个柱子的宽度
+
+        # 为不同指标分配特定颜色
+        metric_colors = self.grouped_bar_colors
+
+        for i in range(n_metrics):
+            # 计算每个指标柱子的偏移位置
+            offset = (i - n_metrics / 2 + 0.5) * width
+            ax.bar(
+                x + offset,
+                norm_matrix[:, i],
+                width,
+                label=metrics[i],
+                color=metric_colors[i],
+                edgecolor=get_color_by_key(self.default_colors, "WHITE"),
+                linewidth=0.5,
+                alpha=0.9,
+            )
+
+        # 装饰
+        ax.set_ylabel("Performance Index", fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(algo_names, fontsize=11)
+        ax.set_ylim(0, 1.25)
+
+        # 水平参考线
+        ax.grid(axis="y", linestyle="--", alpha=0.3)
+
+        # 图例放置在上方
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.12),
+            ncol=n_metrics,  # 动态设置列数，确保只有一行
+            frameon=False,
+            fontsize=10,
+        )
+
+        plt.tight_layout()
+        save_path = os.path.join(self.save_dir, file_name)
+        plt.savefig(save_path, dpi=300)
+        plt.close()
+        logging.info(f"Normalized bar chart saved: {save_path}")
+
+    def plot_metric_radar(
+        self, stats_data, file_name: str = "algorithm_radar_comparison.svg"
+    ):
+        """
+        雷达图（花瓣图）：
+        1. 严格控制边界：确保数值不溢出 1.0。
+        2. 保留尖点：指标点处保持锐利。
+        3. 向内凹陷：尖点之间使用二次曲线或中间缩进点实现弧形。
+        4. 视觉精修：降低填充 alpha，精细化线条。
+        """
+        metrics = ["HV", "IGD", "SM", "CPU Time"]
+        algo_names = list(stats_data.keys())
+        n_metrics = len(metrics)
+        angles = np.linspace(0, 2 * np.pi, n_metrics, endpoint=False).tolist()
+
+        # 1. 提取均值与归一化逻辑
+        mean_data = {
+            algo: [np.mean(stats_data[algo][m]) for m in metrics] for algo in algo_names
+        }
+        data_matrix = np.array([mean_data[algo] for algo in algo_names])
+        norm_matrix = np.zeros_like(data_matrix)
+        MIN_SHAPE_VAL = 0.2
+
+        for i, m in enumerate(metrics):
+            vals = data_matrix[:, i]
+            v_min, v_max = np.min(vals), np.max(vals)
+            if m in ["IGD", "SM", "CPU Time"]:
+                log_vals = np.log10(vals + 1e-9)
+                lv_min, lv_max = np.min(log_vals), np.max(log_vals)
+                norm_matrix[:, i] = (
+                    MIN_SHAPE_VAL
+                    + (1 - MIN_SHAPE_VAL) * (lv_max - log_vals) / (lv_max - lv_min)
+                    if lv_max != lv_min
+                    else 1.0
+                )
+            else:
+                norm_matrix[:, i] = (
+                    MIN_SHAPE_VAL
+                    + (1 - MIN_SHAPE_VAL) * (vals - v_min) / (v_max - v_min)
+                    if v_max != v_min
+                    else 1.0
+                )
+
+        # 强制截断，确保不溢出
+        norm_matrix = np.clip(norm_matrix, 0, 1.0)
+
+        # 2. 绘图准备
+        fig, ax = plt.subplots(figsize=(10, 8), subplot_kw=dict(polar=True))
+        colors = self.violin_colors
+
+        for idx, algo in enumerate(algo_names):
+            values = norm_matrix[idx].tolist()
+
+            # 构造花瓣形状 (保留尖点 + 向内凹陷)
+            # 在每两个指标点中间插入一个“向内塌陷”的控制点
+            smooth_values = []
+            smooth_angles = []
+
+            for i in range(n_metrics):
+                # 1. 获取当前尖点 (P0) 和 下一个尖点 (P2)
+                p0_v, p0_a = values[i], angles[i]
+                p2_v, p2_a = values[(i + 1) % n_metrics], angles[(i + 1) % n_metrics]
+
+                # 处理角度跨越 2π 的闭合情况
+                if p2_a <= p0_a:
+                    p2_a += 2 * np.pi
+
+                # 2. 定义控制点 (P1): 位于角度中点，但半径向内大幅塌陷
+                # mid_factor 决定了凹陷深度，系数越小，花瓣中间缩进越深，看起来越“瘦”：
+                #   0.8 丰满、圆润，适合指标差异较小时，增加视觉面积
+                #   0.6 干练、优雅，呈现明显的“四叶草”或“花瓣”状，尖点非常突出
+                #   0.4 极瘦，花瓣之间会有很深的凹陷，适合强调各个指标之间的独立性
+                mid_factor = 0.18 if (p0_v + p2_v) / 2 > 0.3 else 0.12  # 低值区更狠地凹
+                mid_v = ((p0_v + p2_v) / 2) * mid_factor
+
+                # 2. 在尖点前加一个极短的“冲刺凸出”（只在高值尖点明显）
+                t_steps = np.linspace(0, 1, 40, endpoint=False)  # 增加插值密度，更平滑
+
+                # 3. 使用二次贝塞尔曲线插值
+                # B(t) = (1-t)^2*P0 + 2(1-t)t*P1 + t^2*P2
+                for t in t_steps:
+                    # 在尖点附近（t很小）稍微向外凸出一点
+                    extra_spike = 0.0
+                    if t < 0.1 and p0_v > 0.7:  # 只在高性能尖点加“针尖”效果
+                        extra_spike = 0.08 * (1 - t / 0.1)  # 最大凸出8%，很快收回去
+                    # 半径 R 的二次插值
+                    r = (
+                        (1 - t) ** 2 * p0_v
+                        + 2 * (1 - t) * t * mid_v
+                        + t**2 * p2_v
+                        + extra_spike * p0_v
+                    )
+                    # 角度 Alpha 的线性插值 (确保匀速旋转)
+                    a = (1 - t) * p0_a + t * p2_a
+
+                    smooth_values.append(r)
+                    smooth_angles.append(a)
+
+            # 闭合曲线
+            smooth_values.append(smooth_values[0])
+            smooth_angles.append(smooth_angles[0])
+
+            # 4. 绘图执行
+            color = colors[idx % len(colors)]
+            ax.plot(
+                smooth_angles,
+                smooth_values,
+                color=color,
+                linewidth=0.7,
+                label=algo,
+                zorder=3,
+            )
+            ax.fill(smooth_angles, smooth_values, color=color, alpha=0.3, zorder=2)
+
+        # 3. 装饰精修
+        ax.set_xticks(angles)
+        ax.set_xticklabels(metrics, fontweight="bold", fontsize=12)
+        ax.set_ylim(0, 1.18)  # 严格限制坐标轴，留足缓冲
+        ax.grid(True, linestyle=":", alpha=0.7)
+        ax.set_yticklabels([])  # 隐藏圈圈数值
+
+        # 图例放到右外侧
+        ax.legend(
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+            fontsize=9,
+            labelspacing=0.4,
+            handlelength=1.2,
+            handletextpad=0.4,
+            borderpad=0.3,
+        )
+
+        plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.97])  # 四周留3%安全区
+        save_path = os.path.join(self.save_dir, file_name)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close()
 
 
 class SensitivityPlotter(BasePlotter):
@@ -1022,16 +1302,17 @@ class SensitivityPlotter(BasePlotter):
         filename: str,
     ):
         """
-        双 Y 轴组合图：
-            左轴 (ax1): Cost (Stacked Bar + Trend Lines)
-            右轴 (ax2): Risk (Line)
-            x轴: CVaR Confidence level
+        双 Y 轴组合图
         """
-        fig, ax1 = plt.subplots(figsize=(10, 8))
+        import matplotlib.colors as mcolors
+        from matplotlib.ticker import ScalarFormatter
+
+        fig, ax1 = plt.subplots(figsize=(11, 8))
 
         x = np.arange(len(x_labels))
-        width = 0.4  # 柱状图宽度
+        width = 0.45  # 柱体宽度
 
+        # 获取颜色配置
         colors = self.stacked_bar_chart_colors
         c_transport = get_color_by_key(colors, "TRANSPORT_COLOR")
         c_transship = get_color_by_key(colors, "TRANSSHIPMENT_COLOR")
@@ -1044,37 +1325,35 @@ class SensitivityPlotter(BasePlotter):
         carb = np.array(cost_data["carbon"])
         total_costs = trans + ship + carb
 
-        # --- 左轴: Cost (Stacked Bar + Trend Lines) ---
-        # 淡化函数（饱和度降低 + 透明）
-        def get_light_fill_color(
-            base_color: str, sat_factor=0.5, light_factor=1.1, alpha=0.7
-        ):
+        # --- A. 视觉增强辅助函数 ---
+        def get_light_fill_color(base_color, sat_factor=0.4, alpha=0.25):
             rgb = mcolors.to_rgb(base_color)
             hsv = mcolors.rgb_to_hsv(rgb)
-            hsv = (
-                hsv[0],
-                hsv[1] * sat_factor,
-                hsv[2] * light_factor,
-            )  # 稍微提亮，让它更柔和
-            light_rgb = mcolors.hsv_to_rgb(hsv)
-            light_rgb = tuple(min(max(c, 0.0), 1.0) for c in light_rgb)
-            return (*light_rgb, alpha)
+            return (*mcolors.hsv_to_rgb((hsv[0], hsv[1] * sat_factor, hsv[2])), alpha)
 
-        # 生成每层的填充颜色（超级柔和）
-        fill_transport = get_light_fill_color(c_transport, sat_factor=0.5, alpha=0.5)
-        fill_transship = get_light_fill_color(c_transship, sat_factor=0.5, alpha=0.5)
-        fill_carbon = get_light_fill_color(c_carbon, sat_factor=0.5, alpha=0.5)
+        # 构造边缘对齐坐标
+        x_fill = []
+        for xi in x:
+            x_fill.extend([xi - width / 2, xi + width / 2])
+        x_fill = np.array(x_fill)
 
-        # --- 1. 绘制 Stacked Bar Chart ---
+        # y_fill 对应变成: [v0, v0, v1, v1, ...]
+        def get_edge_aligned_values(values):
+            edge_vals = []
+            for vi in values:
+                edge_vals.extend([vi, vi])
+            return np.array(edge_vals)
+
+        # --- B. 绘制左轴 (ax1): 柱体与对齐填充 ---
+        # 1. 绘制堆叠柱状图
         ax1.bar(
             x,
             trans,
             width,
             label="Transport Cost",
             color=c_transport,
-            alpha=0.9,
-            edgecolor=get_color_by_key(self.default_colors, "WHITE"),
-            zorder=1,
+            alpha=0.95,
+            zorder=3,
         )
         ax1.bar(
             x,
@@ -1083,9 +1362,8 @@ class SensitivityPlotter(BasePlotter):
             bottom=trans,
             label="Transshipment Cost",
             color=c_transship,
-            alpha=0.9,
-            edgecolor=get_color_by_key(self.default_colors, "WHITE"),
-            zorder=1,
+            alpha=0.95,
+            zorder=3,
         )
         ax1.bar(
             x,
@@ -1094,112 +1372,79 @@ class SensitivityPlotter(BasePlotter):
             bottom=trans + ship,
             label="Carbon Cost",
             color=c_carbon,
-            alpha=0.9,
-            edgecolor=get_color_by_key(self.default_colors, "WHITE"),
-            zorder=1,
+            alpha=0.95,
+            zorder=3,
         )
 
-        # --- 2. 实现“从右侧到左侧连续的层间填充带” ---
-        # 构造扩展的 x 坐标：每个 bar 的左边缘 -> 右边缘 -> 下一个 bar 的左边缘（平滑连接）
-        x_extended = np.repeat(x, 2)  # 每个点重复两次
-        x_fill = np.concatenate(
-            [[x[0] - width / 2], x_extended, [x[-1] + width / 2]]
-        )  # 首尾额外延伸一点，美观
+        # 2. 绘制边缘对齐的填充带 (在柱子之间产生斜向流动效果)
+        v_trans = get_edge_aligned_values(trans)
+        v_ship = get_edge_aligned_values(trans + ship)
+        v_total = get_edge_aligned_values(total_costs)
 
-        # 对每一层的高度也做对应的“step”扩展（右边缘保持值，左边缘用下一个值）
-        def step_post(values):
-            extended = np.repeat(values, 2)
-            return np.concatenate([[values[0]], extended, [values[-1]]])
-
-        # Transport 层填充：从0到trans（底部大块）
-        ax1.fill_between(
-            x_fill, 0, step_post(trans), color=fill_transport, zorder=2, linewidth=0
-        )
-
-        # Transshipment 层填充：从trans到trans+ship
         ax1.fill_between(
             x_fill,
-            step_post(trans),
-            step_post(trans + ship),
-            color=fill_transship,
-            zorder=2,
+            0,
+            v_trans,
+            color=get_light_fill_color(c_transport),
             linewidth=0,
+            zorder=2,
         )
-
-        # Carbon 层填充：从trans+ship到total（顶部小帽子）
         ax1.fill_between(
             x_fill,
-            step_post(trans + ship),
-            step_post(total_costs),
-            color=fill_carbon,
-            zorder=2,
+            v_trans,
+            v_ship,
+            color=get_light_fill_color(c_transship),
             linewidth=0,
+            zorder=2,
+        )
+        ax1.fill_between(
+            x_fill,
+            v_ship,
+            v_total,
+            color=get_light_fill_color(c_carbon),
+            linewidth=0,
+            zorder=2,
         )
 
-        # 虚线总趋势
+        # 3. 总趋势线
         ax1.plot(
             x,
             total_costs,
             color=c_trend,
             linestyle="--",
             linewidth=2,
-            alpha=0.9,
             label="Total Cost Trend",
             zorder=6,
         )
 
-        # --- 3. 添加百分比标签 ---
-
-        # 1. 计算所有成本占总成本的百分比
-        total_costs_np = np.array(total_costs)
-        # 避免除以零或无穷大
-        valid_totals = np.where(total_costs_np > 1e-9, total_costs_np, 1.0)
-
-        trans_perc = (trans / valid_totals) * 100
-        ship_perc = (ship / valid_totals) * 100
-        carb_perc = (carb / valid_totals) * 100
-
-        # 2. 准备标签位置 (每段的中心点)
-        trans_y = trans / 2.0
-        ship_y = trans + ship / 2.0
-        carb_y = trans + ship + carb / 2.0
-
-        # 3. 循环添加文本注释
-        cost_components = [
-            (trans_perc, trans_y, "Transport Cost"),
-            (ship_perc, ship_y, "Transshipment Cost"),
-            (carb_perc, carb_y, "Carbon Cost"),
-        ]
-
+        # 4. 百分比标注 (仅显示占比 > 3% 的部分)
         for i in range(len(x_labels)):
-            if total_costs_np[i] < 1e-9:
-                continue
+            if total_costs[i] > 1e-9:
+                annot_cfg = {
+                    "ha": "center",
+                    "va": "center",
+                    "fontsize": 10,
+                    "color": "white",
+                    "fontweight": "bold",
+                    "zorder": 5,
+                }
+                if (trans[i] / total_costs[i]) > 0.03:
+                    ax1.text(
+                        x[i],
+                        trans[i] / 2,
+                        f"{(trans[i] / total_costs[i] * 100):.1f}%",
+                        **annot_cfg,
+                    )
+                if (ship[i] / total_costs[i]) > 0.03:
+                    ax1.text(
+                        x[i],
+                        trans[i] + ship[i] / 2,
+                        f"{(ship[i] / total_costs[i] * 100):.1f}%",
+                        **annot_cfg,
+                    )
 
-            annot_style = dict(
-                ha="center",
-                va="center",
-                fontsize=12,
-                color=get_color_by_key(self.default_colors, "BLACK"),
-            )
-
-            for j, (perc_array, center_y_array, label) in enumerate(cost_components):
-                percentage = perc_array[i]
-                center_y = center_y_array[i]
-
-                # 只在百分比大于 2.0% 时显示标签
-                if percentage > 2.0:
-                    text_label = f"{percentage:.1f}%"
-                    ax1.text(x[i], center_y, text_label, **annot_style)
-
-        ax1.set_ylabel("Min Cost (yuan)", fontweight="bold", color=c_trend)
-        ax1.tick_params(axis="y", labelcolor=c_trend)
-
-        # [Auto-Scale Cost: Broken Axis Effect]
-        self._set_dynamic_ylim(ax1, total_costs, is_bar=True)
-
-        # --- 右轴: Risk (Line) ---
+        # --- C. 绘制右轴 (ax2): 风险曲线 ---
         ax2 = ax1.twinx()
-        # [Straight Line] 直线连接，清晰展示 Trend
         ax2.plot(
             x,
             risk_data,
@@ -1207,49 +1452,53 @@ class SensitivityPlotter(BasePlotter):
             marker="o",
             markersize=8,
             linewidth=2.5,
-            linestyle="-",
             label="Min Risk",
             zorder=10,
         )
-        ax2.set_ylabel(r"Min Risk (people)", fontweight="bold", color=c_risk)
+
+        # --- D. 科学计数法独立对齐 ---
+        fmt_left = ScalarFormatter(useMathText=True)
+        fmt_left.set_powerlimits((-2, 3))
+        fmt_right = ScalarFormatter(useMathText=True)
+        fmt_right.set_powerlimits((-2, 3))
+
+        ax1.yaxis.set_major_formatter(fmt_left)
+        ax2.yaxis.set_major_formatter(fmt_right)
+
+        fig.canvas.draw()
+
+        # --- E. 细节修饰 ---
+        ax1.set_xlabel(xlabel, fontweight="bold")
+        ax1.set_ylabel("Min Cost (yuan)", fontweight="bold", color=c_trend)
+        ax1.tick_params(axis="y", labelcolor=c_trend)
+        ax2.set_ylabel("Min Risk (people)", fontweight="bold", color=c_risk)
         ax2.tick_params(axis="y", labelcolor=c_risk)
 
-        # [Auto-Scale Risk]
+        self._set_dynamic_ylim(ax1, total_costs, is_bar=True)
         self._set_dynamic_ylim(ax2, risk_data)
 
-        # Format (应用全局 FMT)
-        self._format_axes(ax1)  # Formats x-axis and ax1 y-axis
-        ax2.yaxis.set_major_formatter(FMT)
-
-        # 局部强制覆盖：确保 ax1 和 ax2 使用科学计数法，并使用 10^xx 格式
-        ax1.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
-        ax2.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
-
-        # 强制显示左轴的科学计数法乘数
-        ax1.yaxis.get_offset_text().set_visible(True)
-
-        # X轴刻度设置必须在所有格式化之后
         ax1.set_xticks(x)
         ax1.set_xticklabels(x_labels, rotation=25, ha="right")
-        ax1.set_xlabel(xlabel, fontweight="bold")
 
-        # Legend
         h1, l1 = ax1.get_legend_handles_labels()
         h2, l2 = ax2.get_legend_handles_labels()
-
-        # 新增了 Total Cost Trend，需要确保 Legend 能够容纳
         ax1.legend(
             h1 + h2,
             l1 + l2,
             loc="upper center",
             bbox_to_anchor=(0.5, 1.15),
-            ncol=5,  # 增加列数来适应新增的 Total Cost Trend
+            ncol=5,
             frameon=False,
         )
+
+        ax1.grid(True, axis="y", linestyle="--", alpha=0.3)
+
         plt.tight_layout()
-        plt.savefig(os.path.join(self.save_dir, filename))
+        plt.savefig(
+            os.path.join(self.save_dir, filename), format="svg", bbox_inches="tight"
+        )
         plt.close()
-        logging.info(f"Dual axis chart saved: {filename}")
+        logging.info(f"✅ Edge-aligned cost structure chart saved: {filename}")
 
     def plot_dual_line_chart(
         self,
@@ -1276,9 +1525,18 @@ class SensitivityPlotter(BasePlotter):
 
         fig, ax1 = plt.subplots(figsize=(10, 8))
 
+        from matplotlib.ticker import MaxNLocator, ScalarFormatter
+
         colors = self.dual_line_chart_colors
         c_cost = get_color_by_key(colors, "COST_LINE")
         c_risk = get_color_by_key(colors, "RISK_LINE")
+
+        # --- 为每个轴创建独立的 Formatter 实例 ---
+        sci_fmt_left = ScalarFormatter(useMathText=True)
+        sci_fmt_left.set_powerlimits((-2, 3))
+
+        sci_fmt_right = ScalarFormatter(useMathText=True)
+        sci_fmt_right.set_powerlimits((-2, 3))
 
         # --- 左轴 Cost ---
         line1 = ax1.plot(
@@ -1286,14 +1544,14 @@ class SensitivityPlotter(BasePlotter):
             ys_cost,
             color=c_cost,
             marker="o",
-            markersize=5,
+            markersize=6,
             linewidth=2,
             label="Min Cost",
+            zorder=3,
         )
         ax1.set_ylabel(r"Min Cost (yuan)", color=c_cost, fontweight="bold")
-        ax1.tick_params(axis="y", labelcolor=c_cost)
-
-        # Auto-Scale Cost
+        ax1.yaxis.set_major_formatter(sci_fmt_left)  # 使用独立的实例
+        ax1.yaxis.set_major_locator(MaxNLocator(nbins=6))
         self._set_dynamic_ylim(ax1, ys_cost)
 
         # --- 右轴 Risk ---
@@ -1303,86 +1561,96 @@ class SensitivityPlotter(BasePlotter):
             ys_risk,
             color=c_risk,
             marker="D",
-            markersize=5,
+            markersize=6,
             linewidth=2,
             linestyle="--",
             label="Min Risk",
+            zorder=3,
         )
         ax2.set_ylabel(r"Min Risk (people)", color=c_risk, fontweight="bold")
-        ax2.tick_params(axis="y", labelcolor=c_risk)
-
-        # Auto-Scale Risk
+        ax2.yaxis.set_major_formatter(sci_fmt_right)  # 使用独立的实例
+        ax2.yaxis.set_major_locator(MaxNLocator(nbins=6))
         self._set_dynamic_ylim(ax2, ys_risk)
 
-        # 1. 应用全局格式
-        self._format_axes(ax1)  # 保持全局格式化 X 轴和部分通用设置
+        # --- 视觉强化设置 ---
+        fig.canvas.draw()
 
-        # 2. 局部强制覆盖：确保 ax1 和 ax2 使用科学计数法，并使用 10^xx 格式
-        ax1.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
-        ax2.ticklabel_format(axis="y", style="sci", scilimits=(-2, 3), useMathText=True)
+        # 强制显示各自的 offset text
+        ax1.yaxis.get_offset_text().set_visible(True)
+        ax2.yaxis.get_offset_text().set_visible(True)
 
-        # 3. 强制刻度密度 (MultipleLocator 必须在 ticklabel_format 之后)
+        # 统一颜色
+        ax1.tick_params(axis="y", colors=c_cost, labelsize=11)
+        ax2.tick_params(axis="y", colors=c_risk, labelsize=11)
 
-        # Cost (ax1) 的刻度间隔 (5000)
-        ax1.yaxis.set_major_locator(MultipleLocator(5000))
-        # Risk (ax2) 的刻度间隔 (1000，以保证密度)
-        ax2.yaxis.set_major_locator(MultipleLocator(1000))
-
-        # 设置x轴刻度的位置
-        ax1.set_xticks(xs)
-        # 设置x轴每个刻度的标签
-        ax1.set_xticklabels(xs, rotation=25, ha="right")
-        ax1.set_xlabel(xlabel, fontweight="bold")
-
-        # Legend
+        # 合并图例
         lines = line1 + line2
         labels = [l.get_label() for l in lines]
         ax1.legend(lines, labels, loc="upper left", frameon=True, fancybox=True)
-        ax1.grid(True, linestyle="--", alpha=0.5)
+
+        # 网格只显示在左轴，避免双重网格叠加造成视觉混乱
+        ax1.grid(True, linestyle="--", alpha=0.3)
 
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, filename))
         plt.close()
-        logging.info(f"Dual line chart saved: {filename}")
+        logging.info(f"Dual line chart (Fixed) saved: {filename}")
 
 
 class ModelComparisonPlotter(BasePlotter):
     """
-    [View Layer] 负责 Comparison of Models 的绘图
+    [View Layer] 负责不同模型（如 Proposed vs Static）的多维度对比绘图。
+    支持自定义坐标轴标签，并强制执行全局科学计数法格式。
     """
 
     def __init__(self, save_dir: str):
         super().__init__(save_dir)
 
     def plot_comparison_heatmap(
-        self, task_ids, model_labels, data, cbar_label, filename, cmap_key
+        self,
+        task_ids: List[str],
+        model_labels: List[str],
+        data: np.ndarray,
+        cbar_label: str,
+        filename: str,
+        cmap_key: str,
+        xlabel: str = "Transport Task IDs",
+        ylabel: str = "Model Strategy",
     ):
+        """
+        绘制对比热图。
+        支持多行数据绘制（如 6 行），并动态调整 figsize 以保持视觉清晰度。
+        """
         df = pd.DataFrame(data, index=model_labels, columns=task_ids)
-        fig, ax = plt.subplots(figsize=(10, 8))
 
-        # 1. 强制全局 FMT 针对所有数值生效 (0, 0) 代表所有量级都开启科学计数法
+        # 根据行数动态调整高度 (每行约 1.2 inch)
+        height = max(8, len(model_labels) * 1.2)
+        fig, ax = plt.subplots(figsize=(10, height))
+
+        # 1. 强制全局 FMT 针对所有量级开启科学计数法
         FMT.set_powerlimits((0, 0))
 
-        # 2. 准备热图标注数据：复用 FMT 的格式化逻辑
-        # 使格子里的数字也呈现出标准的 1.xx * 10^x 风格
+        # 2. 准备热图标注数据：复用 FMT 的 LaTeX 渲染逻辑
         annot_data = np.vectorize(lambda x: f"${FMT.format_data(x)}$")(data)
 
         sns.heatmap(
             df,
-            annot=annot_data,  # 传入格式化后的文本矩阵
-            fmt="",  # 因为已经是字符串，这里传空
-            cmap=get_color_by_key(self.heapmap_colors, cmap_key),
+            annot=annot_data,
+            fmt="",
+            cmap=get_color_by_key(self.heatmap_colors, cmap_key),
             linewidths=1.5,
             cbar_kws={"label": cbar_label},
             ax=ax,
         )
 
-        # 3. 复用全局 FMT 到 Colorbar 的坐标轴
+        # 3. 将全局 FMT 应用到 Colorbar 的刻度上
         cbar = ax.collections[0].colorbar
         cbar.ax.yaxis.set_major_formatter(FMT)
 
-        plt.xlabel("Transport Task IDs", fontweight="bold")
-        plt.ylabel("Model Strategy", fontweight="bold")
+        plt.xlabel(xlabel, fontweight="bold")
+        plt.ylabel(ylabel, fontweight="bold")
+
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, filename), format="svg")
         plt.close(fig)
+        logging.info(f"Comparison heatmap saved: {filename} 🌡️")

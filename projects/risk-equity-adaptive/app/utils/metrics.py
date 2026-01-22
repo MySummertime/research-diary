@@ -1,10 +1,15 @@
 # --- coding: utf-8 ---
 # --- app/utils/metrics.py ---
+from typing import List, Tuple
+
 import numpy as np
-from typing import List
 from pymoo.indicators.hv import HV
 from pymoo.indicators.igd import IGD
+from scipy.sparse.csgraph import minimum_spanning_tree
+from scipy.spatial.distance import pdist, squareform
+
 from app.core.solution import Solution
+from app.utils.analyzer import calculate_solution_gini
 
 
 class MetricCalculator:
@@ -114,6 +119,84 @@ class MetricCalculator:
         sm = np.sqrt(np.sum((d - d_mean) ** 2) / (len(solutions) - 1))
 
         return sm
+
+    def calculate_ms(self, solutions, ref_front):
+        """
+        计算 Maximum Spread (MS)
+        物理意义: 衡量解集在目标空间中覆盖范围的广度。值越接近 1，覆盖越完整。
+        """
+        if not solutions or len(ref_front) == 0:
+            return 0.0
+
+        # 1. 提取当前解的目标值矩阵
+        F = np.array([[s.f1_risk, s.f2_cost] for s in solutions])
+        f_min = np.min(F, axis=0)
+        f_max = np.max(F, axis=0)
+
+        # 2. 获取参考前沿(即所有算法探索出的边界)的极值
+        ref_min = np.min(ref_front, axis=0)
+        ref_max = np.max(ref_front, axis=0)
+
+        # 3. 计算覆盖范围的平方和比值
+        # 分母是全局探索到的总范围，分子是当前算法覆盖到的范围
+        ms_numerator = np.sum(
+            (np.minimum(f_max, ref_max) - np.maximum(f_min, ref_min)) ** 2
+        )
+        ms_denominator = np.sum((ref_max - ref_min) ** 2)
+
+        ms_value = np.sqrt(ms_numerator / (ms_denominator + 1e-9))
+        return float(ms_value)
+
+    def calculate_pd(self, solutions):
+        """
+        计算 Pure Diversity (PD)
+        原理: 计算解集在目标空间中最小生成树 (MST) 的边权之和。
+        物理意义: 该值越大，代表解集在帕累托前沿上覆盖的“生物多样性”越丰富。
+        """
+        if not solutions or len(solutions) < 2:
+            return 0.0
+
+        # 1. 提取目标值矩阵 (Risk, Cost)
+        F = np.array([[s.f1_risk, s.f2_cost] for s in solutions])
+
+        # 2. 归一化处理 (防止量纲影响距离计算)
+        f_min = np.min(F, axis=0)
+        f_max = np.max(F, axis=0)
+        denom = f_max - f_min
+        denom[denom == 0] = 1.0  # 防止除零
+        F_norm = (F - f_min) / denom
+
+        # 3. 计算欧氏距离矩阵
+        dist_matrix = squareform(pdist(F_norm, metric="euclidean"))
+
+        # 4. 构建最小生成树并求边权和
+        mst = minimum_spanning_tree(dist_matrix)
+        pd_value = mst.toarray().sum()
+
+        return pd_value
+
+    @staticmethod
+    def calculate_gini_for_front(
+        solutions: List[Solution], evaluator
+    ) -> Tuple[float, float]:
+        """
+        批量计算整个前沿解集的 Gini 指标。
+        用于 Benchmark CSV 输出，支撑消融实验分析。
+
+        Returns:
+            Tuple[mean_gini, std_gini]
+        """
+        if not solutions:
+            return 0.0, 0.0
+
+        ginis = []
+        for sol in solutions:
+            if sol.is_feasible:
+                # 利用 analyzer 计算单个解的 Gini
+                g = calculate_solution_gini(sol, evaluator)
+                ginis.append(g)
+
+        return np.mean(ginis) if ginis else 0.0, np.std(ginis) if ginis else 0.0
 
 
 def build_reference_front(all_solutions_F: List[np.ndarray]) -> np.ndarray:

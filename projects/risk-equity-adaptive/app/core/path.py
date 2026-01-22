@@ -2,14 +2,16 @@
 # --- app/core/path.py ---
 import logging
 import random
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
+
 import numpy as np
-from typing import List, Dict, Set, Tuple, Optional, TYPE_CHECKING
-from app.core.network import Node, Arc, TransportTask, TransportNetwork
+
 from app.core.fuzzy import FuzzyMath
+from app.core.network import Arc, Node, TransportNetwork, TransportTask
 
 if TYPE_CHECKING:
     from app.core.evaluator import Evaluator
-    from app.core.network import TransportNetwork, Node, Arc, TransportTask
+    from app.core.network import Arc, Node, TransportNetwork, TransportTask
 
 
 class Path:
@@ -367,3 +369,53 @@ class PathFinder:
         )
 
         return FuzzyMath.triangular_expected_value(*fuzzy_t_e)
+
+    def _get_ablation_paths(
+        self, k_val: int, strategy_level: int
+    ) -> Dict[str, List["Path"]]:
+        """
+        [消融实验]:
+        Level 1: 仅 Shortest Distance (基础 NSGA-II)
+        Level 2: Shortest + Lowest Risk
+        Level 3: Shortest + Lowest Risk + Fastest Response
+        """
+        level_names = {
+            1: "Level 1: Shortest Only",
+            2: "Level 2: Shortest + Risk",
+            3: "Level 3: Shortest + Risk + Response",
+        }
+        logging.info(f"🧬 生成消融路径池: {level_names.get(strategy_level, 'Unknown')}")
+
+        candidate_paths_map: Dict[str, List["Path"]] = {}
+
+        # 1. 定义三套纯物理策略
+        base_strategies = [
+            {"name": "shortest", "road_w": "length", "railway_w": "length"},  # 策略 (1)
+            {"name": "low_risk", "road_w": "risk", "railway_w": "risk"},  # 策略 (2)
+            {
+                "name": "fast_response",
+                "road_w": "response",
+                "railway_w": "response",
+            },  # 策略 (3)
+        ]
+
+        # 2. 根据 level 决定策略子集
+        # Level 1 取 base[:1], Level 2 取 base[:2], Level 3 取 base[:3]
+        selected_strategies = base_strategies[: strategy_level + 1]
+
+        for task in self.network.tasks:
+            combined_paths: List["Path"] = []
+            seen_fingerprints = set()
+
+            for strategy in selected_strategies:
+                # 调用内部 DFS 搜索对应策略下的 K 条路径
+                paths = self._find_best_path_by_strategy(task, strategy)
+                for p in paths[:k_val]:
+                    fp = tuple(arc.id for arc in p.arcs)
+                    if fp not in seen_fingerprints:
+                        combined_paths.append(p)
+                        seen_fingerprints.add(fp)
+
+            candidate_paths_map[task.task_id] = combined_paths
+
+        return candidate_paths_map

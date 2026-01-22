@@ -8,14 +8,16 @@
 2. 风险态度转变分析 (Transition): Expected Risk vs CVaR
 """
 
-import os
 import logging
+import os
+
 import pandas as pd
-from app.experiment_manager import Experiment
+
 from app.core.evaluator import Evaluator
 from app.core.nsga2 import NSGA2
-from app.utils.result_keeper import setup_logging
+from app.experiment_manager import Experiment
 from app.utils.plotter import ParetoPlotter, SensitivityPlotter
+from app.utils.result_keeper import setup_logging
 
 
 def main():
@@ -26,7 +28,7 @@ def main():
     setup_logging(log_dir=sensitivity_dir, log_name="sensitivity.log")
 
     # 2. Run Experiments
-    
+
     # Risk Aversion
     # perform_cvar_sensitivity(exp, sensitivity_dir)
 
@@ -343,8 +345,8 @@ def perform_budget_sensitivity(exp: Experiment, save_dir: str):
 
     # Chart 1: Cost Structure (Stacked Bar) + Risk (Line)
     if x_labels:
-        # Cost Stacked Bar: Min Cost Solution's cost breakdown
-        # Risk Line: Min Cost Solution's total risk
+        # Cost Stacked Bar: Min Risk Solution's cost breakdown
+        # Risk Line: Min Risk Solution's total risk
         plotter.plot_cost_structure_dual_axis(
             x_labels,
             min_risk_breakdown,
@@ -369,7 +371,6 @@ def perform_budget_sensitivity(exp: Experiment, save_dir: str):
             file_name="Figure_Budget_Pareto_Shift.svg",
             x_prefix=r"$\alpha_c$=",
         )
-
 
 
 if __name__ == "__main__":
