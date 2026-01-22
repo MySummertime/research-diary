@@ -1,12 +1,14 @@
 # --- coding: utf-8 ---
 # --- app/utils/network_visualizer.py ---
-import os
 import math
-import networkx as nx
+import os
+from typing import Dict, List, Tuple
+
 import contextily as ctx  # type: ignore
 import matplotlib.pyplot as plt
-from typing import Dict, List, Tuple
+import networkx as nx
 from matplotlib.lines import Line2D
+
 from app.core.network import TransportNetwork
 from app.core.solution import Solution
 from app.utils.visual_style import ColorPalette, get_color_by_key

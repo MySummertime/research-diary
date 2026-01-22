@@ -1,11 +1,12 @@
 # --- coding: utf-8 ---
 # --- app/core/generator.py ---
 import json
-import os
 import logging
+import os
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
-from app.core.network import Node, TransportTask, TransportNetwork
+from typing import Any, Dict, List
+
+from app.core.network import Node, TransportNetwork, TransportTask
 
 
 class AbstractNetworkGenerator(ABC):
@@ -69,11 +70,11 @@ class JSONNetworkGenerator(AbstractNetworkGenerator):
             end_id = str(data.pop("end_node_id"))
 
             try:
-                # [修复2] 这里的 data 剩余部分包含 mode, length 等，通过 **data 传递
+                # 这里的 data 剩余部分包含 mode, length 等，通过 **data 传递
                 # 注意：add_arc 可能会抛出 KeyError (如果节点不存在)
                 self.network.add_arc(start_id, end_id, **data)
             except (KeyError, ValueError) as e:
-                # [修复2] 同时捕获 KeyError 和 ValueError，确保程序稳健
+                # 同时捕获 KeyError 和 ValueError，确保程序稳健
                 logging.warning(f"    跳过无效弧段 ({start_id}->{end_id}): {e}")
 
         logging.info(f"  - 已加载弧段: {len(self.network.arcs)}")
@@ -87,7 +88,7 @@ class JSONNetworkGenerator(AbstractNetworkGenerator):
             d_id = str(data["destination_node_id"])
             demand = data.get("demand", 0.0)
 
-            # [修复1] 使用公开方法 get_node() 替代访问私有属性 _nodes_dict
+            # 使用公开方法 get_node() 替代访问私有属性 _nodes_dict
             origin = self.network.get_node(o_id)
             dest = self.network.get_node(d_id)
 

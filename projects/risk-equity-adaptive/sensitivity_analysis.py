@@ -8,13 +8,16 @@
 2. 风险态度转变分析 (Transition): Expected Risk vs CVaR
 """
 
-import os
 import logging
-from app.experiment_manager import Experiment
+import os
+
+import pandas as pd
+
 from app.core.evaluator import Evaluator
 from app.core.nsga2 import NSGA2
-from app.utils.result_keeper import setup_logging
+from app.experiment_manager import Experiment
 from app.utils.plotter import ParetoPlotter, SensitivityPlotter
+from app.utils.result_keeper import setup_logging
 
 
 def main():
@@ -27,32 +30,45 @@ def main():
     # 2. Run Experiments
 
     # Risk Aversion
-    # perform_extreme_aversion_analysis(exp, sensitivity_dir)
+    # perform_cvar_sensitivity(exp, sensitivity_dir)
 
     # Reliability
-    # perform_reliability_sensitivity(exp, sensitivity_dir)
-
-    # Uncertainty
-    perform_uncertain_response_time_sensitivity(exp, sensitivity_dir)
+    perform_budget_sensitivity(exp, sensitivity_dir)
 
 
-def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
+def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
     """
     极端风险厌恶分析 (alpha -> 1)
     """
-    logging.info(">>> Starting Experiment: Extreme Risk Aversion Analysis...")
+    logging.info(">>> Starting Sensitivity Experiment: CVaR Confidence Level...")
 
     # 适宜精度的 Alpha 区间
-    alphas = [0.99945, 0.99948, 0.99951, 0.99954, 0.99957]
+    alphas = [0.99920, 0.99930, 0.99940, 0.99950, 0.99960, 0.99970]
+
+    # 收集 Min Cost Solution 的 Total Risk，用于 CSV
+    min_cost_risks = []
+
+    # 收集 Min Cost Solution 的 Total Cost，用于双轴折线图
+    min_cost_total_cost = []
+
+    # 收集 Min Cost Solution 的成本构成，用于 Stacked Bar
+    min_cost_breakdown = {"transport": [], "transshipment": [], "carbon": []}
+
+    # 收集 Min Risk Solution 的 Total Risk，用于双轴折线图和 Stacked Bar 右轴
+    min_risk_total_risk = []
+
+    # 收集 Min Risk Solution 的 Total Cost，用于 CSV
+    min_risk_costs = []
+
+    # 收集 Min Risk Solution 的成本构成，用于 CSV
+    min_risk_breakdown = {"transport": [], "transshipment": [], "carbon": []}
 
     pareto_fronts = {}
-    cost_breakdown = {"transport": [], "transshipment": [], "carbon": []}
-    min_risks = []
     x_labels = []
 
     # 确保获取正确的配置 Key
     target_key = "risk_model_f1"
-    original_alpha = exp.config.get(target_key, {}).get("cvar_alpha", 0.99945)
+    original_alpha = exp.config.get(target_key, {}).get("cvar_alpha", 0.99960)
 
     for alpha in alphas:
         alpha_val = float(alpha)
@@ -78,20 +94,34 @@ def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
         feasible = [s for s in final_pop if s.is_feasible and s.rank == 0]
 
         if feasible:
-            # A. 保存 Sorted Pareto Front
+            # A. 保存 Pareto Front sorted by risk
             feasible.sort(key=lambda s: s.f1_risk)
             pareto_fronts[label_str] = feasible
 
-            # B. 提取最安全的解
-            max_cost_sol = min(feasible, key=lambda s: s.f1_risk)
+            # B. 提取两个关键解：min cost solution 和 min risk solution
+            min_cost_sol = min(feasible, key=lambda s: s.f2_cost)
+            min_risk_sol = min(feasible, key=lambda s: s.f1_risk)
 
-            # C. 计算成本构成
-            bd = exp.evaluator.calculate_cost_breakdown(max_cost_sol)
-            cost_breakdown["transport"].append(bd["transport"])
-            cost_breakdown["transshipment"].append(bd["transshipment"])
-            cost_breakdown["carbon"].append(bd["carbon"])
+            # C1. 提取数据 for Stacked Bar/CSV (Min Cost Solution 的成本结构)
+            bd_min_cost = exp.evaluator.calculate_cost_breakdown(min_cost_sol)
+            min_cost_breakdown["transport"].append(bd_min_cost["transport"])
+            min_cost_breakdown["transshipment"].append(bd_min_cost["transshipment"])
+            min_cost_breakdown["carbon"].append(bd_min_cost["carbon"])
 
-            min_risks.append(max_cost_sol.f1_risk)
+            # C2. 提取数据 for CSV (Min Risk Solution 的成本结构)
+            bd_min_risk = exp.evaluator.calculate_cost_breakdown(min_risk_sol)
+            min_risk_breakdown["transport"].append(bd_min_risk["transport"])
+            min_risk_breakdown["transshipment"].append(bd_min_risk["transshipment"])
+            min_risk_breakdown["carbon"].append(bd_min_risk["carbon"])
+
+            # D. 提取数据 CSV
+            min_cost_total_cost.append(min_cost_sol.f2_cost)
+            min_risk_total_risk.append(min_risk_sol.f1_risk)
+
+            # 提取交叉数据 for Dual Line Chart/CSV (左轴: min cost of min risk, 右轴: min risk total)
+            min_cost_risks.append(min_cost_sol.f1_risk)
+            min_risk_costs.append(min_risk_sol.f2_cost)
+
             x_labels.append(label_str)
         else:
             logging.warning(f"No feasible solution found for alpha={alpha_val}")
@@ -99,41 +129,80 @@ def perform_extreme_aversion_analysis(exp: Experiment, save_dir: str):
     # 恢复配置
     exp.config[target_key]["cvar_alpha"] = original_alpha
 
+    try:
+        # 1. 创建数据字典
+        data_for_csv = {
+            # 已经格式化为字符串的 alpha 值
+            "cvar_alpha": x_labels,
+            # Min Cost Solution
+            "min_cost_sol_risk": min_cost_risks,
+            "min_cost_sol_cost": min_cost_total_cost,
+            "transport_cost_min_cost_sol": min_cost_breakdown["transport"],
+            "transshipment_cost_min_cost_sol": min_cost_breakdown["transshipment"],
+            "carbon_cost_min_cost_sol": min_cost_breakdown["carbon"],
+            # Min Risk Solution
+            "min_risk_sol_risk": min_risk_total_risk,
+            "min_risk_sol_cost": min_risk_costs,
+            "transport_cost_min_risk_sol": min_risk_breakdown["transport"],
+            "transshipment_cost_min_risk_sol": min_risk_breakdown["transshipment"],
+            "carbon_cost_min_risk_sol": min_risk_breakdown["carbon"],
+        }
+
+        # 2. 检查数据长度是否一致
+        if not all(len(v) == len(x_labels) for k, v in data_for_csv.items()):
+            logging.error("Data arrays for CSV export have inconsistent lengths!")
+            # 可以 raise 异常或返回
+
+        # 3. 创建 DataFrame 并写入 CSV
+        df = pd.DataFrame(data_for_csv)
+        csv_path = os.path.join(save_dir, "Sensitivity_Extreme_Aversion_Data.csv")
+        df.to_csv(csv_path, index=False)
+        logging.info(f"Sensitivity data saved to: {csv_path}")
+
+    except Exception as e:
+        logging.error(f"Error during CSV export: {e}")
+
     # --- Plotting ---
     plotter = SensitivityPlotter(save_dir)
     pareto_plotter = ParetoPlotter(save_dir=save_dir)
 
     # Chart 1: Cost Structure (Stacked Bar) + Risk (Line)
     if x_labels:
+        # 传递 min_risk_total_risk 作为 Risk 数据
         plotter.plot_cost_structure_dual_axis(
-            x_labels, cost_breakdown, min_risks, "Figure_Extreme_Cost_Structure.svg"
+            x_labels,
+            min_risk_breakdown,
+            min_risk_total_risk,
+            r"CVaR Confidence Level $\alpha$",
+            "Figure_Extreme_Cost_Structure.svg",
         )
 
-    # Chart 2: Pareto Frontier Comparison
+        # Chart 2: Cost-Risk Dual Y-axis Line Chart
+        plotter.plot_dual_line_chart(
+            x_labels,
+            min_risk_costs,  # 左轴: Min Risk Solution 的 Total Cost
+            min_risk_total_risk,  # 右轴: Min Risk Solution 的 Total Risk
+            xlabel=r"CVaR Confidence Level $\alpha$",
+            filename="Figure_Extreme_Cost_Risk_Trend.svg",
+        )
+
+    # Chart 3: Pareto Frontier Comparison
     if pareto_fronts:
-        pareto_plotter.plot_frontier_comparison_by_cvar_alpha(
+        pareto_plotter.plot_frontier_comparison(
             pareto_fronts, file_name="Figure_Extreme_Pareto_Shift.svg"
         )
 
 
-def perform_reliability_sensitivity(exp: Experiment, save_dir: str):
-    logging.info(">>> Starting Experiment: Reliability (Budget Confidence)...")
+def perform_budget_sensitivity(exp: Experiment, save_dir: str):
+    logging.info(">>> Starting Sensitivity Experiment: Budget Confidence Level...")
 
-    # Backup and set FIXED params
-    orig_bgt = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_budget", 1e12)
+    # 1. 备份原始参数
     orig_alpha_c = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_alpha_c", 0.9)
-    orig_cvar_alpha = exp.config.get("risk_model_f1", {}).get("cvar_alpha", 0.99945)
 
-    # --- 1. Warm-up: 寻找 Min Expected Cost 解的悲观成本 ---
-
-    # 锁定 CVaR alpha (固定高风险厌恶度)
-    if "risk_model_f1" not in exp.config:
-        exp.config["risk_model_f1"] = {}
-    exp.config["risk_model_f1"]["cvar_alpha"] = 0.99945
-
-    # Warm-up 条件: 假设 alpha_c = 0.9, Delta = 1.0 (标准), 预算巨大
-    exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = 0.9  # 固定 Warm-up 时的 alpha_c
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = 1e12  # Huge budget
+    # --- 阶段 1: Warm-up (获取预算基准) ---
+    exp.config["risk_model_f1"]["cvar_alpha"] = 0.99960
+    exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = 0.9
+    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = 1e15  # 使用超大预算
 
     exp.evaluator = Evaluator(exp.network, exp.config)
     exp.algorithm = NSGA2(
@@ -141,274 +210,167 @@ def perform_reliability_sensitivity(exp: Experiment, save_dir: str):
     )
 
     pop = exp.algorithm.run(callbacks=[], initial_population=None)
-    # 聚焦 Rank 0 上的可行解
     feasible_rank0 = [s for s in pop if s.is_feasible and s.rank == 0]
 
     if not feasible_rank0:
         logging.error("Warm-up failed: No Rank 0 solution found.")
-        # 恢复配置
-        exp.config["cost_model_f2"]["fuzzy_cost_budget"] = orig_bgt
-        exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = orig_alpha_c
-        exp.config["risk_model_f1"]["cvar_alpha"] = orig_cvar_alpha
         return
 
-    # 1. 找到 Min Expected Cost 的解 S_opt (Rank 0 上最便宜的)
-    min_cost_sol = min(feasible_rank0, key=lambda s: s.f2_cost)
+    # 根据决策成本 (scaled) 寻找最优解
+    min_cost_sol_warm = min(feasible_rank0, key=lambda s: s.f2_cost_scaled)
+    C_Pess_Star = min_cost_sol_warm.pessimistic_cost
 
-    # 2. 获取该解在 alpha_c=0.9 时的悲观成本 C_Pess_Star
-    C_Pess_Star = min_cost_sol.pessimistic_cost  # 直接读取 Evaluator 填充的值
-
-    # 3. 设置 Tight Budget (冗余系数 epsilon = 1.05)
-    epsilon = 0.05
+    epsilon = 0.08
     TIGHT_BUDGET = C_Pess_Star * (1.0 + epsilon)
+    logging.info(f"Setting TIGHT BUDGET = {TIGHT_BUDGET:.2f} (Epsilon={epsilon})")
 
-    logging.info(f"   Min Expected Cost (C_opt) = {min_cost_sol.f2_cost:.2f}")
-    logging.info(f"   Calculated Pessimistic Cost (alpha_c=0.9) = {C_Pess_Star:.2f}")
-    logging.info(f"   Setting TIGHT BUDGET = {TIGHT_BUDGET:.2f}")
-
-    # --- 2. Iterate alpha_c ---
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = TIGHT_BUDGET  # 启用紧预算
-
-    # 迭代 alpha_c
-    alpha_cs = [0.5, 0.6, 0.7, 0.8, 0.9]
-    costs = []
-    risks = []
-
-    for ac in alpha_cs:
-        logging.info(f"   Running for alpha_c = {ac}")
-
-        exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = ac  # 动态修改 alpha_c
-        exp.evaluator = Evaluator(exp.network, exp.config)
-        exp.algorithm = NSGA2(
-            exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
-        )
-
-        pop = exp.algorithm.run(callbacks=[], initial_population=None)
-        feasible = [s for s in pop if s.is_feasible and s.rank == 0]
-
-        if feasible:
-            # 聚焦 Min Expected Cost (f2)
-            best_cost_sol = min(feasible, key=lambda s: s.f2_cost)
-            costs.append(best_cost_sol.f2_cost)
-            risks.append(best_cost_sol.f1_risk)
-        else:
-            # 预测：在 alpha_c > 某个数 时，可能找不到可行解
-            logging.warning(f"   Infeasible for alpha_c={ac}")
-            costs.append(None)
-            risks.append(None)
-
-    # Restore
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = orig_bgt
-    exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = orig_alpha_c
-    exp.config["risk_model_f1"]["cvar_alpha"] = orig_cvar_alpha
-
-    # Plot
-    plotter = SensitivityPlotter(save_dir)
-    plotter.plot_dual_line_chart(
-        alpha_cs,
-        costs,
-        risks,
-        r"Budget Confidence Level $\alpha_c$",
-        "Figure_Reliability_Sensitivity.svg",
-        x_ticks=alpha_cs,
-    )
-
-
-def perform_uncertain_response_time_sensitivity(
-    exp: Experiment, save_dir: str, mode: str = "2D_grid"
-):
-    logging.info(
-        ">>> Starting Experiment: Emergency Response Uncertainty Sensitivity Analysis... 🎯"
-    )
-
-    # Backup original params
-    orig_bgt = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_budget", 1e12)
-    orig_alpha_c = exp.config.get("cost_model_f2", {}).get("fuzzy_cost_alpha_c", 0.9)
-    orig_cvar_alpha = exp.config.get("risk_model_f1", {}).get("cvar_alpha", 0.99945)
-    orig_a_multi = exp.config.get("risk_model_f1", {}).get(
-        "emergency_a_multiplier", 0.0
-    )
-    orig_c_multi = exp.config.get("risk_model_f1", {}).get(
-        "emergency_c_multiplier", 0.0
-    )
-
-    def restore_config(
-        exp: Experiment,
-        orig_bgt,
-        orig_alpha_c,
-        orig_cvar_alpha,
-        orig_opt,
-        orig_pes,
-    ):
-        """恢复实验前配置"""
-        exp.config["cost_model_f2"]["fuzzy_cost_budget"] = orig_bgt
-        exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = orig_alpha_c
-        exp.config["risk_model_f1"]["cvar_alpha"] = orig_cvar_alpha
-        exp.config["risk_model_f1"]["emergency_a_multiplier"] = orig_opt
-        exp.config["risk_model_f1"]["emergency_c_multiplier"] = orig_pes
-
-    # 固定参数设置，确保实验可控
-    if "risk_model_f1" not in exp.config:
-        exp.config["risk_model_f1"] = {}
-    exp.config["risk_model_f1"]["cvar_alpha"] = 0.999945  # 高风险厌恶
-
-    if "cost_model_f2" not in exp.config:
-        exp.config["cost_model_f2"] = {}
-    exp.config["cost_model_f2"]["fuzzy_cost_alpha_c"] = 0.9
-
-    # --- 1. Warm-up: 在基准不确定性下找 Tight Budget ---
-    logging.info(
-        " Calibrating Tight Budget under baseline emergency uncertainty (δ_a=0.0, δ_c=0.0)..."
-    )
-    exp.config["risk_model_f1"]["emergency_a_multiplier"] = 0.0
-    exp.config["risk_model_f1"]["emergency_c_multiplier"] = 0.0
-    exp.config["cost_model_f2"]["fuzzy_cost_budget"] = 1e12  # 松预算
-
-    exp.evaluator = Evaluator(exp.network, exp.config)
-    exp.algorithm = NSGA2(
-        exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
-    )
-    pop = exp.algorithm.run(callbacks=[], initial_population=None)
-
-    feasible_rank0 = [s for s in pop if s.is_feasible and s.rank == 0]
-    if not feasible_rank0:
-        logging.error("Warm-up failed: no feasible solutions.")
-        restore_config(
-            exp,
-            orig_bgt,
-            orig_alpha_c,
-            orig_cvar_alpha,
-            orig_a_multi,
-            orig_c_multi,
-        )
-        return
-
-    min_cost_sol = min(feasible_rank0, key=lambda s: s.f2_cost)
-    C_Pess_Star = min_cost_sol.pessimistic_cost
-
-    # 设置 Tight Budget (冗余系数 epsilon = 1.05)
-    epsilon = 0.05
-    TIGHT_BUDGET = C_Pess_Star * (1.0 + epsilon)
-    logging.info(
-        f" Baseline Pessimistic Cost = {C_Pess_Star:.2f} → Tight Budget = {TIGHT_BUDGET:.2f} 💰"
-    )
-
+    # --- 阶段 2: 迭代 alpha_c ---
     exp.config["cost_model_f2"]["fuzzy_cost_budget"] = TIGHT_BUDGET
+    alphas = [0.5, 0.6, 0.7, 0.8, 0.9]
 
-    # --- 2. 选定非对称场景（用于双线图）---
-    selected_scenarios = [
-        (0.0, 0.0),  # 确定性响应
-        (0.5, 1.5),  # 乐观小，悲观大（现实拥堵场景）
-        (1.0, 1.0),  # 对称标准
-        (1.0, 2.0),  # 悲观侧更不确定
-        (0.5, 2.5),  # 极端非对称
-        (1.5, 0.5),  # 反过来：乐观侧更不确定（少见但可讨论）
-    ]
+    # 收集 Min Cost Solution 的 Total Risk，用于 CSV
+    min_cost_risks = []
 
-    scenario_labels = [f"a={a:.1f},c={c:.1f}" for a, c in selected_scenarios]
-    scenario_costs = []
-    scenario_risks = []
+    # 收集 Min Cost Solution 的 Total Cost，用于双轴折线图
+    min_cost_total_cost = []
+    min_cost_scaled_costs = []
 
-    # --- 3. 完整二维网格（用于热力图）---
-    delta_a_values = [0.0, 0.5, 1.0, 1.5, 2.0]
-    delta_c_values = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
-    cost_grid = [[None] * len(delta_c_values) for _ in delta_a_values]
-    risk_grid = [[None] * len(delta_c_values) for _ in delta_a_values]
+    # 收集 Min Cost Solution 的成本构成，用于 Stacked Bar
+    min_cost_breakdown = {"transport": [], "transshipment": [], "carbon": []}
 
-    total = len(delta_a_values) * len(delta_c_values) + len(selected_scenarios)
-    current = 0
+    # 收集 Min Risk Solution 的 Total Risk，用于双轴折线图和 Stacked Bar 右轴
+    min_risk_total_risk = []
 
-    # 先跑选定的非对称场景（同时填网格）
-    for da, dc in selected_scenarios:
-        current += 1
-        logging.info(f" Scenario {current}/{total} | δ_a={da:.1f}, δ_c={dc:.1f}")
+    # 收集 Min Risk Solution 的 Total Cost，用于 CSV
+    min_risk_costs = []
+    min_risk_scaled_costs = []
 
-        exp.config["risk_model_f1"]["emergency_a_multiplier"] = da
-        exp.config["risk_model_f1"]["emergency_c_multiplier"] = dc
+    # 收集 Min Risk Solution 的成本构成，用于 CSV
+    min_risk_breakdown = {"transport": [], "transshipment": [], "carbon": []}
 
+    pareto_fronts = {}
+    x_labels = []
+
+    # 确保获取正确的配置 Key
+    target_key = "cost_model_f2"
+
+    for alpha in alphas:
+        alpha_val = float(alpha)
+        label_str = f"{alpha_val:.2f}"
+        logging.info(f"   Running for alpha_c = {label_str}")
+
+        # 1. 动态修改配置并热重载
+        exp.config[target_key]["fuzzy_cost_alpha_c"] = alpha_val
         exp.evaluator = Evaluator(exp.network, exp.config)
         exp.algorithm = NSGA2(
             exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
         )
 
-        pop = exp.algorithm.run(callbacks=[], initial_population=None)
-        feasible = [s for s in pop if s.is_feasible and s.rank == 0]
+        # 2. 运行算法
+        final_pop = exp.algorithm.run(callbacks=[], initial_population=None)
+        feasible = [s for s in final_pop if s.is_feasible and s.rank == 0]
 
         if feasible:
-            best = min(feasible, key=lambda s: s.f2_cost)
-            cost = best.f2_cost
-            risk = best.f1_risk
-            scenario_costs.append(cost)
-            scenario_risks.append(risk)
+            # A. 保存 Pareto 前沿用于绘图
+            feasible.sort(key=lambda s: s.f1_risk)
+            pareto_fronts[label_str] = feasible
 
-            # 如果这个点在网格里，也填上
-            if da in delta_a_values and dc in delta_c_values:
-                i = delta_a_values.index(da)
-                j = delta_c_values.index(dc)
-                cost_grid[i][j] = cost
-                risk_grid[i][j] = risk
-        else:
-            scenario_costs.append(None)
-            scenario_risks.append(None)
+            # B. 提取关键解 (使用 scaled 指标作为决策依据)
+            min_cost_sol = min(feasible, key=lambda s: s.f2_cost_scaled)
+            min_risk_sol = min(feasible, key=lambda s: s.f1_risk_scaled)
 
-    # 再补全整个网格
-    for i, da in enumerate(delta_a_values):
-        for j, dc in enumerate(delta_c_values):
-            if cost_grid[i][j] is not None:  # 已算过，跳过
-                continue
-            current += 1
-            logging.info(f" Grid {current}/{total} | δ_a={da:.1f}, δ_c={dc:.1f}")
+            # C1. 收集 Min Cost 解的数据
+            min_cost_total_cost.append(min_cost_sol.f2_cost)  # 记录物理真实值
+            min_cost_risks.append(min_cost_sol.f1_risk)  # 记录物理真实值
+            min_cost_scaled_costs.append(min_cost_sol.f2_cost_scaled)  # 记录决策值
 
-            exp.config["risk_model_f1"]["emergency_a_multiplier"] = da
-            exp.config["risk_model_f1"]["emergency_c_multiplier"] = dc
-            exp.evaluator = Evaluator(exp.network, exp.config)
-            exp.algorithm = NSGA2(
-                exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
-            )
-            pop = exp.algorithm.run(callbacks=[], initial_population=None)
-            feasible = [s for s in pop if s.is_feasible and s.rank == 0]
+            bd_min_cost = exp.evaluator.calculate_cost_breakdown(min_cost_sol)
+            min_cost_breakdown["transport"].append(bd_min_cost["transport"])
+            min_cost_breakdown["transshipment"].append(bd_min_cost["transshipment"])
+            min_cost_breakdown["carbon"].append(bd_min_cost["carbon"])
 
-            if feasible:
-                best = min(feasible, key=lambda s: s.f2_cost)
-                cost_grid[i][j] = best.f2_cost
-                risk_val = best.f1_risk
-                risk_grid[i][j] = risk_val
-            # else: remain None
+            # C2. 收集 Min Risk 解的数据
+            min_risk_total_risk.append(min_risk_sol.f1_risk)
+            min_risk_costs.append(min_risk_sol.f2_cost)
+            min_risk_scaled_costs.append(min_risk_sol.f2_cost_scaled)
 
-    # --- 4. 可视化 ---
+            bd_min_risk = exp.evaluator.calculate_cost_breakdown(min_risk_sol)
+            min_risk_breakdown["transport"].append(bd_min_risk["transport"])
+            min_risk_breakdown["transshipment"].append(bd_min_risk["transshipment"])
+            min_risk_breakdown["carbon"].append(bd_min_risk["carbon"])
+
+            # 最后同步记录标签
+            x_labels.append(label_str)
+
+    # 恢复配置
+    exp.config[target_key]["fuzzy_cost_alpha_c"] = orig_alpha_c
+
+    # --- 3. Output ---
+    try:
+        # 1. 创建数据字典
+        data_for_csv = {
+            "alpha_c": x_labels,
+            # Min Cost Solution Data
+            "min_cost_sol_risk": min_cost_risks,
+            "min_cost_sol_cost": min_cost_total_cost,
+            "min_cost_sol_scaled_cost": min_cost_scaled_costs,
+            "transport_cost_min_cost_sol": min_cost_breakdown["transport"],
+            "transshipment_cost_min_cost_sol": min_cost_breakdown["transshipment"],
+            "carbon_cost_min_cost_sol": min_cost_breakdown["carbon"],
+            # Min Risk Solution Data
+            "min_risk_sol_risk": min_risk_total_risk,
+            "min_risk_sol_cost": min_risk_costs,
+            "min_risk_sol_scaled_cost": min_risk_scaled_costs,
+            "transport_cost_min_risk_sol": min_risk_breakdown["transport"],
+            "transshipment_cost_min_risk_sol": min_risk_breakdown["transshipment"],
+            "carbon_cost_min_risk_sol": min_risk_breakdown["carbon"],
+        }
+
+        # 2. 检查数据长度是否一致
+        if not all(len(v) == len(x_labels) for k, v in data_for_csv.items()):
+            logging.error("Data arrays for CSV export have inconsistent lengths!")
+
+        # 3. 创建 DataFrame 并写入 CSV
+        df = pd.DataFrame(data_for_csv)
+        csv_path = os.path.join(save_dir, "Sensitivity_Budget_Aversion_Data.csv")
+        df.to_csv(csv_path, index=False)
+        logging.info(f"Sensitivity data saved to: {csv_path}")
+
+    except Exception as e:
+        logging.error(f"Error during CSV export: {e}")
+
+    # --- 4. Plotting ---
     plotter = SensitivityPlotter(save_dir)
+    pareto_plotter = ParetoPlotter(save_dir=save_dir)
 
-    # 自定义标签双线图
-    x_indices = list(range(len(selected_scenarios)))
-    plotter.plot_dual_line_chart_with_custom_labels(
-        x_indices=x_indices,
-        cost_data=scenario_costs,
-        risk_data=scenario_risks,
-        custom_x_labels=scenario_labels,
-        xlabel="Emergency Response Time Uncertainty Scenarios",
-        filename="Figure_Uncertain_Response_Time_Asymmetric_Scenarios.svg",
-    )
+    # Chart 1: Cost Structure (Stacked Bar) + Risk (Line)
+    if x_labels:
+        # Cost Stacked Bar: Min Risk Solution's cost breakdown
+        # Risk Line: Min Risk Solution's total risk
+        plotter.plot_cost_structure_dual_axis(
+            x_labels,
+            min_risk_breakdown,
+            min_risk_total_risk,
+            r"Budget Confidence Level $\alpha_c$",
+            "Figure_Budget_Cost_Structure.svg",
+        )
 
-    # 4.2 热力图（完整网格）
-    plotter.plot_emergency_uncertainty_heatmap(
-        delta_a_values=delta_a_values,
-        delta_c_values=delta_c_values,
-        cost_grid=cost_grid,
-        risk_grid=risk_grid,
-        prefix="Figure_Emergency_Asymmetric",
-    )
+        # Chart 2: Cost-Risk Dual Y-axis Line Chart
+        plotter.plot_dual_line_chart(
+            x_labels,
+            min_risk_costs,  # 左轴: Min Risk Solution 的 Total Cost
+            min_risk_total_risk,  # 右轴: Min Risk Solution 的 Total Risk
+            xlabel=r"Budget Confidence Level $\alpha_c$",
+            filename="Figure_Cost_Risk_Trend.svg",
+        )
 
-    # --- 5. Restore ---
-    restore_config(
-        exp,
-        orig_bgt,
-        orig_alpha_c,
-        orig_cvar_alpha,
-        orig_a_multi,
-        orig_c_multi,
-    )
-
-    logging.info("Ultimate Asymmetric Sensitivity Analysis Completed 🌟🔥🚀")
+    # Chart 3: Pareto Frontier Comparison
+    if pareto_fronts:
+        pareto_plotter.plot_frontier_comparison(
+            pareto_fronts,
+            file_name="Figure_Budget_Pareto_Shift.svg",
+            x_prefix=r"$\alpha_c$=",
+        )
 
 
 if __name__ == "__main__":

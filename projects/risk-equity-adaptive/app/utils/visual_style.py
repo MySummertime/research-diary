@@ -6,7 +6,7 @@
 基于经典“黄昏渐变”配色系统，在浅色地图底图上高可见度。
 """
 
-from typing import List, Dict
+from typing import Dict, List
 
 
 class ColorPalette:
@@ -22,6 +22,9 @@ class ColorPalette:
     DARK_GRAY = "#999999"  # 深灰
     GRAY = "#CCCCCC"  # 灰
     LIGHT_GRAY = "#E4E4E4"  # 浅灰
+    SLATE_GRAY = "#708090"  # 石板灰
+    STEEL_BLUE = "#4682B4"  # 钢蓝
+    MIDNIGHT_BLUE = "#191970"  # 午夜蓝
 
     PURPLE_TWILIGHT = "#6A5ACD"  # 暮紫
     DUSK_PINK = "#D8A7B1"  # 黄昏粉
@@ -61,10 +64,21 @@ class ColorPalette:
 
     # --- Violin ---
     VIOLIN_LOOP: List[str] = [
-        DARK_BLUE,
-        DEEP_TEAL,
+        TEAL_GREEN,
+        LIGHT_GREEN,
         SOFT_YELLOW,
+        DARK_BLUE,
+        STEEL_BLUE,
+        MIDNIGHT_BLUE,
         RED_ORANGE,
+    ]
+
+    # --- Grouped Bar ---
+    GROUPED_BAR: List[str] = [
+        LIGHT_GREEN,
+        TEAL_GREEN,
+        SOFT_YELLOW,
+        DUSK_PINK,
     ]
 
     # =====================================================
@@ -99,10 +113,14 @@ class ColorPalette:
 
     # -- Pareto Frontiers (by algorithm) ---
     PARETO_BY_ALGO: List[Dict[str, str]] = [
-        {"EXACT": RED_ORANGE},
-        {"PROPOSED": TEAL_GREEN},
-        {"BASELINE1": SOFT_YELLOW},
-        {"BASELINE2": DARK_BLUE},
+        {"EXACT": RED_ORANGE},  # Gurobi
+        {"PROPOSED": TEAL_GREEN},  # Improved NSGA-II
+        {"BASELINE_1": SOFT_YELLOW},  # SPEA2
+        # {"BASELINE_2": DARK_BLUE},  #
+        # --- 消融实验版本配色 ---
+        {"ABLATION_1": DARK_GRAY},  # 基础版（Strategy 1）
+        {"ABLATION_2": SLATE_GRAY},  # 退化版 (Strategy 1+2)
+        {"ABLATION_3": STEEL_BLUE},  # 退化版 (Strategy 1+2+3)
     ]
 
     # --- Dual line chart ---

@@ -1,8 +1,17 @@
 # --- coding: utf-8 ---
 # --- app/core/path.py ---
 import logging
-from typing import List, Dict, Set, Optional
-from app.core.network import Node, Arc, TransportTask, TransportNetwork
+import random
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
+
+import numpy as np
+
+from app.core.fuzzy import FuzzyMath
+from app.core.network import Arc, Node, TransportNetwork, TransportTask
+
+if TYPE_CHECKING:
+    from app.core.evaluator import Evaluator
+    from app.core.network import Arc, Node, TransportNetwork, TransportTask
 
 
 class Path:
@@ -89,144 +98,324 @@ class Path:
 
 class PathFinder:
     """
-    路径搜索服务。
-    为运输网络中的任务搜索符合 "road-rail-road" 结构的所有替代路径。
+    路径搜索服务类。
+    采用预排序、子段剪枝及哈希去重技术，高效生成 road-rail-road 结构的异质候选路径池。
     """
 
-    def __init__(self, network: TransportNetwork):
+    def __init__(self, network: "TransportNetwork", evaluator: "Evaluator"):
         self.network = network
-        # 预处理邻接表: adj[mode][node_id] = [Arc, ...]
-        self.adj: Dict[str, Dict[str, List[Arc]]] = {"road": {}, "railway": {}}
+        self.evaluator = evaluator
+        # 从配置中读取种子，确保实验可重复性
+        self.seed = self.evaluator.experiment_config.get("precompute_seed", 19)
+        # 预处理邻接表: self.adj[mode][node_id] = [Arc, ...]
+        self.adj: Dict[str, Dict[str, List["Arc"]]] = {"road": {}, "railway": {}}
         self._build_adjacency_lists()
 
     def _build_adjacency_lists(self):
-        """
-        [辅助方法] 构建邻接表以便快速搜索。
-        """
+        """构建原始邻接表以便后续快速搜索。"""
         for node in self.network.nodes:
             self.adj["road"][node.node_id] = []
             self.adj["railway"][node.node_id] = []
-
         for arc in self.network.arcs:
             self.adj[arc.mode][arc.start.node_id].append(arc)
 
-    def find_all_candidate_paths(self) -> Dict[str, List[Path]]:
-        """
-        [主方法] 遍历网络中的所有任务，并为它们找到所有候选路径。
-        """
-        logging.info("开始搜索所有任务的候选路径...")
-        candidate_paths_map: Dict[str, List[Path]] = {}
+    def find_all_candidate_paths(self) -> Dict[str, List["Path"]]:
+        """[主方法] 遍历所有任务，生成完整候选路径库。"""
+        logging.info("开始搜索 candidate paths（预排序+哈希去重）...")
+        candidate_paths_map: Dict[str, List["Path"]] = {}
         for task in self.network.tasks:
             paths = self.find_paths_for_task(task)
             candidate_paths_map[task.task_id] = paths
 
-        # 正确统计所有路径的总数
-        total_paths_count = sum(len(paths) for paths in candidate_paths_map.values())
-
+        total_paths = sum(len(p) for p in candidate_paths_map.values())
         logging.info(
-            f"路径搜索完成。共为 {len(self.network.tasks)} 个任务找到了 {total_paths_count} 条候选路径。"
+            f"搜索完成：共为 {len(self.network.tasks)} 个任务找到 {total_paths} 条异质路径。"
         )
         return candidate_paths_map
 
-    def find_paths_for_task(self, task: TransportTask) -> List[Path]:
+    def find_paths_for_task(self, task: "TransportTask") -> List["Path"]:
         """
-        [主方法] 为单个任务搜索所有 "road-rail-road" 路径。
+        为单个任务生成候选路径。使用哈希指纹去重，大幅提升效率。
         """
-        all_valid_paths: List[Path] = []
+        random.seed(self.seed)
+        np.random.seed(self.seed)
 
-        # 步骤 1: 查找 O -> H1 (公路)
-        arc_lists_o_h1 = self._find_sub_paths(
-            start_node=task.origin,
-            mode="road",
-            end_type="hub",
-            allowed_intermediate_type="non-hub",
+        all_strategy_paths: List["Path"] = []
+        # 使用哈希指纹集合去重，避免高开销的字符串对比
+        seen_path_fingerprints: Set[Tuple[str, ...]] = set()
+
+        # 1. 基础物理锚点策略
+        base_strategies = [
+            {"name": "shortest", "road_w": "length", "railway_w": "length"},
+            {"name": "low_risk", "road_w": "risk", "railway_w": "risk"},
+            {"name": "fast_response", "road_w": "response", "railway_w": "response"},
+        ]
+
+        # 2. Dirichlet 混合权重采样
+        hybrid_count = 20  # 针对小网络，20 组采样已能提供足够的中间权衡解
+        weights_samples = np.random.dirichlet((1, 1, 1), size=hybrid_count)
+
+        strategies = base_strategies + [
+            {
+                "name": f"hybrid_{i}",
+                "road_w": "hybrid",
+                "railway_w": "hybrid",
+                "weights": tuple(w),
+            }
+            for i, w in enumerate(weights_samples)
+        ]
+
+        # 单策略最终保留上限
+        MAX_PATHS_PER_STRATEGY = 300
+
+        for strategy in strategies:
+            # 搜索当前策略下的路径
+            paths = self._find_best_path_by_strategy(task, strategy)
+            for p in paths[:MAX_PATHS_PER_STRATEGY]:
+                # 提取弧段 ID 元组作为哈希指纹
+                fingerprint = tuple(arc.id for arc in p.arcs)
+                if fingerprint not in seen_path_fingerprints:
+                    all_strategy_paths.append(p)
+                    seen_path_fingerprints.add(fingerprint)
+
+        return all_strategy_paths
+
+    def _find_best_path_by_strategy(
+        self, task: "TransportTask", strategy: Dict
+    ) -> List["Path"]:
+        """
+        核心组合逻辑：执行 Road -> Rail -> Road 的笛卡尔积。
+        严格控制子段数量与组合上限，防止组合爆炸。
+        """
+        found_paths = []
+        SUB_LIMIT = 20  # 每个子段仅返回前 20 条最优路径
+        COMBINED_LIMIT = 500  # 单个策略下的组合路径总数上限
+
+        # 预排序邻接表：在进入 DFS 前按当前权重排好序，避免递归内重复计算
+        sorted_adj = self._get_sorted_adj_for_strategy(strategy)
+
+        # 第一段：Origin -> Hub (Road)
+        o_h1_lists = self._find_sub_paths_optimized(
+            task.origin,
+            "road",
+            "hub",
+            "non-hub",
+            strategy,
+            "road_w",
+            SUB_LIMIT,
+            sorted_adj,
         )
 
-        for arcs_o_h1 in arc_lists_o_h1:
-            h1_node = arcs_o_h1[-1].end  # 第一个枢纽
+        for arcs_o_h1 in o_h1_lists:
+            if len(found_paths) >= COMBINED_LIMIT:
+                break
+            h1 = arcs_o_h1[-1].end
 
-            # 步骤 2: 查找 H1 -> H2 (铁路)
-            arc_lists_h1_h2 = self._find_sub_paths(
-                start_node=h1_node,
-                mode="railway",
-                end_type="hub",
-                allowed_intermediate_type="hub",
+            # 第二段：Hub1 -> Hub2 (Railway)
+            h1_h2_lists = self._find_sub_paths_optimized(
+                h1,
+                "railway",
+                "hub",
+                "hub",
+                strategy,
+                "railway_w",
+                SUB_LIMIT,
+                sorted_adj,
             )
 
-            for arcs_h1_h2 in arc_lists_h1_h2:
-                h2_node = arcs_h1_h2[-1].end  # 第二个枢纽
+            for arcs_h1_h2 in h1_h2_lists:
+                if len(found_paths) >= COMBINED_LIMIT:
+                    break
+                h2 = arcs_h1_h2[-1].end
+                if h1.node_id == h2.node_id:
+                    continue
 
-                # 步骤 3: 查找 H2 -> D (公路)
-                arc_lists_h2_d = self._find_sub_paths(
-                    start_node=h2_node,
-                    mode="road",
-                    end_type=task.destination,
-                    allowed_intermediate_type="non-hub",
+                # 第三段：Hub2 -> Destination (Road)
+                h2_d_lists = self._find_sub_paths_optimized(
+                    h2,
+                    "road",
+                    task.destination,
+                    "non-hub",
+                    strategy,
+                    "road_w",
+                    SUB_LIMIT,
+                    sorted_adj,
                 )
 
-                for arcs_h2_d in arc_lists_h2_d:
-                    combined_arc_list = arcs_o_h1 + arcs_h1_h2 + arcs_h2_d
-                    combined_path = Path.from_arc_list(task, combined_arc_list)
-                    all_valid_paths.append(combined_path)
+                for arcs_h2_d in h2_d_lists:
+                    path_obj = Path.from_arc_list(
+                        task, arcs_o_h1 + arcs_h1_h2 + arcs_h2_d
+                    )
+                    found_paths.append(path_obj)
+                    if len(found_paths) >= COMBINED_LIMIT:
+                        break
 
-        return all_valid_paths
+        return found_paths
 
-    def _find_sub_paths(
+    def _get_sorted_adj_for_strategy(
+        self, strategy: Dict
+    ) -> Dict[str, Dict[str, List["Arc"]]]:
+        """预排序邻接表，将 O(N log N) 的排序开销从 DFS 内部移出。"""
+        sorted_adj = {"road": {}, "railway": {}}
+        for mode in ["road", "railway"]:
+            w_key = strategy[f"{mode}_w"]
+            for node_id, neighbors in self.adj[mode].items():
+                sorted_adj[mode][node_id] = sorted(
+                    neighbors,
+                    key=lambda x: self._calculate_arc_weight(x, w_key, strategy),
+                )
+        return sorted_adj
+
+    def _find_sub_paths_optimized(
         self,
-        start_node: Node,
-        mode: str,
-        end_type: str | Node,
-        allowed_intermediate_type: str,
-    ) -> List[List[Arc]]:
+        start,
+        mode,
+        end_type,
+        intermediate_type,
+        strategy,
+        w_key_name,
+        limit,
+        sorted_adj,
+    ) -> List[List["Arc"]]:
+        """带有剪枝策略的 DFS 搜索。"""
+        all_results = []
+        weight_key = strategy[w_key_name]
+        # 针对小网络优化深度限制
+        MAX_DEPTH = 6 if mode == "road" else 10
+
+        def dfs(curr, path_arcs, visited, depth):
+            # 剪枝：超过深度或已搜到足够多的子段
+            if depth > MAX_DEPTH or len(all_results) > limit * 8:
+                return
+
+            visited.add(curr.node_id)
+            is_end = (
+                (curr.node_id == end_type.node_id)
+                if isinstance(end_type, Node)
+                else (curr.node_type == end_type)
+            )
+
+            if is_end and path_arcs:
+                all_results.append(list(path_arcs))
+
+            # 直接使用预排好序的邻居
+            for arc in sorted_adj[mode].get(curr.node_id, []):
+                if arc.end.node_id not in visited:
+                    is_next_end = (
+                        (arc.end.node_id == end_type.node_id)
+                        if isinstance(end_type, Node)
+                        else (arc.end.node_type == end_type)
+                    )
+                    if is_next_end or arc.end.node_type == intermediate_type:
+                        path_arcs.append(arc)
+                        dfs(arc.end, path_arcs, visited, depth + 1)
+                        path_arcs.pop()
+            visited.remove(curr.node_id)
+
+        dfs(start, [], set(), 0)
+
+        # 子段排序
+        all_results.sort(
+            key=lambda x: sum(
+                self._calculate_arc_weight(a, weight_key, strategy) for a in x
+            )
+        )
+
+        # 对于混合策略引入扰动采样，增加帕累托前沿的覆盖度
+        if weight_key == "hybrid" and len(all_results) > limit:
+            pool = all_results[: limit * 3]
+            return random.sample(pool, min(len(pool), limit))
+
+        return all_results[:limit]
+
+    def _calculate_arc_weight(self, arc, weight_key, strategy) -> float:
+        """核心物理权重计算函数。"""
+        target = arc.end
+        SCALE_LEN, SCALE_RISK, SCALE_RESP = 0.1, 1e-1, 5.0  # 量纲对齐
+
+        v_len = arc.length
+        # 风险：E = p_arc * c_arc + p_node * c_node
+        v_risk = (
+            arc.accident_prob_per_km
+            * arc.length
+            * self.evaluator.risk_model.get_consequence(arc)
+        ) + (target.accident_prob * self.evaluator.risk_model.get_consequence(target))
+
+        arc_resp = self._get_actual_response_weight(arc)
+        node_fuzzy = self.evaluator.risk_model._response_time_cache.get(
+            target.node_id, (12, 12, 12)
+        )
+
+        v_resp = arc_resp + FuzzyMath.triangular_expected_value(*node_fuzzy)
+
+        if weight_key == "length":
+            return v_len
+        if weight_key == "risk":
+            return v_risk
+        if weight_key == "response":
+            return v_resp
+        if weight_key == "hybrid":
+            w_len, w_risk, w_resp = strategy["weights"]
+            return (
+                w_len * (v_len * SCALE_LEN)
+                + w_risk * (v_risk * SCALE_RISK)
+                + w_resp * (v_resp * SCALE_RESP)
+            )
+        return v_len
+
+    def _get_actual_response_weight(self, arc) -> float:
+        fuzzy_t_e = self.evaluator.risk_model._response_time_cache.get(
+            (arc.start.node_id, arc.end.node_id), (12.0, 12.0, 12.0)
+        )
+
+        return FuzzyMath.triangular_expected_value(*fuzzy_t_e)
+
+    def _get_ablation_paths(
+        self, k_val: int, strategy_level: int
+    ) -> Dict[str, List["Path"]]:
         """
-        [辅助函数] 使用DFS查找所有符合特定结构的简单路径。
+        [消融实验]:
+        Level 1: 仅 Shortest Distance (基础 NSGA-II)
+        Level 2: Shortest + Lowest Risk
+        Level 3: Shortest + Lowest Risk + Fastest Response
         """
+        level_names = {
+            1: "Level 1: Shortest Only",
+            2: "Level 2: Shortest + Risk",
+            3: "Level 3: Shortest + Risk + Response",
+        }
+        logging.info(f"🧬 生成消融路径池: {level_names.get(strategy_level, 'Unknown')}")
 
-        all_found_arc_lists: List[List[Arc]] = []
+        candidate_paths_map: Dict[str, List["Path"]] = {}
 
-        def dfs_recursive(
-            current_node: Node, current_path_arcs: List[Arc], visited_nodes: Set[str]
-        ):
-            visited_nodes.add(current_node.node_id)
+        # 1. 定义三套纯物理策略
+        base_strategies = [
+            {"name": "shortest", "road_w": "length", "railway_w": "length"},  # 策略 (1)
+            {"name": "low_risk", "road_w": "risk", "railway_w": "risk"},  # 策略 (2)
+            {
+                "name": "fast_response",
+                "road_w": "response",
+                "railway_w": "response",
+            },  # 策略 (3)
+        ]
 
-            is_end_node = False
-            if isinstance(end_type, Node):
-                if current_node.node_id == end_type.node_id:
-                    is_end_node = True
-            elif isinstance(end_type, str):
-                if current_node.node_type == end_type:
-                    is_end_node = True
+        # 2. 根据 level 决定策略子集
+        # Level 1 取 base[:1], Level 2 取 base[:2], Level 3 取 base[:3]
+        selected_strategies = base_strategies[: strategy_level + 1]
 
-            if is_end_node:
-                if current_path_arcs:
-                    all_found_arc_lists.append(list(current_path_arcs))
+        for task in self.network.tasks:
+            combined_paths: List["Path"] = []
+            seen_fingerprints = set()
 
-                if allowed_intermediate_type != "hub":
-                    visited_nodes.remove(current_node.node_id)
-                    return
+            for strategy in selected_strategies:
+                # 调用内部 DFS 搜索对应策略下的 K 条路径
+                paths = self._find_best_path_by_strategy(task, strategy)
+                for p in paths[:k_val]:
+                    fp = tuple(arc.id for arc in p.arcs)
+                    if fp not in seen_fingerprints:
+                        combined_paths.append(p)
+                        seen_fingerprints.add(fp)
 
-            for arc in self.adj[mode][current_node.node_id]:
-                neighbor_node = arc.end
+            candidate_paths_map[task.task_id] = combined_paths
 
-                if neighbor_node.node_id not in visited_nodes:
-                    is_neighbor_end_node = False
-                    if isinstance(end_type, Node):
-                        if neighbor_node.node_id == end_type.node_id:
-                            is_neighbor_end_node = True
-                    elif isinstance(end_type, str):
-                        if neighbor_node.node_type == end_type:
-                            is_neighbor_end_node = True
-
-                    if (
-                        is_neighbor_end_node
-                        or neighbor_node.node_type == allowed_intermediate_type
-                    ):
-                        current_path_arcs.append(arc)
-                        dfs_recursive(neighbor_node, current_path_arcs, visited_nodes)
-                        current_path_arcs.pop()
-
-            visited_nodes.remove(current_node.node_id)
-
-        dfs_recursive(start_node, [], set())
-
-        return all_found_arc_lists
+        return candidate_paths_map

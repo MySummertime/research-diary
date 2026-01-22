@@ -29,6 +29,7 @@ class Solution:
         self.f1_risk: float = float("inf")
         self.f1_risk_scaled: float = float("inf")
         self.f2_cost: float = float("inf")
+        self.f2_cost_scaled: float = float("inf")
         self.gini_coefficient: float = float("inf")
 
         # --- 3. 可行性与约束 ---

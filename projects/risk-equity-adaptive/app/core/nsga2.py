@@ -13,7 +13,7 @@ from app.core.network import TransportNetwork
 from app.core.path import Path
 from app.core.solution import Solution
 from app.core.evaluator import Evaluator
-from app.core.moea_utils import MOEAUtils
+from app.utils.moea_utils import MOEAUtils
 
 
 class Callback:

@@ -7,34 +7,34 @@
 2. Gurobi 适配器: 精确解求解器 (基于路径选择的 MILP 模型)
 """
 
-import numpy as np
 import logging
+from typing import Any, Dict, List, Tuple
+
 import gurobipy as gp
+import numpy as np
 from gurobipy import GRB
-from typing import List, Dict, Tuple, Any
+from pymoo.algorithms.moo.nsga2 import NSGA2 as PymooNSGA2
+from pymoo.algorithms.moo.spea2 import SPEA2 as PymooSPEA2
 
 # Pymoo
 from pymoo.core.problem import ElementwiseProblem
-from pymoo.algorithms.moo.nsga2 import NSGA2 as PymooNSGA2
-from pymoo.algorithms.moo.spea2 import SPEA2 as PymooSPEA2
-from pymoo.optimize import minimize
-from pymoo.operators.sampling.rnd import IntegerRandomSampling
 from pymoo.operators.crossover.sbx import SBX
 from pymoo.operators.mutation.pm import PM
 from pymoo.operators.repair.rounding import RoundingRepair
+from pymoo.operators.sampling.rnd import IntegerRandomSampling
+from pymoo.optimize import minimize
 from pymoo.termination import get_termination
 
-# Project
-from app.core.solution import Solution
-from app.core.path import Path
-from app.core.network import TransportNetwork
 from app.core.evaluator import Evaluator
 from app.core.fuzzy import FuzzyMath
+from app.core.network import TransportNetwork
+from app.core.path import Path
+from app.core.solution import Solution
 
 
 class PymooHazmatProblem(ElementwiseProblem):
     """
-    Pymoo 问题包装器 (保持不变)
+    Pymoo 问题包装器
     """
 
     def __init__(
@@ -74,25 +74,12 @@ class PymooHazmatProblem(ElementwiseProblem):
 
         self.evaluator.evaluate(sol)
 
-        # 针对 NSGA-II, SPEA2 的微小扰动 (Jitter)
-        # 防止所有个体成本完全相同导致除零错误
-        import random
-
-        epsilon = 1e-6
-
         # 处理无穷大：防止计算报错
-        f1 = sol.f1_risk if sol.f1_risk != float("inf") else 1e9
-        f2 = sol.f2_cost if sol.f2_cost != float("inf") else 1e9
+        f1 = sol.f1_risk if sol.f1_risk != float("inf") else 1e12  # 调大惩罚值
+        f2 = sol.f2_cost if sol.f2_cost != float("inf") else 1e12
 
-        # 添加相对噪音：Value * random(0, epsilon)
-        # max(1.0, val) 确保即使值为0也能加上微小绝对噪音
-        f1_jitter = random.uniform(0, epsilon * max(1.0, abs(f1)))
-        f2_jitter = random.uniform(0, epsilon * max(1.0, abs(f2)))
-
-        f1_noisy = f1 + f1_jitter
-        f2_noisy = f2 + f2_jitter
-
-        out["F"] = [f1_noisy, f2_noisy]
+        # 直接输出原始评估值，不添加任何人工随机噪音
+        out["F"] = [f1, f2]
         out["G"] = [sol.constraint_violation]
 
 
@@ -106,16 +93,50 @@ class PymooSolver:
         self.evaluator = evaluator
         self.candidate_paths_map = candidate_paths_map
         self.config = config
+        self.task_ids = sorted([t.task_id for t in network.tasks])
+
+        # 初始化当前运行使用的路径池缓存，用于解决索引脱节问题
+        self.current_run_path_map: Dict[str, List[Path]] = {}
 
         algo_cfg = config.get("algorithm", {})
         self.pop_size = algo_cfg.get("population_size", 100)
         self.max_gen = algo_cfg.get("max_generations", 200)
         self.seed = config.get("experiment", {}).get("seed", 42)
 
-        self.problem = PymooHazmatProblem(network, evaluator, candidate_paths_map)
+    def run_algorithm(
+        self, algo_name: str, save_history: bool = False, strategy_id: int = None
+    ):
+        """
+        - strategy_id = None (且为 Basic 版): 仅包含 K-shortest 路径 (退化版 0)
+        - strategy_id = 0, 1, 2: 仅包含 K-shortest + 对应索引的启发式策略路径 (退化版 1-3)
+        """
+        logging.info(
+            f"--- Starting Baseline Solver: Pymoo {algo_name} (Strategy: {strategy_id}) ---"
+        )
 
-    def run_algorithm(self, algo_name: str, save_history: bool = False):
-        logging.info(f"--- Starting Baseline Solver: Pymoo {algo_name} ---")
+        # --- 路径池过滤，实现退化实验 (Ablation) ---
+        filtered_map = {}
+        for tid, paths in self.candidate_paths_map.items():
+            # 路径池结构：[K-shortest paths...] + [Strategy 0 paths...] + [Strategy 1 paths...] ...
+            # 基础版仅保留 K-shortest
+            base_k = self.config.get("path_finder", {}).get("k_shortest", 5)
+
+            if strategy_id is None:
+                # NSGA-II_Basic: 仅使用基础路径
+                filtered_map[tid] = paths[:base_k]
+            else:
+                # 提取特定策略的路径 (根据 Path 对象的 source_strategy 属性过滤)
+                strategy_paths = [
+                    p for p in paths if getattr(p, "source_strategy", -1) == strategy_id
+                ]
+                filtered_map[tid] = paths[:base_k] + strategy_paths
+
+        # 在 solver 实例中存储本次运行实际使用的路径池，确保解码正确
+        self.current_run_path_map = filtered_map
+
+        # 基于过滤后的路径池创建问题对象
+        current_problem = PymooHazmatProblem(self.network, self.evaluator, filtered_map)
+        self.problem = current_problem
 
         # 1. 选择算法
         if algo_name == "NSGA-II":
@@ -141,7 +162,7 @@ class PymooSolver:
         termination = get_termination("n_gen", self.max_gen)
 
         res = minimize(
-            self.problem,
+            current_problem,  # 使用动态生成的问题
             algorithm,
             termination,
             seed=self.seed,
@@ -163,20 +184,20 @@ class PymooSolver:
         if pymoo_result.opt is None:
             return []
 
-        # Pymoo 的 X 是一个矩阵，每一行是一个解的变量向量
         X_matrix = np.atleast_2d(pymoo_result.opt.get("X"))
-        task_ids = solver_instance.problem.task_ids
+
+        # 直接从 solver_instance 获取 task_ids
+        task_ids = solver_instance.task_ids  #
 
         for x_vec in X_matrix:
             sol = Solution()
-            # 解码基因型
             for i, path_idx in enumerate(x_vec):
                 tid = task_ids[i]
                 idx = int(round(path_idx))
-                path = solver_instance.candidate_paths_map[tid][idx]
+                # 使用当前运行存储的 current_run_path_map 确保解码索引一致
+                path = solver_instance.current_run_path_map[tid][idx]
                 sol.path_selections[tid] = path
 
-            # 重新评估以填充属性 (F1, F2, Feasibility)
             solver_instance.evaluator.evaluate(sol)
             if sol.is_feasible:
                 final_solutions.append(sol)
@@ -222,7 +243,7 @@ class GurobiSolver:
         self.task_ids = sorted([t.task_id for t in network.tasks])
 
         self.path_metrics: Dict[str, List[Dict[str, Any]]] = {}
-        #
+
         # 记录每项任务的 min/max 路径属性 (用于全局归一化)
         self.task_min_metrics: Dict[str, Dict[str, float]] = {}
         self.task_max_metrics: Dict[str, Dict[str, float]] = {}
@@ -236,6 +257,7 @@ class GurobiSolver:
         """预计算指标，并建立枢纽容量占用索引"""
         logging.info("Gurobi: Pre-computing metrics for all candidate paths...")
         alpha_c = self.evaluator.cost_config.get("fuzzy_cost_alpha_c", 0.90)
+        delta = self.evaluator.delta
 
         # 初始化枢纽路径索引映射
         self.hub_path_map = {h.node_id: [] for h in self.network.get_hubs()}
@@ -274,8 +296,9 @@ class GurobiSolver:
                 # 3. Pessimistic Cost
                 cost_pess = 0.0
                 for arc in path.arcs:
+                    scaled_fuzzy_time = [v * delta for v in arc.fuzzy_transport_time]
                     t_pess = FuzzyMath.triangular_pessimistic_value(
-                        *arc.fuzzy_transport_time, alpha_c
+                        *scaled_fuzzy_time, alpha_c
                     )
                     C_m = self.evaluator.unit_transport_cost.get(arc.mode, 0)
                     E_m = self.evaluator.unit_carbon_cost.get(arc.mode, 0)
