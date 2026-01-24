@@ -1,6 +1,7 @@
 # --- coding: utf-8 ---
 # --- app/core/solution.py ---
 from typing import Dict
+
 from app.core.path import Path
 
 
@@ -14,8 +15,6 @@ class Solution:
 
     def __init__(self):
         # --- 1. 基因 (Chromosome) ---
-        # 遗传算法需要 *进化* 的决策变量。
-        # 这是论文模型的核心。
 
         # 基因: 路径选择 (离散变量)
         # 字典: { "task_id_1": Path_obj_A, "task_id_2": Path_obj_B, ... }
@@ -29,11 +28,10 @@ class Solution:
         self.f1_risk: float = float("inf")
         self.f1_risk_scaled: float = float("inf")
         self.f2_cost: float = float("inf")
-        self.f2_cost_scaled: float = float("inf")
         self.gini_coefficient: float = float("inf")
 
         # --- 3. 可行性与约束 ---
-        self.pessimistic_cost: float = float("inf")
+        self.max_delivery_time_pess: float = 0.0
         self.is_feasible: bool = False
         self.constraint_violation: float = float("inf")
 
@@ -61,7 +59,7 @@ class Solution:
         new_sol.f2_cost = self.f2_cost
         new_sol.gini_coefficient = self.gini_coefficient
 
-        new_sol.pessimistic_cost = self.pessimistic_cost
+        new_sol.max_delivery_time_pess = self.max_delivery_time_pess
         new_sol.is_feasible = self.is_feasible
         new_sol.constraint_violation = self.constraint_violation
 
@@ -75,14 +73,7 @@ class Solution:
         提供一个清晰的打印输出，用于调试。
         """
         feas_icon = "✅" if self.is_feasible else "❌"
-        cost_str = f"{self.f2_cost:,.0f}" if self.f2_cost != float("inf") else "inf"
-        risk_str = f"{self.f1_risk:,.0f}" if self.f1_risk != float("inf") else "inf"
-
         return (
-            f"Solution[{feas_icon}]"
-            f"Rank={self.rank}, "
-            f"Risk={risk_str}, "
-            f"Cost={cost_str}, "
-            f"Feasible={self.is_feasible}, "
-            f"CV={self.constraint_violation:.4f}"
+            f"Solution({feas_icon} Risk={self.f1_risk:.2f}, Cost={self.f2_cost:.2f}, "
+            f"Time_Pess={self.max_delivery_time_pess:.2f}h, Gini={self.gini_coefficient:.4f})"
         )

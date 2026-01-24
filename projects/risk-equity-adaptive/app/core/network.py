@@ -2,9 +2,10 @@
 # --- app/core/network.py ---
 import json
 import logging
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional, Tuple
+
 import networkx as nx
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, asdict
 
 # ==========================================
 # 1. 基础数据结构 (Data Classes)
@@ -28,13 +29,18 @@ class Node:
 
     # 业务属性
     is_emergency_center: bool = False
-    capacity: float = 10000.0
+    capacity: float = 250000.0
     population_density: float = 0.01
     accident_prob: float = 1e-7
 
     # 模糊属性
     # (a, b, c, d) 梯形模糊数
-    fuzzy_transshipment_time: Tuple[float, float, float, float] = (0.8, 1.0, 1.2, 1.5)
+    fuzzy_transshipment_time: Tuple[float, float, float, float] = (
+        1.00,
+        1.33,
+        1.67,
+        2.00,
+    )
 
     def __post_init__(self):
         if not self.name:

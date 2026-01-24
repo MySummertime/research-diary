@@ -17,7 +17,6 @@ from app.core.path import PathFinder
 from app.core.solution import Solution
 from app.utils.analyzer import (
     calculate_solution_gini,
-    find_knee_point,
     generate_routing_scheme_comparison,
 )
 
@@ -200,11 +199,11 @@ class Experiment:
         # 2. 准备特殊解 (A, B, C)
         sol_min_risk = min(rank_0, key=lambda s: s.f1_risk)  # Min Risk
         sol_min_cost = min(rank_0, key=lambda s: s.f2_cost)  # Min Cost
-        sol_knee = find_knee_point(rank_0)  # Knee Point
+        sol_min_gini = min(rank_0, key=lambda s: s.gini_coefficient)  # Min Gini
 
         special_solutions = {
             "Opinion A(Min Risk)": sol_min_risk,
-            "Opinion B(Knee)": sol_knee,
+            "Opinion B(Min Gini)": sol_min_gini,
             "Opinion C(Min Cost)": sol_min_cost,
         }
 

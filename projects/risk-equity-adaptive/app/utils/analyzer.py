@@ -1,13 +1,15 @@
 # --- coding: utf-8 ---
 # --- app/utils/analyzer.py ---
-import os
 import csv
 import logging
-import numpy as np
+import os
 from typing import Dict, List, Optional
-from app.core.solution import Solution
+
+import numpy as np
+
 from app.core.evaluator import Evaluator
 from app.core.fuzzy import FuzzyMath
+from app.core.solution import Solution
 
 
 def find_knee_point(solutions: List[Solution]) -> Optional[Solution]:
@@ -55,28 +57,30 @@ def generate_routing_scheme_comparison(
 
     功能：
     1. 遍历 A, B, C 三个方案。
-    2. 对每个方案中的每个 Task，单独计算其 Risk (CVaR) 和 Cost (Expected)。
+    2. 对每个方案中的每个 Task，单独计算其 Risk (CVaR) 和 Cost。
     3. 输出包含路径细节、模式占比、碳排放等信息的 CSV。
     """
     file_name = "routing_scheme_details.csv"
     file_path = os.path.join(save_dir, file_name)
     logging.info(f"Generating detailed routing scheme to: {file_path}")
 
-    # 定义 CSV 表头
     headers = [
-        "Opinion",  # A, B, C
-        "Task_ID",  # T1, T2...
-        "Origin",  # 起点
-        "Destination",  # 终点
-        "Total_Risk",  # 该任务的风险 (CVaR)
-        "Total_Cost",  # 该任务的总成本 (Expected)
+        "Opinion",
+        "Task_ID",
+        "Origin",
+        "Destination",
+        "Total_Risk",
+        "Total_Cost",
         "Transport_Cost",
         "Transshipment_Cost",
         "Carbon_Cost",
-        "Transfers",  # 中转次数
-        "RoadOverRail_Ratio",  # 公路/铁路 距离占比 (e.g. "30% / 70%")
-        "Transfer_Hubs",  # 转运枢纽 (e.g. "H1, H3")
-        "Route_Path",  # 完整路径 (e.g. "S1 -> H1 -> H3 -> D1")
+        "Pessimistic_Time",
+        "Time_Limit",
+        "Is_On_Time",
+        "Transfers",
+        "RoadOverRail_Ratio",
+        "Transfer_Hubs",
+        "Route_Path",
     ]
 
     try:
@@ -84,13 +88,10 @@ def generate_routing_scheme_comparison(
             writer = csv.writer(f)
             writer.writerow(headers)
 
-            # 遍历每个方案 (Opinion A, B, C)
             for label, solution in solutions_map.items():
                 if not solution:
-                    logging.warning(f"Solution for {label} is None, skipping.")
                     continue
 
-                # 按照 Task ID 排序，保证输出整齐
                 sorted_tasks = sorted(
                     solution.path_selections.items(), key=lambda x: x[0]
                 )
@@ -99,13 +100,18 @@ def generate_routing_scheme_comparison(
                     if not path.task:
                         continue
 
-                    # --- 1. 计算单任务指标 ---
+                    # 1. 计算单任务指标
                     task_cost, transport_cost, transship_cost, carbon_cost = (
                         _calculate_single_task_cost(path, evaluator)
                     )
                     task_risk = _calculate_single_task_risk(path, evaluator)
 
-                    # --- 2. 统计路径特征 ---
+                    # --- 计算路径悲观耗时并判定是否符合最大运到时限约束 ---
+                    pess_time = _calculate_single_task_pessimistic_time(path, evaluator)
+                    t_max = evaluator.cost_config.get("max_delivery_time", 15.0)
+                    is_on_time = "Yes" if pess_time <= t_max else "No"
+
+                    # 2. 统计路径特征
                     road_dist = 0.0
                     rail_dist = 0.0
                     route_nodes = [n.node_id for n in path.nodes]
@@ -125,12 +131,13 @@ def generate_routing_scheme_comparison(
                             rail_dist += arc.length
 
                     total_dist = road_dist + rail_dist
-                    if total_dist > 0:
-                        ratio_str = f"{road_dist / total_dist * 100:.0f}% / {rail_dist / total_dist * 100:.0f}%"
-                    else:
-                        ratio_str = "N/A"
+                    ratio_str = (
+                        f"{road_dist / total_dist * 100:.0f}% / {rail_dist / total_dist * 100:.0f}%"
+                        if total_dist > 0
+                        else "N/A"
+                    )
 
-                    # --- 3. 写入 CSV 行 ---
+                    # 3. 写入 CSV 行
                     writer.writerow(
                         [
                             label,
@@ -142,6 +149,9 @@ def generate_routing_scheme_comparison(
                             f"{transport_cost:.2f}",
                             f"{transship_cost:.2f}",
                             f"{carbon_cost:.2f}",
+                            f"{pess_time:.2f}",
+                            f"{t_max:.2f}",
+                            is_on_time,
                             transfers,
                             ratio_str,
                             transfer_hubs_str,
@@ -150,12 +160,8 @@ def generate_routing_scheme_comparison(
                     )
 
         logging.info(f"Successfully saved detailed routing scheme: {file_name}")
-
     except Exception as e:
         logging.error(f"Failed to save routing scheme CSV: {e}")
-        import traceback
-
-        logging.error(traceback.format_exc())
 
 
 def calculate_solution_gini(solution: Solution, evaluator: Evaluator) -> float:
@@ -279,7 +285,7 @@ def _get_node_risk_exposure(
 
 def _calculate_single_task_cost(path, evaluator: Evaluator):
     """
-    [Helper] 重新计算单个任务的 Expected Cost 和 Carbon Cost
+    [Helper] 重新计算单个任务的 Total Cost 和 Carbon Cost
     """
     total_cost = 0.0
     transport_cost = 0.0
@@ -287,37 +293,40 @@ def _calculate_single_task_cost(path, evaluator: Evaluator):
     carbon_cost = 0.0
     dv = path.task.demand
 
-    # 1. 弧段成本
+    # --- 获取参数 ---
+    c_tax = evaluator.carbon_tax_rate  # 0.015
+    u_trans_emit = evaluator.transport_emission_factor  # {road: 0.05771, ...}
+    u_hub_emit = evaluator.transshipment_emission_factor  # 0.128
+
+    # 1. 弧段相关 (运输成本 + 运输碳排放)
     for arc in path.arcs:
         mode = arc.mode
         d_ij = arc.length
 
-        C_m = evaluator.unit_transport_cost.get(mode, 0.0)
-        E_m = evaluator.unit_carbon_cost.get(mode, 0.0)
-        P = evaluator.unit_operation_cost
+        # 运输成本: C_m * d^v * d_ij
+        c_m = evaluator.unit_transport_cost.get(mode, 0.0)
+        seg_transport = c_m * dv * d_ij
 
-        # 时间期望 (调用 FuzzyMath)
-        exp_time = FuzzyMath.triangular_expected_value(*arc.fuzzy_transport_time)
+        # 运输碳排放: C_tax * omega_m * d^v * d_ij
+        omega_m = u_trans_emit.get(mode, 0.0)
+        seg_carbon = c_tax * omega_m * dv * d_ij
 
-        segment_transport = C_m * dv * d_ij + P * exp_time
-        segment_carbon = E_m * dv * d_ij
-        segment_cost = segment_transport + segment_carbon
+        transport_cost += seg_transport
+        carbon_cost += seg_carbon
+        total_cost += seg_transport + seg_carbon
 
-        total_cost += segment_cost
-        transport_cost += segment_transport
-        carbon_cost += segment_carbon
-
-    # 2. 枢纽成本
+    # 2. 枢纽相关 (转运成本 + 转运碳排放)
     for hub in path.transfer_hubs:
-        B_k = evaluator.unit_transshipment_cost
-        I_k = evaluator.unit_transshipment_infra_cost
+        # 转运成本: C_k^b * d^v
+        c_kb = evaluator.unit_transshipment_cost
+        hub_transship = c_kb * dv
 
-        exp_time = FuzzyMath.trapezoidal_expected_value(*hub.fuzzy_transshipment_time)
+        # 转运碳排放: C_tax * omega_k * d^v (0.128 kg/t)
+        hub_carbon = c_tax * u_hub_emit * dv
 
-        hub_cost = B_k * dv + I_k * exp_time
-
-        transship_cost += hub_cost
-        total_cost += hub_cost
+        transship_cost += hub_transship
+        carbon_cost += hub_carbon
+        total_cost += hub_transship + hub_carbon
 
     return total_cost, transport_cost, transship_cost, carbon_cost
 
@@ -355,3 +364,27 @@ def _calculate_single_task_risk(path, evaluator: Evaluator) -> float:
     _, task_cvar = evaluator._calc_cvar_for_path(p_c_pairs, alpha, one_minus_alpha)
 
     return task_cvar
+
+
+def _calculate_single_task_pessimistic_time(path, evaluator: Evaluator) -> float:
+    """
+    [Helper] 计算单个任务路径的 alpha_t-悲观耗时。
+    """
+    alpha_t = evaluator.cost_config.get("time_confidence_level", 0.9)
+    total_pess_time = 0.0
+
+    # 1. 弧段悲观耗时
+    for arc in path.arcs:
+        t_pess = FuzzyMath.triangular_pessimistic_value(
+            *arc.fuzzy_transport_time, alpha_t=alpha_t
+        )
+        total_pess_time += t_pess
+
+    # 2. 枢纽悲观耗时
+    for hub in path.transfer_hubs:
+        s_pess = FuzzyMath.trapezoidal_pessimistic_value(
+            *hub.fuzzy_transshipment_time, alpha_t
+        )
+        total_pess_time += s_pess
+
+    return total_pess_time

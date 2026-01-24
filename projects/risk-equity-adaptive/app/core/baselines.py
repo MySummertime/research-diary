@@ -231,7 +231,7 @@ class GurobiSolver:
     """
     精确解求解器 (Based on Weighted Sum Method)
     将问题建模为 MILP:
-    - 预计算每条候选路径的 Risk, Cost, Capacity Usage, Pessimistic Cost
+    - 预计算每条候选路径的 Risk, Cost, Capacity Usage, Time Pessimistic Value
     - 通过改变权重 w, 求解 min w*Risk + (1-w)*Cost
     """
 
@@ -256,8 +256,14 @@ class GurobiSolver:
     def _precompute_metrics(self):
         """预计算指标，并建立枢纽容量占用索引"""
         logging.info("Gurobi: Pre-computing metrics for all candidate paths...")
-        alpha_c = self.evaluator.cost_config.get("fuzzy_cost_alpha_c", 0.90)
-        delta = self.evaluator.delta
+
+        # --- 获取最新的成本和时效参数 ---
+        alpha_t = self.evaluator.cost_config.get("time_confidence_level", 0.9)
+        c_tax = self.evaluator.carbon_tax_rate  # 0.015
+        u_trans_cost = self.evaluator.unit_transport_cost  # {road: 0.23, railway: 0.05}
+        u_trans_emit = self.evaluator.transport_emission_factor  # {road: 0.05771, ...}
+        u_hub_cost = self.evaluator.unit_transshipment_cost  # 3.090
+        u_hub_emit = self.evaluator.transshipment_emission_factor  # 0.128
 
         # 初始化枢纽路径索引映射
         self.hub_path_map = {h.node_id: [] for h in self.network.get_hubs()}
@@ -269,56 +275,52 @@ class GurobiSolver:
             dv = task.demand
 
             for p_idx, path in enumerate(paths):
-                # 1. Cost (Expected)
+                # 1. Expected Cost: 运输成本 + 转运成本 + 运输碳排放 + 转运碳排放
                 cost_exp = 0.0
-                for arc in path.arcs:
-                    t_exp = FuzzyMath.triangular_expected_value(
-                        *arc.fuzzy_transport_time
-                    )
-                    C_m = self.evaluator.unit_transport_cost.get(arc.mode, 0)
-                    E_m = self.evaluator.unit_carbon_cost.get(arc.mode, 0)
-                    P = self.evaluator.unit_operation_cost
-                    cost_exp += ((C_m + E_m) * dv * arc.length) + P * t_exp
 
+                # 1a. 弧段相关 (运输 + 运输碳排放)
+                for arc in path.arcs:
+                    mode = arc.mode
+                    dist = arc.length
+                    # 运输: C_m * d^v * d_ij
+                    c_m = u_trans_cost.get(mode, 0.0)
+                    # 运输碳: C_tax * omega_m * d^v * d_ij
+                    omega_m = u_trans_emit.get(mode, 0.0)
+
+                    cost_exp += (c_m + c_tax * omega_m) * dv * dist
+
+                # 1b. 枢纽相关 (转运 + 转运碳排放)
                 for hub in path.transfer_hubs:
-                    s_exp = FuzzyMath.trapezoidal_expected_value(
-                        *hub.fuzzy_transshipment_time
-                    )
-                    B_k = self.evaluator.unit_transshipment_cost
-                    I_k = self.evaluator.unit_transshipment_infra_cost
-                    cost_exp += B_k * dv + I_k * s_exp
+                    # 转运: C_k^b * d^v
+                    # 转运碳: C_tax * omega_k * d^v
+                    cost_exp += (u_hub_cost + c_tax * u_hub_emit) * dv
 
                 # 2. Risk (CVaR)
                 dummy_sol = Solution()
                 dummy_sol.path_selections[tid] = path
                 risk_cvar = self.evaluator._calculate_f1_cvar_risk(dummy_sol)
 
-                # 3. Pessimistic Cost
-                cost_pess = 0.0
+                # 3. 运到期限悲观值 (Time Pessimistic Value)
+                # 计算路径对于 alpha_t 的逆可信性分布
+                time_pess = 0.0
                 for arc in path.arcs:
-                    scaled_fuzzy_time = [v * delta for v in arc.fuzzy_transport_time]
                     t_pess = FuzzyMath.triangular_pessimistic_value(
-                        *scaled_fuzzy_time, alpha_c
+                        *arc.fuzzy_transport_time, alpha_t=alpha_t
                     )
-                    C_m = self.evaluator.unit_transport_cost.get(arc.mode, 0)
-                    E_m = self.evaluator.unit_carbon_cost.get(arc.mode, 0)
-                    P = self.evaluator.unit_operation_cost
-                    cost_pess += ((C_m + E_m) * dv * arc.length) + P * t_pess
+                    time_pess += t_pess
 
                 for hub in path.transfer_hubs:
                     s_pess = FuzzyMath.trapezoidal_pessimistic_value(
-                        *hub.fuzzy_transshipment_time, alpha_c
+                        *hub.fuzzy_transshipment_time, alpha_t=alpha_t
                     )
-                    B_k = self.evaluator.unit_transshipment_cost
-                    I_k = self.evaluator.unit_transshipment_infra_cost
-                    cost_pess += B_k * dv + I_k * s_pess
+                    time_pess += s_pess
 
                 # 4. 容量占用索引记录
-                path_key = (tid, p_idx, dv)  # (任务ID, 路径索引, 需求量)
+                path_key = (tid, p_idx, dv)
                 for hub in path.transfer_hubs:
                     self.hub_path_map[hub.node_id].append(path_key)
 
-                # 5. 更新单任务的极值
+                # 5. 更新单任务的极值 (用于归一化)
                 if tid not in self.task_min_metrics:
                     self.task_min_metrics[tid] = {"risk": risk_cvar, "cost": cost_exp}
                     self.task_max_metrics[tid] = {"risk": risk_cvar, "cost": cost_exp}
@@ -340,7 +342,7 @@ class GurobiSolver:
                     {
                         "risk": risk_cvar,
                         "cost": cost_exp,
-                        "pess_cost": cost_pess,
+                        "pess_time": time_pess,
                         "path_obj": path,
                     }
                 )
@@ -352,13 +354,13 @@ class GurobiSolver:
         logging.info(f"Gurobi: Starting Weighted Sum with {num_points} points...")
         solutions = []
 
-        # 预算约束
-        budget = self.evaluator.cost_config.get("fuzzy_cost_budget", 1e9)
+        # 获取任务的运到期限
+        t_max_limit = self.evaluator.cost_config.get("max_delivery_time", 96.0)
 
         # 权重列表 (从纯 Cost 到纯 Risk)
         weights = np.linspace(0, 1, num_points)
 
-        # 1. 计算全局 Ideal 和 Nadir 点 (基于单任务极值之和)
+        # 1. 计算全局 Ideal 和 Nadir 点
         total_min_risk = sum(
             self.task_min_metrics[tid]["risk"] for tid in self.task_ids
         )
@@ -372,12 +374,10 @@ class GurobiSolver:
             self.task_max_metrics[tid]["cost"] for tid in self.task_ids
         )
 
-        # 归一化分母和理想点
         range_risk = max(total_max_risk - total_min_risk, 1e-6)
         range_cost = max(total_max_cost - total_min_cost, 1e-6)
 
         for w in weights:
-            # 建立模型
             model = gp.Model("Hazmat_Routing")
             model.setParam("OutputFlag", 0)
 
@@ -399,27 +399,21 @@ class GurobiSolver:
                     == 1
                 )
 
-            # Const 2: 预算约束
-            total_pess_cost = gp.quicksum(
-                self.path_metrics[tid][p_idx]["pess_cost"] * x[tid, p_idx]
-                for tid in self.task_ids
-                for p_idx in range(len(self.candidate_paths_map[tid]))
-            )
-            model.addConstr(total_pess_cost <= budget, name="Budget")
+            # --- 运到期限约束 ---
+            # 每个任务的悲观耗时必须小于 T_max
+            for tid in self.task_ids:
+                task_pess_time = gp.quicksum(
+                    self.path_metrics[tid][p_idx]["pess_time"] * x[tid, p_idx]
+                    for p_idx in range(len(self.candidate_paths_map[tid]))
+                )
+                model.addConstr(task_pess_time <= t_max_limit, name=f"TimeLimit_{tid}")
 
-            # Const 3.1: Arc Capacity 约束（单任务超限约束）
-            # 单任务超限检查在 Candidate Path Generation 阶段就已经完成
-
-            # Const 3.2: 枢纽容量约束 (累加约束)
+            # Const 3: 枢纽容量约束
             for hub_id, path_keys in self.hub_path_map.items():
                 hub_node = self.network.get_node(hub_id)
-
-                # 流量累加项：sum_{v,p: k in p} (Demand_v * x_{v,p})
                 flow_through_hub = gp.quicksum(
                     path_key[2] * x[path_key[0], path_key[1]] for path_key in path_keys
                 )
-
-                # 容量约束: Total Flow <= Hub Capacity
                 if hub_node:
                     model.addConstr(
                         flow_through_hub <= hub_node.capacity, name=f"Hub_Cap_{hub_id}"
@@ -437,15 +431,10 @@ class GurobiSolver:
                 for p_idx in range(len(self.candidate_paths_map[tid]))
             )
 
-            # 归一化后的目标: (val - Ideal) / Range
             norm_risk = (obj_risk_raw - total_min_risk) / range_risk
             norm_cost = (obj_cost_raw - total_min_cost) / range_cost
 
-            model.setObjective(
-                w * norm_risk + (1 - w) * norm_cost,
-                GRB.MINIMIZE,
-            )
-
+            model.setObjective(w * norm_risk + (1 - w) * norm_cost, GRB.MINIMIZE)
             model.optimize()
 
             if model.Status == GRB.OPTIMAL:
@@ -456,7 +445,6 @@ class GurobiSolver:
                             path = self.path_metrics[tid][p_idx]["path_obj"]
                             sol.path_selections[tid] = path
                             break
-                # 重新评估以填充所有目标值和可行性状态
                 self.evaluator.evaluate(sol)
                 sol.rank = 0
                 solutions.append(sol)

@@ -40,14 +40,14 @@ class LargeScalePathFinder(PathFinder):
         # 环境感知系数
         n_nodes = len(self.network.nodes)
         if n_nodes <= 20:
-            self.dist_relax_factor = 2.5  # 小路网：大幅放宽，允许“绕路”寻找极低风险路径
-            self.adaptive_max_depth = {"road": 12, "railway": 18}
+            self.dist_relax_factor = 2.5  # 小路网：放宽，允许“绕路”寻找极低风险路径
+            self.adaptive_max_depth = {"road": 3, "railway": 2}
         elif n_nodes <= 50:
             self.dist_relax_factor = 1.8  # 中等路网
-            self.adaptive_max_depth = {"road": 8, "railway": 12}
+            self.adaptive_max_depth = {"road": 4, "railway": 3}
         else:
             self.dist_relax_factor = 1.3  # 大规模路网：严格限制，防止搜索爆炸
-            self.adaptive_max_depth = {"road": 5, "railway": 8}
+            self.adaptive_max_depth = {"road": 5, "railway": 4}
 
     def find_all_candidate_paths(self) -> Dict[str, List["Path"]]:
         """
