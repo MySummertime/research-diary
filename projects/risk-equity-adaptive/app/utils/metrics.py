@@ -193,7 +193,11 @@ class MetricCalculator:
         for sol in solutions:
             if sol.is_feasible:
                 # 利用 analyzer 计算单个解的 Gini
-                g = calculate_solution_gini(sol, evaluator)
+                g = (
+                    sol.gini_coefficient
+                    if sol.gini_coefficient != float("inf")
+                    else calculate_solution_gini(sol, evaluator)
+                )
                 ginis.append(g)
 
         return np.mean(ginis) if ginis else 0.0, np.std(ginis) if ginis else 0.0

@@ -55,12 +55,22 @@ def main():
 
     # 非对称参数矩阵配置
     # 格式: (k_val, pop_size, max_gen, ablation_level)
+    # ALGO_CONFIGS = {
+    #     "NSGA-II (Imp)": (20, 50, 50, "full"),  # 完整版（含混合采样）
+    #     "NSGA-II (1)": (3, 50, 50, 1),  # Shortest
+    #     "NSGA-II (2)": (4, 50, 50, 2),  # Shortest + Risk
+    #     "NSGA-II (3)": (7, 50, 50, 3),  # Shortest + Risk + Response
+    #     "SPEA2": (20, 50, 50, "full"),
+    #     "MOEA/D": (20, 50, 50, "full"),
+    # }
+
     ALGO_CONFIGS = {
-        "NSGA-II (Imp)": (20, 300, 400, "full"),  # 完整版（含混合采样）
-        "NSGA-II (1)": (3, 80, 90, 1),  # Shortest
+        "NSGA-II (Imp)": (20, 100, 100, "full"),  # 完整版（含混合采样）
+        "NSGA-II (1)": (3, 100, 100, 1),  # Shortest
         "NSGA-II (2)": (4, 100, 100, 2),  # Shortest + Risk
-        "NSGA-II (3)": (7, 140, 170, 3),  # Shortest + Risk + Response
-        "SPEA2": (20, 300, 400, "full"),
+        "NSGA-II (3)": (7, 100, 100, 3),  # Shortest + Risk + Response
+        "SPEA2": (20, 100, 100, "full"),
+        # "MOEA/D": (20, 100, 100, "full"),
     }
 
     ALGO_LIST = list(ALGO_CONFIGS.keys()) + ["Gurobi"]
@@ -76,8 +86,8 @@ def main():
             "HV": [],
             "IGD": [],
             "SM": [],
-            "MS": [],
-            "PD": [],
+            # "MS": [],
+            # "PD": [],
             "CPU Time": [],
             "_raw_data": [],
         }
@@ -165,7 +175,7 @@ def main():
             exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
         )
         start_g = time.process_time()
-        g_sols = g_solver.solve_weighted_sum(num_points=1500)
+        g_sols = g_solver.solve_weighted_sum(num_points=1000)
         duration_g = time.process_time() - start_g
         _record_run_data(
             run_idx,
@@ -232,8 +242,8 @@ def _perform_global_analysis(stats_data, all_F_list, last_finals, save_dir):
                 "HV": calc.calculate_hv(finals),
                 "IGD": calc.calculate_igd(finals, ref_front),
                 "SM": calc.calculate_sm(finals),
-                "PD": calc.calculate_pd(finals),
-                "MS": calc.calculate_ms(finals, ref_front),
+                # "PD": calc.calculate_pd(finals),
+                # "MS": calc.calculate_ms(finals, ref_front),
                 "CPU Time": rec["time"],
             }
             detailed_rows.append(row)
@@ -248,7 +258,7 @@ def _perform_global_analysis(stats_data, all_F_list, last_finals, save_dir):
         algo_df = detailed_df[detailed_df["Algorithm"] == algo]
         res = {"Algorithm": algo}
 
-        for m in ["HV", "IGD", "SM", "PD", "MS", "CPU Time"]:
+        for m in ["HV", "IGD", "SM", "CPU Time"]:
             # 显式检查样本量
             mean_val = algo_df[m].mean()
             std_val = algo_df[m].std()

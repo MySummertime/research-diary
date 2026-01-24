@@ -6,11 +6,12 @@
 并汇总计算解的适应度 (Fitness) 和约束违反度 (CV)。
 """
 
-from typing import Dict, Any, Tuple, List
-from app.core.network import TransportNetwork
-from app.core.solution import Solution
-from app.core.risk_model import DynamicRiskModel
+from typing import Any, Dict, List, Tuple
+
 from app.core.fuzzy import FuzzyMath
+from app.core.network import TransportNetwork
+from app.core.risk_model import DynamicRiskModel
+from app.core.solution import Solution
 
 
 class Evaluator:
@@ -34,27 +35,29 @@ class Evaluator:
         # 初始化物理风险模型
         self.risk_model = DynamicRiskModel(network, self.risk_config)
 
-        self.delta = self.cost_config.get("cost_uncertainty_multiplier", 1.0)
-
         # --- 获取确定性成本参数 ---
 
-        # 1. 单位运输成本 C (yuan/t*km)
+        # 1. 单位运输成本 C_m (元/t·km)
         self.unit_transport_cost = self.cost_config.get(
-            "unit_transport_cost", {"road": 0.55, "railway": 0.12}
+            "unit_transport_cost", {"road": 0.23, "railway": 0.05}
         )
-        # 2. 单位碳排放成本 E (yuan/t*km)
-        self.unit_carbon_cost = self.cost_config.get(
-            "unit_carbon_cost", {"road": 0.05, "railway": 0.01}
+
+        # 2. 单位碳排放因子 omega_m (kg/t·km)
+        self.transport_emission_factor = self.cost_config.get(
+            "transport_emission_factor", {"road": 0.05771, "railway": 0.00820}
         )
-        # 3. 单位运营成本 P (yuan/h)
-        self.unit_operation_cost = self.cost_config.get("unit_operation_cost", 150)
-        # 4. 枢纽单位转运成本 B_k (yuan/t)
+
+        # 3. 碳税率 C_tax (元/kg)
+        self.carbon_tax_rate = self.cost_config.get("carbon_tax_rate", 0.015)
+
+        # 4. 单位转运成本 C_k^b (元/t)
         self.unit_transshipment_cost = self.cost_config.get(
-            "unit_transshipment_cost", 8
+            "unit_transshipment_cost", 3.090
         )
-        # 5. 枢纽单位运营成本 I_k (yuan/h)
-        self.unit_transshipment_infra_cost = self.cost_config.get(
-            "unit_transshipment_infra_cost", 100
+
+        # 5. 单位转运碳排放量 omega_k (kg/t)
+        self.transshipment_emission_factor = self.cost_config.get(
+            "transshipment_emission_factor", 0.128
         )
 
     # =========================================================================
@@ -66,32 +69,23 @@ class Evaluator:
         [主方法] 评估一个解 (Solution) 的所有属性。
         """
 
-        # 1. 计算真实期望成本
-        solution.f2_cost = self._calculate_f2_expected_cost(solution, False)
+        # 1. 计算成本
+        solution.f2_cost = self._calculate_f2_cost(solution)
 
-        # 2. 计算缩放后的期望成本 (用于算法搜索引导和 budget 灵敏度分析)
-        # 如果 delta == 1.0，则 f2_cost_scaled 等于 f2_cost
-        if self.delta != 1.0:
-            solution.f2_cost_scaled = self._calculate_f2_expected_cost(solution, True)
-        else:
-            solution.f2_cost_scaled = solution.f2_cost
-
-        # 3. 计算目标函数 f1 (CVaR 风险)
+        # 2. 计算目标函数 f1 (CVaR 风险)
         # 这个函数会计算并填充 solution.eta_values
         real_risk = self._calculate_f1_cvar_risk(solution)
         solution.f1_risk = real_risk
 
-        scale = self.risk_config.get("risk_objective_scale", 1.0)
-        solution.f1_risk_scaled = real_risk * scale
+        risk_scale = self.risk_config.get("risk_objective_scale", 1.0)
+        solution.f1_risk_scaled = real_risk * risk_scale
 
-        # 4. 检查所有约束 (容量 + 模糊成本预算)
+        # 3. 检查所有约束 (容量 + 模糊成本预算)
         is_feasible, violation = self._check_constraints(solution)
         solution.is_feasible = is_feasible
         solution.constraint_violation = violation
 
-    def calculate_cost_breakdown(
-        self, solution: Solution, use_scaling: bool = False
-    ) -> Dict[str, float]:
+    def calculate_cost_breakdown(self, solution: Solution) -> Dict[str, float]:
         """
         [Helper] 计算成本构成的详细拆解 (用于绘图)
         返回: {'transport': val, 'transshipment': val, 'carbon': val}
@@ -103,45 +97,28 @@ class Evaluator:
                 continue
             dv = path.task.demand
 
-            # 1. 弧段成本
+            # 1. 弧段相关成本 (运输成本 + 运输碳排放)
             for arc in path.arcs:
                 mode = arc.mode
                 d_ij = arc.length
-                C_m = self.unit_transport_cost.get(mode, 0.0)
-                E_m = self.unit_carbon_cost.get(mode, 0.0)
-                P = self.unit_operation_cost
-                expected_time = FuzzyMath.triangular_expected_value(
-                    *arc.fuzzy_transport_time
-                )
 
-                # 使用动态缩放后的模糊时间
-                scaled_time = self._get_scaled_fuzzy(
-                    arc.fuzzy_transport_time, "triangular", use_scaling
-                )
-                expected_time = FuzzyMath.triangular_expected_value(*scaled_time)
+                # 运输成本: C_ij^m * d^v * d_ij
+                c_m = self.unit_transport_cost.get(mode, 0.0)
+                breakdown["transport"] += c_m * dv * d_ij
 
-                # 拆分
-                breakdown["transport"] += C_m * dv * d_ij + P * expected_time
-                breakdown["carbon"] += E_m * dv * d_ij
+                # 运输碳排放成本: C_tax * omega_m * d^v * d_ij
+                omega_m = self.transport_emission_factor.get(mode, 0.0)
+                breakdown["carbon"] += self.carbon_tax_rate * omega_m * dv * d_ij
 
-            # 2. 枢纽成本
+            # 2. 枢纽相关成本 (转运成本 + 转运碳排放)
             for hub in path.transfer_hubs:
-                B_k = self.unit_transshipment_cost
-                I_k = self.unit_transshipment_infra_cost
-                expected_trans_time = FuzzyMath.trapezoidal_expected_value(
-                    *hub.fuzzy_transshipment_time
-                )
+                # 转运成本: C_k^b * d^v
+                c_kb = self.unit_transshipment_cost
+                breakdown["transshipment"] += c_kb * dv
 
-                # 使用动态缩放后的模糊时间
-                scaled_trans_time = self._get_scaled_fuzzy(
-                    hub.fuzzy_transshipment_time, "trapezoidal", use_scaling
-                )
-                expected_trans_time = FuzzyMath.trapezoidal_expected_value(
-                    *scaled_trans_time
-                )
-
-                # 全部算作转运成本
-                breakdown["transshipment"] += B_k * dv + I_k * expected_trans_time
+                # 转运碳排放成本: C_tax * omega_k * d^v
+                omega_k = self.transshipment_emission_factor
+                breakdown["carbon"] += self.carbon_tax_rate * omega_k * dv
 
         return breakdown
 
@@ -166,31 +143,6 @@ class Evaluator:
 
         return exp_risk
 
-    # --- 核心辅助函数: 不确定性动态缩放 ---
-    def _get_scaled_fuzzy(
-        self, fuzzy_val: Tuple, shape: str, use_scaling: bool = False
-    ) -> Tuple:
-        """
-        根据全局配置中的 'uncertainty_multiplier' (delta) 缩放模糊数区间。
-        delta = 1.0 (Default): 确定性值
-        delta > 1.0: 区间变宽 (环境恶化)
-        """
-        delta = self.delta
-        if not use_scaling or delta == 1.0:
-            return fuzzy_val
-
-        # 采用比例缩放：研究 '不确定性环境整体恶化' 的标准做法
-        if shape == "triangular":
-            a, b, c = fuzzy_val
-            # 整体按比例向右推移并扩张
-            return (a * delta, b * delta, c * delta)
-
-        elif shape == "trapezoidal":
-            a, b, c, d = fuzzy_val
-            return (a * delta, b * delta, c * delta, d * delta)
-
-        return fuzzy_val
-
     # =========================================================================
     # Objective Function 1: Risk (CVaR)
     # =========================================================================
@@ -209,7 +161,7 @@ class Evaluator:
 
         # 重新从 self.config 中读取，防止 self.risk_config 引用失效
         current_risk_config = self.config.get("risk_model_f1", {})
-        alpha = current_risk_config.get("cvar_alpha", 0.95)
+        alpha = current_risk_config.get("cvar_alpha", 0.9996)
 
         # 允许 alpha = 0.0 (此时 CVaR = Expected Value)
         # 只拦截 alpha >= 1.0 (除以零) 和 alpha < 0.0 (无意义)
@@ -314,13 +266,11 @@ class Evaluator:
         return opt_eta, opt_eta + loss_sum / one_minus_alpha
 
     # =========================================================================
-    # Objective Function 2: Cost (Expected Value)
+    # Objective Function 2: Cost
     # =========================================================================z
 
-    def _calculate_f2_expected_cost(
-        self, solution: Solution, use_scaling: bool = False
-    ) -> float:
-        bd = self.calculate_cost_breakdown(solution, use_scaling)
+    def _calculate_f2_cost(self, solution: Solution) -> float:
+        bd = self.calculate_cost_breakdown(solution)
         return bd["transport"] + bd["transshipment"] + bd["carbon"]
 
     # =========================================================================
@@ -329,7 +279,7 @@ class Evaluator:
 
     def _check_constraints(self, solution: Solution) -> Tuple[bool, float]:
         """
-        检查 1) 容量约束 和 2) 模糊成本约束。
+        检查 1) 容量约束 和 2) 运到期限约束。
         从 self.cost_config 读取参数。
         返回: (is_feasible, constraint_violation)
 
@@ -362,42 +312,31 @@ class Evaluator:
             if node and flow > node.capacity:
                 total_violation += (flow - node.capacity) / node.capacity
 
-        # 3. Fuzzy Cost
-        pessimistic_cost_scaled = 0.0
-        alpha_c = self.cost_config.get("fuzzy_cost_alpha_c", 0.99960)
-        bgt = self.cost_config.get("fuzzy_cost_budget", 1e15)
+        # 3. Fuzzy Time
+        # Σ t_inf(alpha_t) + Σ s_inf(alpha_t) <= T_max
+        alpha_t = self.cost_config.get("time_confidence_level", 0.9)
+        t_max_limit = self.cost_config.get("max_delivery_time", 96.0)
 
         for task_id, path in solution.path_selections.items():
-            dv = path.task.demand
+            path_pessimistic_time = 0.0
+
+            # 3a. 运输时间的悲观值累加
             for arc in path.arcs:
-                mode = arc.mode
-                d_ij = arc.length
-                C_m = self.unit_transport_cost.get(mode, 0.0)
-                E_m = self.unit_carbon_cost.get(mode, 0.0)
-                P = self.unit_operation_cost
+                t_pess = FuzzyMath.triangular_pessimistic_value(
+                    *arc.fuzzy_transport_time, alpha_t
+                )
+                path_pessimistic_time += t_pess
 
-                scaled_time = self._get_scaled_fuzzy(
-                    arc.fuzzy_transport_time, "triangular", True
-                )
-                pess_time = FuzzyMath.triangular_pessimistic_value(
-                    *scaled_time, alpha_c
-                )
-                pessimistic_cost_scaled += (C_m + E_m) * dv * d_ij + P * pess_time
+            # 3b. 转运时间的悲观值累加
             for hub in path.transfer_hubs:
-                B_k = self.unit_transshipment_cost
-                I_k = self.unit_transshipment_infra_cost
-
-                scaled_trans_time = self._get_scaled_fuzzy(
-                    hub.fuzzy_transshipment_time, "trapezoidal", True
+                s_pess = FuzzyMath.trapezoidal_pessimistic_value(
+                    *hub.fuzzy_transshipment_time, alpha_t
                 )
-                pess_trans_time = FuzzyMath.trapezoidal_pessimistic_value(
-                    *scaled_trans_time, alpha_c
-                )
-                pessimistic_cost_scaled += B_k * dv + I_k * pess_trans_time
+                path_pessimistic_time += s_pess
 
-        solution.pessimistic_cost = pessimistic_cost_scaled
-
-        if pessimistic_cost_scaled > bgt:
-            total_violation += (pessimistic_cost_scaled - bgt) / bgt
+            # 检查时效违反
+            if path_pessimistic_time > t_max_limit:
+                time_violation = (path_pessimistic_time - t_max_limit) / t_max_limit
+                total_violation += time_violation
 
         return total_violation == 0.0, total_violation

@@ -2,7 +2,7 @@
 # --- value_analysis.py ---
 """
 [Experiment: Value of Response-Dependent Risk Model]
-对应论文 Section 5.4: 对比动态风险模型与静态风险模型的决策差异。
+对比动态风险模型与静态风险模型的决策差异。
 逻辑：
 1. 运行 Proposed Model (动态模型): 考虑应急响应时间对事故后果的扩散影响。
 2. 运行 Static Model (静态模型): 后果仅取决于 GIS 缓冲区人口统计，不随响应时间变化。
