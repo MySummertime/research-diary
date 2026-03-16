@@ -40,9 +40,9 @@ def main():
     # 分别调用三大核心图表
     plotter.plot_metrics_comparison(stats_data)  # 小提琴图
     plotter.plot_normalized_metrics_bar(
-        stats_data, "normalized_bar_comparison.svg"
+        stats_data, "normalized_bar_comparison"
     )  # 柱状图
-    plotter.plot_metric_radar(stats_data, "algorithm_radar_comparison.svg")  # 雷达图
+    plotter.plot_metric_radar(stats_data, "algorithm_radar_comparison")  # 雷达图
 
     print(f"✨ 绘图完成！图片已保存至: {save_plots_dir}")
 

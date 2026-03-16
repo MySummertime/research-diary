@@ -24,6 +24,12 @@ class NetworkVisualizer:
     """
 
     def __init__(self, network: TransportNetwork):
+        # ==================== 全局设置 Times New Roman 为默认字体 ====================
+        plt.rcParams["font.family"] = "Times New Roman"  # 主要设置：所有文字
+        plt.rcParams["font.sans-serif"] = ["Times New Roman"]  # 防止 fallback
+        plt.rcParams["font.serif"] = ["Times New Roman"]  # 明确指定 serif 族
+        plt.rcParams["axes.unicode_minus"] = False  # 防止负号显示为方块
+
         self.network = network
         self.raw_pos = self._extract_raw_positions()
 
@@ -38,18 +44,18 @@ class NetworkVisualizer:
                 "hub": {
                     "color": get_color_by_key(self.network_colors, "HUB"),
                     "shape": "^",
-                    "size": 500,
+                    "size": 1200,
                     "alpha": 1.0,
                 },
                 "non-hub": {
                     "color": get_color_by_key(self.network_colors, "NON_HUB"),
                     "shape": "o",
-                    "size": 250,
+                    "size": 1000,
                     "alpha": 1.0,
                 },
                 "emergency_overlay": {
                     "edgecolor": get_color_by_key(self.network_colors, "EMERGENCY"),
-                    "linewidth": 2.5,
+                    "linewidth": 4.0,
                     "linestyle": "--",
                     "facecolor": "none",
                 },
@@ -58,19 +64,19 @@ class NetworkVisualizer:
                 # Road 实线, Railway 点划线
                 "road": {
                     "color": get_color_by_key(self.network_colors, "ROAD"),
-                    "width": 2.0,
+                    "width": 3.0,
                     "style": "-",
                     "alpha": 0.7,
                 },
                 "railway": {
                     "color": get_color_by_key(self.network_colors, "RAILWAY"),
-                    "width": 2.5,
-                    "style": "-.",
-                    "alpha": 0.8,
+                    "width": 4.0,
+                    "style": "--",
+                    "alpha": 0.85,
                 },
             },
             "font": {
-                "size": 9,
+                "size": 20,
                 "color": get_color_by_key(self.default_colors, "BLACK"),
                 "weight": "bold",
             },
@@ -79,7 +85,7 @@ class NetworkVisualizer:
     def visualize_topology(
         self,
         save_dir: str,
-        filename: str = "network_topology.svg",
+        filename: str = "network_topology",
         add_basemap: bool = True,
     ):
         """
@@ -138,7 +144,7 @@ class NetworkVisualizer:
 
             # 生成安全文件名：替换空格为空下划线，避免文件系统问题
             safe_label = label.replace(" ", "_").replace("/", "_")
-            filename = f"{prefix}_{safe_label}.svg"
+            filename = f"{prefix}_{safe_label}"
 
             # 调用已有方法绘制单张路线图
             self._draw_routes(
@@ -160,51 +166,61 @@ class NetworkVisualizer:
         filename: str,
     ):
         """
-        [Routes] 绘制特定解的路线图 (带箭头、曲线、线型区分)。
+        [核心绘制函数] 绘制特定解 (Solution) 的路线图
+        特点：
+        - 使用无向图视图去重双向边（避免 road/rail 重叠）
+        - 动态曲率避让 + 模式区分（road 实线在上，railway 虚线在下）
+        - 任务线按 task_id 着色 + 图例
+        - 节点中心显示 ID，名称在下方带框标签
+        - 支持地理投影底图（黑白风格）
+
+        Args:
+            solution: 当前 Opinion 的完整解对象
+            task_colors: 任务颜色循环列表（从 visual_style.py 传入）
+            save_dir: 保存目录
+            filename: 文件名（不含后缀）
+
+        Returns:
+            None（直接保存图像文件）
         """
+        # ── Step 1: 判断是否需要地理投影 + 获取绘图坐标 ──
         use_projection = HAS_CTX and self._is_geo_coords()
         plot_pos = self._get_plot_positions(use_projection)
 
-        # 底图用无向图淡化显示
-        G_bg = self.network.graph.to_undirected()
-        # 前景用有向图绘制特定路线
+        # ── Step 2: 准备图对象 ──
+        # 背景层：无向图（淡化显示所有节点和边，作为空间参考）
+        G_bg = self.network.graph.to_undirected(as_view=True)
+
+        # 前景层：有向图（用于绘制带箭头的任务路径）
         G_raw = self.network.graph
 
+        # 创建画布
         fig, ax = plt.subplots(figsize=self.styles["figure_size"])
 
-        # 1. 绘制淡化的背景节点，作为空间参考
+        # ── Step 3: 绘制淡化背景节点（作为空间参考，不抢任务线风头） ──
         nx.draw_networkx_nodes(
             G_bg,
             plot_pos,
             ax=ax,
-            node_size=100,
+            node_size=300,
             node_color=get_color_by_key(self.default_colors, "GRAY"),
-            alpha=0.1,
+            alpha=0.1,  # 极淡，几乎看不见但保留位置感
         )
 
-        # --- 构建 task_id（固定颜色的映射字典）---
-
-        # 收集当前解中出现的所有 task_id
+        # ── Step 4: 构建 task_id → color 的映射（确保相同 task_id 颜色全局一致） ──
         appeared_task_ids = set()
         for path in solution.path_selections.values():
             if path.task and path.task.task_id is not None:
                 appeared_task_ids.add(path.task.task_id)
 
-        # 排序 task_id，确保全局一致（相同ID永远同位置）
-        sorted_task_ids = sorted(appeared_task_ids)
+        sorted_task_ids = sorted(appeared_task_ids)  # 按 ID 排序，保持稳定性
 
-        # 使用传入的 task_colors循环分配
-        # 这样 Task 1（最小ID）永远是 task_colors[0]，Task 2 是 [1]，以此类推
         task_id_to_color = {}
         for idx, tid in enumerate(sorted_task_ids):
-            color = task_colors[idx % len(task_colors)]  # 安全循环
+            color = task_colors[idx % len(task_colors)]  # 循环使用颜色列表
             task_id_to_color[tid] = color
 
-        # 2. 绘制前景 Task 路线 (核心逻辑)
-        legend_handles = []
-        drawn_tasks = set()
-
-        # 收集所有需要绘制的任务边
+        # ── Step 5: 收集所有任务边（用于曲率计算和绘制） ──
         all_task_edges = []
         for path in solution.path_selections.values():
             if not path.task:
@@ -214,12 +230,17 @@ class NetworkVisualizer:
                     (arc.start.node_id, arc.end.node_id, path.task.task_id, arc.mode)
                 )
 
-        # 计算动态曲率样式
+        # ── Step 6: 计算动态曲率样式（传入边列表 + 模式列表） ──
+        edgelist_for_style = [(u, v) for u, v, _, _ in all_task_edges]
+        modes_for_style = [m for _, _, _, m in all_task_edges]
         edge_styles = self._calculate_edge_styles(
-            [(u, v) for u, v, _, _ in all_task_edges]
+            edgelist_for_style, modes=modes_for_style
         )
 
-        # 逐条绘制
+        # ── Step 7: 绘制任务路线（核心绘制部分） ──
+        legend_handles = []
+        drawn_tasks = set()
+
         for i, (u, v, task_id, mode) in enumerate(all_task_edges):
             color = task_id_to_color.get(task_id, task_colors[0])
             linestyle = (
@@ -228,39 +249,40 @@ class NetworkVisualizer:
                 else self.styles["edge"]["railway"]["style"]
             )
 
+            # 绘制单条任务边（使用有向图，保留箭头）
             nx.draw_networkx_edges(
                 G_raw,
                 plot_pos,
                 ax=ax,
-                edgelist=[(u, v)],
+                edgelist=[(u, v)],  # 只画当前这条有向边
                 edge_color=color,
-                width=2.5,
+                width=3.5,
                 alpha=0.9,
                 arrows=True,
                 arrowstyle="-|>",
-                arrowsize=18,  # 箭头
-                style=linestyle,  # 线型
-                connectionstyle=edge_styles[i],  # 曲率
+                arrowsize=18,
+                style=linestyle,
+                connectionstyle=edge_styles[i],
             )
 
+            # 添加图例（每个 task 只加一次）
             if task_id not in drawn_tasks:
                 legend_handles.append(
                     Line2D([0], [0], color=color, lw=2.5, label=f"Task {task_id}")
                 )
                 drawn_tasks.add(task_id)
 
-        # 3. 重新绘制关键节点（前景）
+        # ── Step 8: 重新绘制关键节点（前景层，确保节点在最上层） ──
         self._draw_nodes(G_bg, plot_pos, ax, alpha=0.9, scale=0.8)
 
-        # 绘制节点标签
+        # ── Step 9: 绘制节点标签（名称 + ID） ──
         self._draw_labels(G_bg, plot_pos, ax)
 
-        # 添加底图
+        # ── Step 10: 添加底图（如果启用） ──
         if use_projection:
             self._add_basemap(ax)
-            pass
 
-        # 添加图例 (路线图专有)
+        # ── Step 11: 添加图例（任务线 + road/railway 图例） ──
         legend_handles.append(
             Line2D(
                 [0],
@@ -288,71 +310,78 @@ class NetworkVisualizer:
             fancybox=True,
             shadow=True,
             title="Legend",
+            fontsize=12,
+            title_fontsize=14,
         )
+
+        # ── Step 12: 保存图像 ──
         self._save_plot(save_dir, filename)
 
     # --- 核心逻辑：动态曲率计算器 ---
 
-    def _calculate_edge_styles(self, edgelist: List[Tuple[str, str]]) -> List[str]:
+    def _calculate_edge_styles(
+        self, edgelist: List[Tuple[str, str]], modes: List[str] = None
+    ) -> List[str]:
         """
-        [核心算法] 计算每条边的 connectionstyle，确保它们弯曲且不重叠。
+        [核心算法] 计算每条边的 connectionstyle，确保不同模式/方向不重叠。
         """
         styles = []
-        pair_tracker = {}  # 记录 (u, v) 无序对出现的次数
+        # 🌟 有向边 key + 模式组合，避免 (A,B,road) 和 (B,A,rail) 重合
+        edge_tracker = {}  # key: (u,v,mode) → 有向 + 模式唯一标识
 
-        for u, v in edgelist:
-            pair_key = tuple(sorted((u, v)))
-            count = pair_tracker.get(pair_key, 0)
+        for i, (u, v) in enumerate(edgelist):
+            current_mode = modes[i] if (modes and i < len(modes)) else "road"
+            # 🌟 有向边 + 模式作为唯一 key
+            edge_key = (u, v, current_mode)
+            count = edge_tracker.get(edge_key, 0)
 
-            # 基础半径 0.1，每多一对边增加 0.1
-            base_rad = 0.1 + (count // 2) * 0.1
-            # 交替正负
+            mode_offset = 0.12 if current_mode == "road" else 0.28  # rail 偏移更大
+            base_rad = mode_offset + (count // 2) * 0.15  # 每多一对边增 0.15
             rad = base_rad if count % 2 == 0 else -base_rad
 
             styles.append(f"arc3,rad={rad}")
-            pair_tracker[pair_key] = count + 1
+            edge_tracker[edge_key] = count + 1
 
         return styles
 
     # --- 绘图辅助逻辑 ---
-
     def _draw_topology_edges_no_overlap(self, G, pos, ax):
-        road_edges = [
-            (u, v) for u, v, d in G.edges(data=True) if d.get("mode") == "road"
-        ]
+        """绘制拓扑边：每对节点只画一条线（去重双向边）"""
+
+        # 🌟 转为无向图视图，只保留一条边
+        G_undirected = G.to_undirected(as_view=True)
+
+        # 获取去重后的边列表
+        edges_with_data = list(G_undirected.edges(data=True))
+        edgelist = [(u, v) for u, v, d in edges_with_data]
+
+        # 获取对应模式（因为是无向图，取任意一条的 mode 即可）
+        modes = [d.get("mode", "road") for u, v, d in edges_with_data]
+
+        # 计算曲率样式（传入去重后的 edgelist）
+        all_styles = self._calculate_edge_styles(edgelist, modes=modes)
+
+        # 分开绘制 railway 和 road（先铁路后公路）
         rail_edges = [
-            (u, v) for u, v, d in G.edges(data=True) if d.get("mode") == "railway"
+            (u, v) for i, (u, v) in enumerate(edgelist) if modes[i] == "railway"
+        ]
+        road_edges = [(u, v) for i, (u, v) in enumerate(edgelist) if modes[i] == "road"]
+
+        rail_styles = [
+            all_styles[i] for i, (u, v) in enumerate(edgelist) if modes[i] == "railway"
+        ]
+        road_styles = [
+            all_styles[i] for i, (u, v) in enumerate(edgelist) if modes[i] == "road"
         ]
 
-        all_edges_ordered = road_edges + rail_edges
-        all_styles = self._calculate_edge_styles(all_edges_ordered)
-
-        road_styles = all_styles[: len(road_edges)]
-        rail_styles = all_styles[len(road_edges) :]
-
-        style_road = self.styles["edge"]["road"]
-        for i, edge in enumerate(road_edges):
-            nx.draw_networkx_edges(
-                G,
-                pos,
-                ax=ax,
-                edgelist=[edge],
-                edge_color=style_road["color"],
-                width=style_road["width"],
-                style=style_road["style"],
-                alpha=style_road["alpha"],
-                arrows=True,
-                arrowstyle="-",
-                connectionstyle=road_styles[i],
-            )
-
+        # 先画铁路（底层）
         style_rail = self.styles["edge"]["railway"]
-        for i, edge in enumerate(rail_edges):
+        for i, (u, v) in enumerate(rail_edges):
             nx.draw_networkx_edges(
-                G,
+                G_undirected,  # 使用无向图
                 pos,
                 ax=ax,
-                edgelist=[edge],
+                edgelist=[(u, v)],
                 edge_color=style_rail["color"],
                 width=style_rail["width"],
                 style=style_rail["style"],
@@ -360,6 +389,23 @@ class NetworkVisualizer:
                 arrows=True,
                 arrowstyle="-",
                 connectionstyle=rail_styles[i],
+            )
+
+        # 再画公路（上层）
+        style_road = self.styles["edge"]["road"]
+        for i, (u, v) in enumerate(road_edges):
+            nx.draw_networkx_edges(
+                G_undirected,
+                pos,
+                ax=ax,
+                edgelist=[(u, v)],
+                edge_color=style_road["color"],
+                width=style_road["width"],
+                style=style_road["style"],
+                alpha=style_road["alpha"],
+                arrows=True,
+                arrowstyle="-",
+                connectionstyle=road_styles[i],
             )
 
     def _draw_nodes(self, G, pos, ax, alpha=1.0, scale=1.0):
@@ -407,7 +453,7 @@ class NetworkVisualizer:
                 edgecolors=style_ov["edgecolor"],
                 linewidths=style_ov["linewidth"],
                 node_shape=style_hub["shape"],
-                node_size=style_hub["size"] * scale * 1.4,
+                node_size=style_hub["size"] * scale * 1.5,
             )
             nodes_h.set_linestyle(style_ov["linestyle"])
 
@@ -426,22 +472,81 @@ class NetworkVisualizer:
             nodes_n.set_linestyle(style_ov["linestyle"])
 
     def _draw_labels(self, G, pos, ax):
-        offset = 2000 if any(abs(y) > 1000 for x, y in pos.values()) else 0.0002
-        label_pos = {k: (v[0], v[1] - offset) for k, v in pos.items()}
+        """
+        在节点符号外绘制带文本框的节点名称（name），同时在节点中心保留 ID 编号。
+        偏移量动态计算，确保标签不与节点形状重叠。
+        """
+        # ── 1. 计算合理的垂直向下偏移（根据图的 y 范围动态调整）
+        y_coords = [y for x, y in pos.values()]
+        if not y_coords:
+            offset_val = 0.05
+        else:
+            y_range = max(y_coords) - min(y_coords)
+            offset_val = y_range * 0.04 if y_range > 0 else 0.05  # 8% 的 y 范围偏移
+            offset_val = max(offset_val, 0.04)  # 最小偏移 0.04
+
+        # 标签位置：节点坐标向下偏移
+        label_pos = {n: (pos[n][0], pos[n][1] - offset_val) for n in G.nodes()}
+
+        # ── 2. 获取显示的标签（优先用 english name，没有就用 node_id）
+        labels = {n: G.nodes[n].get("name_en", n) for n in G.nodes()}
+
+        # ── 3. 文本框样式（学术风格：白色半透 + 细边框）
+        bbox_style = dict(
+            boxstyle="round,pad=0.5",
+            fc="white",
+            ec="lightgray",
+            lw=0.1,
+            alpha=0.1,
+            mutation_scale=20,
+        )
+
+        # ── 4. 绘制节点名称标签（带背景框，下方）
         nx.draw_networkx_labels(
             G,
             label_pos,
+            labels=labels,
+            ax=ax,
+            font_size=self.styles["font"]["size"] - 1,
+            font_color=self.styles["font"]["color"],
+            font_weight="normal",
+            bbox=bbox_style,
+            verticalalignment="top",  # 文本框顶部对齐偏移点，向下生长
+            horizontalalignment="center",  # 水平居中
+        )
+
+        # ── 5. 在节点中心绘制 ID 编号（不带框、加粗）
+        id_labels = {n: n for n in G.nodes()}  # 用 node_id 作为中心编号
+        nx.draw_networkx_labels(
+            G,
+            pos,
+            labels=id_labels,
             ax=ax,
             font_size=self.styles["font"]["size"],
-            font_color=self.styles["font"]["color"],
-            font_weight=self.styles["font"]["weight"],
+            font_color="black",
+            font_weight="bold",
         )
+
+        # ── 6. 动态调整坐标轴范围，防止标签超出画面
+        # 提取所有标签位置的 Y 坐标
+        label_y_coords = [p[1] for p in label_pos.values()]
+        if label_y_coords:
+            current_ymin, current_ymax = ax.get_ylim()
+            # 计算标签到达的最小值
+            min_label_y = min(label_y_coords)
+
+            # 如果标签的最低点超出了当前 Y 轴最小值，则向下扩展
+            # 额外多减去一个 offset_val 的 50% 作为边距缓冲
+            if min_label_y < current_ymin:
+                ax.set_ylim(min_label_y - offset_val * 0.5, current_ymax)
 
     def _add_basemap(self, ax):
         if HAS_CTX:
             try:
                 # 浅灰白背景，不容易产生颜色混淆
-                ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron)
+                ctx.add_basemap(
+                    ax, source=ctx.providers.CartoDB.PositronNoLabels, alpha=0.9
+                )
             except Exception:
                 pass
 
@@ -454,7 +559,7 @@ class NetworkVisualizer:
                 color=get_color_by_key(self.default_colors, "WHITE"),
                 label="Hub",
                 markerfacecolor=self.styles["node"]["hub"]["color"],
-                markersize=12,
+                markersize=14,
             ),
             Line2D(
                 [0],
@@ -463,7 +568,7 @@ class NetworkVisualizer:
                 color=get_color_by_key(self.default_colors, "WHITE"),
                 label="Non-Hub",
                 markerfacecolor=self.styles["node"]["non-hub"]["color"],
-                markersize=10,
+                markersize=14,
             ),
             Line2D(
                 [0],
@@ -474,14 +579,14 @@ class NetworkVisualizer:
                 markerfacecolor="none",
                 markeredgecolor=self.styles["node"]["emergency_overlay"]["edgecolor"],
                 markeredgewidth=2,
-                markersize=14,
-                linestyle="--",
+                markersize=16,
+                linestyle=":",
             ),
             Line2D(
                 [0],
                 [0],
                 color=self.styles["edge"]["road"]["color"],
-                lw=2,
+                lw=2.0,
                 linestyle=self.styles["edge"]["road"]["style"],
                 label="Road",
             ),
@@ -489,7 +594,7 @@ class NetworkVisualizer:
                 [0],
                 [0],
                 color=self.styles["edge"]["railway"]["color"],
-                lw=2,
+                lw=3.0,
                 linestyle=self.styles["edge"]["railway"]["style"],
                 label="Railway",
             ),
@@ -505,7 +610,26 @@ class NetworkVisualizer:
     def _save_plot(self, save_dir, filename):
         plt.axis("off")
         plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, filename), format="svg", bbox_inches="tight")
+        # plt.savefig(os.path.join(save_dir, filename), format="svg", bbox_inches="tight")
+        # 保存为 TIFF（最推荐）
+        plt.savefig(
+            os.path.join(save_dir, f"{filename}.tif"),
+            format="tif",
+            dpi=300,  # 混合图用 600，纯线图可以冲 1000–1200
+            bbox_inches="tight",  # 自动裁剪白边，超级重要
+            pad_inches=0.1,  # 给边缘留 0.1 英寸的白边
+            # transparent=True,  # 可选：如果需要去背景
+        )
+
+        # 备选 PNG（文件更小，透明背景可选）
+        plt.savefig(
+            os.path.join(save_dir, f"{filename}.png"),
+            format="png",
+            dpi=300,
+            bbox_inches="tight",
+            pad_inches=0.1,  # 给边缘留 0.1 英寸的白边
+            # transparent=True,  # 可选：如果需要去背景
+        )
         plt.close()
 
     def _extract_raw_positions(self):

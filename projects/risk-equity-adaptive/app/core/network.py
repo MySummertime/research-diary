@@ -20,7 +20,8 @@ class Node:
     """
 
     node_id: str
-    name: str = ""
+    name_cn: str = ""
+    name_en: str = ""
     node_type: str = "non-hub"  # hub, non-hub
 
     # 几何属性
@@ -43,8 +44,8 @@ class Node:
     )
 
     def __post_init__(self):
-        if not self.name:
-            self.name = self.node_id
+        if not self.name_cn:
+            self.name_cn = self.node_id
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -230,6 +231,8 @@ class TransportNetwork:
         for node in self.nodes:
             G.add_node(
                 node.node_id,
+                name_cn=node.name_cn,
+                name_en=node.name_en,
                 type=node.node_type,
                 is_emergency=node.is_emergency_center,
                 x=node.x,

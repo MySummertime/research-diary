@@ -79,6 +79,17 @@ class BasePlotter:
         ax.yaxis.set_major_formatter(FMT)
         ax.grid(True, linestyle="--", alpha=0.5)
 
+        # L 形边框：保留 bottom + left，去掉 top + right
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        # 可选
+        ax.spines["bottom"].set_linewidth(0.8)
+        ax.spines["left"].set_linewidth(0.8)
+
+        # 可选：tick 朝内 + 长度适中
+        ax.tick_params(direction="in", length=4, width=0.8)
+
     def _set_dynamic_xlim(self, ax, data, margin=0.05):
         """辅助：设置动态 X 轴范围 (基于边距)"""
         if not data:
@@ -171,7 +182,7 @@ class ParetoPlotter(BasePlotter):
     def plot(
         self,
         solutions: List[Solution],
-        file_name: str = "pareto_frontier.svg",
+        file_name: str = "pareto_frontier",
         xlabel: str = r"Total Risk (people)",
         ylabel: str = r"Total Cost (yuan)",
         special_solutions: Optional[Dict[str, Solution]] = None,
@@ -320,16 +331,32 @@ class ParetoPlotter(BasePlotter):
         )
 
         # 5. 保存
-        full_path = os.path.join(self.save_dir, file_name)
+        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
         plt.tight_layout()
-        plt.savefig(full_path, format="svg", bbox_inches="tight")
+        plt.savefig(
+            full_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+
+        full_path = os.path.join(self.save_dir, f"{file_name}.png")
+        plt.tight_layout()
+        plt.savefig(
+            full_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
         plt.close(fig)
         logging.info(f"Pareto plot saved to: {full_path}")
 
     def plot_frontier_comparison_by_algo(
         self,
         frontiers: Dict[str, List[Solution]],
-        file_name: str = "pareto_comparison_by_algo.svg",
+        file_name: str = "pareto_comparison_by_algo",
         xlabel: str = r"Total Risk (people)",
         ylabel: str = r"Total Cost (yuan)",
     ):
@@ -447,16 +474,32 @@ class ParetoPlotter(BasePlotter):
         ax.legend(loc="upper right", frameon=True, framealpha=0.9, fancybox=True)
 
         # 保存
-        full_path = os.path.join(self.save_dir, file_name)
+        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
         plt.tight_layout()
-        plt.savefig(full_path, format="svg", bbox_inches="tight")
+        plt.savefig(
+            full_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+
+        full_path = os.path.join(self.save_dir, f"{file_name}.png")
+        plt.tight_layout()
+        plt.savefig(
+            full_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
         plt.close(fig)
         logging.info(f"Comparison plot saved to: {full_path}")
 
     def plot_frontier_comparison(
         self,
         frontiers: Dict[str, List[Solution]],
-        file_name: str = "pareto_comparison_by_cvar_alpha.svg",
+        file_name: str = "pareto_comparison_by_cvar_alpha",
         x_prefix: str = "",
     ):
         """
@@ -508,8 +551,26 @@ class ParetoPlotter(BasePlotter):
         self._set_dynamic_ylim(ax, all_y)
 
         ax.legend(loc="upper right", frameon=True, fancybox=True)
+
+        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.save_dir, file_name))
+        plt.savefig(
+            full_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+
+        full_path = os.path.join(self.save_dir, f"{file_name}.png")
+        plt.tight_layout()
+        plt.savefig(
+            full_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
         plt.close(fig)
         logging.info(f"Pareto comparison saved: {file_name}")
 
@@ -564,15 +625,33 @@ class ParetoPlotter(BasePlotter):
         self._set_dynamic_ylim(ax, dyn_cost + static_cost, margin_ratio=0.15)
 
         ax.legend(loc="upper right", frameon=True, shadow=True)
+
+        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.save_dir, file_name), format="svg")
+        plt.savefig(
+            full_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+
+        full_path = os.path.join(self.save_dir, f"{file_name}.png")
+        plt.tight_layout()
+        plt.savefig(
+            full_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
         plt.close(fig)
         logging.info(f"Value comparison Pareto chart saved: {file_name} 📈")
 
     def plot_gini_tradeoff(
         self,
         solutions_with_gini: List[Tuple[Solution, float]],
-        file_name: str = "Figure_Gini_Risk_Tradeoff.svg",
+        file_name: str = "gini_tradeoff",
         special_solutions=None,
     ):
         """
@@ -690,9 +769,25 @@ class ParetoPlotter(BasePlotter):
         self._set_dynamic_ylim(ax, r0_gini)
 
         ax.legend(loc="upper right", frameon=True, fancybox=True)
+
+        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
         plt.tight_layout()
         plt.savefig(
-            os.path.join(self.save_dir, file_name), format="svg", bbox_inches="tight"
+            full_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+
+        full_path = os.path.join(self.save_dir, f"{file_name}.png")
+        plt.tight_layout()
+        plt.savefig(
+            full_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
         )
         plt.close(fig)
         logging.info(f"Gini Trade-off plot saved with Cost CMAP: {file_name} 🌟")
@@ -702,7 +797,7 @@ class ParetoPlotter(BasePlotter):
         rank0_solutions: List[Solution],
         gini_calculator: callable,
         evaluator: Evaluator,
-        file_name: str = "parallel_coordinates_tradeoff.svg",
+        file_name: str = "parallel_coordinates_tradeoff",
     ):
         """
         绘制平行坐标图，展示整个 Pareto 前沿 (Rank 0) 的三目标联动关系。
@@ -857,9 +952,24 @@ class ParetoPlotter(BasePlotter):
 
         # 移除 ax.yaxis.set_major_formatter(FMT) 因为它会作用于归一化后的 [0, 1] 轴
 
+        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
         plt.tight_layout()
         plt.savefig(
-            os.path.join(self.save_dir, file_name), format="svg", bbox_inches="tight"
+            full_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+
+        full_path = os.path.join(self.save_dir, f"{file_name}.png")
+        plt.tight_layout()
+        plt.savefig(
+            full_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
         )
         plt.close(fig)
         logging.info(f"Gini Parallel chart saved: {file_name} 🌟")
@@ -919,7 +1029,7 @@ class BenchmarkPlotter(BasePlotter):
     def plot_metrics_comparison(self, stats_data: Dict[str, Dict[str, List[float]]]):
         """
         绘制多算法对比的小提琴图。
-        生成独立的图: HV_Comparison.svg, IGD_Comparison.svg, ...
+        生成独立的图: HV_Comparison, IGD_Comparison, ...
         每张图中 X 轴是算法，Y 轴是指标分布。
         """
         metrics = ["HV", "IGD", "SM", "CPU Time"]
@@ -1059,14 +1169,31 @@ class BenchmarkPlotter(BasePlotter):
         # 应用科学计数法格式
         ax.yaxis.set_major_formatter(FMT)
 
+        save_path = os.path.join(self.save_dir, f"comparison_{metric}.tif")
         plt.tight_layout()
-        save_path = os.path.join(self.save_dir, f"comparison_{metric}.svg")
-        plt.savefig(save_path, dpi=300)
+        plt.savefig(
+            save_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+        plt.close()
+
+        save_path = os.path.join(self.save_dir, f"comparison_{metric}.png")
+        plt.tight_layout()
+        plt.savefig(
+            save_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
         plt.close()
         logging.info(f"Generated comparison plot: {save_path}")
 
     def plot_normalized_metrics_bar(
-        self, stats_data, file_name: str = "normalized_bar_comparison.svg"
+        self, stats_data, file_name: str = "normalized_bar_comparison"
     ):
         """
         归一化综合对比柱状图。
@@ -1137,14 +1264,31 @@ class BenchmarkPlotter(BasePlotter):
             fontsize=10,
         )
 
+        save_path = os.path.join(self.save_dir, f"{file_name}.tif")
         plt.tight_layout()
-        save_path = os.path.join(self.save_dir, file_name)
-        plt.savefig(save_path, dpi=300)
+        plt.savefig(
+            save_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+        plt.close()
+
+        save_path = os.path.join(self.save_dir, f"{file_name}.png")
+        plt.tight_layout()
+        plt.savefig(
+            save_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
         plt.close()
         logging.info(f"Normalized bar chart saved: {save_path}")
 
     def plot_metric_radar(
-        self, stats_data, file_name: str = "algorithm_radar_comparison.svg"
+        self, stats_data, file_name: str = "algorithm_radar_comparison"
     ):
         """
         雷达图（花瓣图）：
@@ -1493,9 +1637,35 @@ class SensitivityPlotter(BasePlotter):
 
         ax1.grid(True, axis="y", linestyle="--", alpha=0.3)
 
+        # ── 设置 L 形边框 ──
+        ax1.spines["top"].set_visible(False)
+        ax1.spines["right"].set_visible(False)
+        ax1.spines["bottom"].set_linewidth(0.8)
+        ax1.spines["left"].set_linewidth(0.8)
+
+        ax2.spines["top"].set_visible(False)
+        ax2.spines["right"].set_visible(False)
+        ax2.spines["left"].set_visible(False)
+        ax2.spines["bottom"].set_visible(False)
+
+        full_path = os.path.join(self.save_dir, f"{filename}.tif")
         plt.tight_layout()
         plt.savefig(
-            os.path.join(self.save_dir, filename), format="svg", bbox_inches="tight"
+            full_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+
+        full_path = os.path.join(self.save_dir, f"{filename}.png")
+        plt.tight_layout()
+        plt.savefig(
+            full_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
         )
         plt.close()
         logging.info(f"✅ Edge-aligned cost structure chart saved: {filename}")
@@ -1591,8 +1761,36 @@ class SensitivityPlotter(BasePlotter):
         # 网格只显示在左轴，避免双重网格叠加造成视觉混乱
         ax1.grid(True, linestyle="--", alpha=0.3)
 
+        # ── 设置 L 形边框 ──
+        ax1.spines["top"].set_visible(False)
+        ax1.spines["right"].set_visible(False)
+        ax1.spines["bottom"].set_linewidth(0.8)
+        ax1.spines["left"].set_linewidth(0.8)
+
+        ax2.spines["top"].set_visible(False)
+        ax2.spines["right"].set_visible(False)
+        ax2.spines["left"].set_visible(False)
+        ax2.spines["bottom"].set_visible(False)
+
+        full_path = os.path.join(self.save_dir, f"{filename}.tif")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.save_dir, filename))
+        plt.savefig(
+            full_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+
+        full_path = os.path.join(self.save_dir, f"{filename}.png")
+        plt.tight_layout()
+        plt.savefig(
+            full_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
         plt.close()
         logging.info(f"Dual line chart (Fixed) saved: {filename}")
 
@@ -1650,7 +1848,24 @@ class ModelComparisonPlotter(BasePlotter):
         plt.xlabel(xlabel, fontweight="bold")
         plt.ylabel(ylabel, fontweight="bold")
 
+        full_path = os.path.join(self.save_dir, f"{filename}.tif")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.save_dir, filename), format="svg")
+        plt.savefig(
+            full_path,
+            format="tif",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
+
+        full_path = os.path.join(self.save_dir, f"{filename}.png")
+        plt.tight_layout()
+        plt.savefig(
+            full_path,
+            format="png",
+            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            bbox_inches="tight",
+            transparent=True,  # 可选：如果需要去背景
+        )
         plt.close(fig)
         logging.info(f"Comparison heatmap saved: {filename} 🌡️")

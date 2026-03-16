@@ -215,12 +215,12 @@ def run_value_analysis():
 
     # 构造 Opinion 字典用于导出
     opinion_sols = {
-        "Proposed (Min Risk)": dyn_min_risk,
-        "Proposed (Knee)": dyn_kp,
-        "Proposed (Min Cost)": dyn_min_cost,
-        "Static (Min Risk)": sta_min_risk,
-        "Static (Knee)": sta_kp,
-        "Static (Min Cost)": sta_min_cost,
+        "Min Risk(I)": dyn_min_risk,
+        "Knee(I)": dyn_kp,
+        "Min Cost(I)": dyn_min_cost,
+        "Min Risk(II)": sta_min_risk,
+        "Knee(II)": sta_kp,
+        "Min Cost(II)": sta_min_cost,
     }
 
     # 准备热图矩阵 (6行)
@@ -276,7 +276,7 @@ def run_value_analysis():
         heatmap_labels,
         risk_matrix,
         "Real Risk (people)",
-        "Figure_Risk_Heatmap.svg",
+        "heatmap_risk",
         "RISK_CMAP",
     )
     plotter.plot_comparison_heatmap(
@@ -284,7 +284,7 @@ def run_value_analysis():
         heatmap_labels,
         cost_matrix,
         "Cost (yuan)",
-        "Figure_Cost_Heatmap.svg",
+        "heatmap_cost",
         "COST_CMAP",
     )
 
