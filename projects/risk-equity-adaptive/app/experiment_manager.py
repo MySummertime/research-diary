@@ -65,7 +65,7 @@ class Experiment:
         # 7. 绘制网络拓扑
         self.visualizer.visualize_topology(
             save_dir=self.save_dir,
-            filename="network_topology.svg",
+            filename="network_topology",
         )
 
         # 8. 初始化算法
@@ -210,7 +210,7 @@ class Experiment:
         # 3. 绘制 Pareto 前沿 (传入 special_solutions 以便高亮)
         self.plotter.plot(
             self.final_front,
-            file_name="pareto_frontier.svg",
+            file_name="pareto_frontier",
             special_solutions=special_solutions,
         )
 
@@ -222,7 +222,7 @@ class Experiment:
         # 传入特殊解以便高亮
         self.plotter.plot_gini_tradeoff(
             solutions_with_gini,
-            file_name="Figure_Gini_Risk_Cost_Tradeoff.svg",
+            file_name="gini_tradeoff",
             special_solutions=special_solutions,
         )
 
@@ -233,7 +233,7 @@ class Experiment:
             rank_0_solutions,
             gini_calculator=calculate_solution_gini,
             evaluator=self.evaluator,
-            file_name="Figure_Parallel_Coordinates_Rank0.svg",
+            file_name="gini_tradeoff_corrdinates",
         )
 
         # 5. 生成对比表格

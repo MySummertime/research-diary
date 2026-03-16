@@ -200,7 +200,7 @@ def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
             min_risk_breakdown,
             min_risk_total_risk,
             r"CVaR Confidence Level $\alpha$",
-            "Figure_Extreme_Cost_Structure.svg",
+            "Figure_Extreme_Cost_Structure",
         )
 
         # Chart 2: Cost-Risk Dual Y-axis Line Chart
@@ -209,13 +209,13 @@ def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
             min_risk_costs,  # 左轴: Min Risk Solution 的 Total Cost
             min_risk_total_risk,  # 右轴: Min Risk Solution 的 Total Risk
             xlabel=r"CVaR Confidence Level $\alpha$",
-            filename="Figure_Extreme_Cost_Risk_Trend.svg",
+            filename="Figure_Extreme_Cost_Risk_Trend",
         )
 
     # Chart 3: Pareto Frontier Comparison
     if pareto_fronts:
         pareto_plotter.plot_frontier_comparison(
-            pareto_fronts, file_name="Figure_Extreme_Pareto_Shift.svg"
+            pareto_fronts, file_name="Figure_Extreme_Pareto_Shift"
         )
 
 
@@ -340,7 +340,7 @@ def perform_time_sensitivity(exp: Experiment, save_dir: str):
             min_risk_breakdown,
             min_risk_total_risk,
             r"Time Confidence Level $\alpha_t$",
-            "Figure_Time_Reliability_Structure.svg",
+            "Figure_Time_Reliability_Structure",
         )
 
         plotter.plot_dual_line_chart(
@@ -348,13 +348,13 @@ def perform_time_sensitivity(exp: Experiment, save_dir: str):
             min_risk_costs,
             min_risk_total_risk,
             r"Time Confidence Level $\alpha_t$",
-            "Figure_Time_Risk_Trend.svg",
+            "Figure_Time_Risk_Trend",
         )
 
         if pareto_fronts:
             pareto_plotter.plot_frontier_comparison(
                 pareto_fronts,
-                file_name="Figure_Time_Pareto_Shift.svg",
+                file_name="Figure_Time_Pareto_Shift",
             )
 
 

@@ -1,7 +1,8 @@
 # --- coding: utf-8 ---
 # --- main.py ---
-import time
 import logging
+import time
+
 from app.experiment_manager import Experiment
 
 
