@@ -323,24 +323,24 @@ class NetworkVisualizer:
         self, edgelist: List[Tuple[str, str]], modes: List[str] = None
     ) -> List[str]:
         """
-        [核心算法] 计算每条边的 connectionstyle，确保不同模式/方向不重叠。
+        [核心算法] 计算每条边的 connectionstyle，确保不同方向、不同模式的边永不重叠。
+        逻辑：针对每一对连接节点 {u, v}，为其所有的边（不论方向和模式）均匀分配递增的曲率。
         """
-        styles = []
-        # 🌟 有向边 key + 模式组合，避免 (A,B,road) 和 (B,A,rail) 重合
-        edge_tracker = {}  # key: (u,v,mode) → 有向 + 模式唯一标识
+        styles = [""] * len(edgelist)
+        # 用无序对 (frozenset) 作为 key，记录该节点对之间已分配了多少条线
+        pair_counts = {}
 
         for i, (u, v) in enumerate(edgelist):
-            current_mode = modes[i] if (modes and i < len(modes)) else "road"
-            # 🌟 有向边 + 模式作为唯一 key
-            edge_key = (u, v, current_mode)
-            count = edge_tracker.get(edge_key, 0)
+            pair = frozenset({u, v})
+            rank = pair_counts.get(pair, 0)
+            pair_counts[pair] = rank + 1
 
-            mode_offset = 0.12 if current_mode == "road" else 0.28  # rail 偏移更大
-            base_rad = mode_offset + (count // 2) * 0.15  # 每多一对边增 0.15
-            rad = base_rad if count % 2 == 0 else -base_rad
-
-            styles.append(f"arc3,rad={rad}")
-            edge_tracker[edge_key] = count + 1
+            # 使用递增的正曲率确保完全避让
+            # 对于 (u, v) 来说，rad > 0 是向左弯；对于 (v, u) 来说，rad > 0 也是向左弯（即相对于 u->v 是向右弯）
+            # 因此，使用递增的 rad (0.1, 0.25, 0.4...) 可以确保所有方向和模式的弧线在空间上是平行的。
+            # 基础偏移 0.1，步长 0.15
+            rad = 0.15 * rank + 0.1
+            styles[i] = f"arc3,rad={rad:.2f}"
 
         return styles
 
@@ -613,11 +613,11 @@ class NetworkVisualizer:
         # plt.savefig(os.path.join(save_dir, filename), format="svg", bbox_inches="tight")
         # 保存为 TIFF（最推荐）
         plt.savefig(
-            os.path.join(save_dir, f"{filename}.tif"),
-            format="tif",
-            dpi=300,  # 混合图用 600，纯线图可以冲 1000–1200
+            os.path.join(save_dir, f"{filename}.tiff"),
+            format="tiff",
+            dpi=600,  # 混合图用 600，纯线图可以冲 1000–1200
             bbox_inches="tight",  # 自动裁剪白边，超级重要
-            pad_inches=0.1,  # 给边缘留 0.1 英寸的白边
+            pad_inches=0.0,  # 给边缘留 0.1 英寸的白边
             # transparent=True,  # 可选：如果需要去背景
         )
 
@@ -625,9 +625,9 @@ class NetworkVisualizer:
         plt.savefig(
             os.path.join(save_dir, f"{filename}.png"),
             format="png",
-            dpi=300,
+            dpi=600,
             bbox_inches="tight",
-            pad_inches=0.1,  # 给边缘留 0.1 英寸的白边
+            pad_inches=0.0,  # 给边缘留 0.1 英寸的白边
             # transparent=True,  # 可选：如果需要去背景
         )
         plt.close()

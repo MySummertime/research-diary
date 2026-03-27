@@ -299,6 +299,7 @@ class ParetoPlotter(BasePlotter):
                 zorder=3,
             )
 
+
             # 标记 Rank 0 的特殊点
             if special_solutions:
                 self._highlight_special_solutions(
@@ -331,12 +332,12 @@ class ParetoPlotter(BasePlotter):
         )
 
         # 5. 保存
-        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
+        full_path = os.path.join(self.save_dir, f"{file_name}.tiff")
         plt.tight_layout()
         plt.savefig(
             full_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -346,7 +347,7 @@ class ParetoPlotter(BasePlotter):
         plt.savefig(
             full_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -474,12 +475,12 @@ class ParetoPlotter(BasePlotter):
         ax.legend(loc="upper right", frameon=True, framealpha=0.9, fancybox=True)
 
         # 保存
-        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
+        full_path = os.path.join(self.save_dir, f"{file_name}.tiff")
         plt.tight_layout()
         plt.savefig(
             full_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -489,7 +490,7 @@ class ParetoPlotter(BasePlotter):
         plt.savefig(
             full_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -501,6 +502,7 @@ class ParetoPlotter(BasePlotter):
         frontiers: Dict[str, List[Solution]],
         file_name: str = "pareto_comparison_by_cvar_alpha",
         x_prefix: str = "",
+        legend_loc: str = "upper right",
     ):
         """
         绘制不同 CVaR alpha 下的 Pareto Frontier 对比图。
@@ -550,14 +552,14 @@ class ParetoPlotter(BasePlotter):
         self._set_dynamic_xlim(ax, all_x)
         self._set_dynamic_ylim(ax, all_y)
 
-        ax.legend(loc="upper right", frameon=True, fancybox=True)
+        ax.legend(loc=legend_loc, frameon=True, fancybox=True)
 
-        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
+        full_path = os.path.join(self.save_dir, f"{file_name}.tiff")
         plt.tight_layout()
         plt.savefig(
             full_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -567,7 +569,7 @@ class ParetoPlotter(BasePlotter):
         plt.savefig(
             full_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -626,12 +628,12 @@ class ParetoPlotter(BasePlotter):
 
         ax.legend(loc="upper right", frameon=True, shadow=True)
 
-        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
+        full_path = os.path.join(self.save_dir, f"{file_name}.tiff")
         plt.tight_layout()
         plt.savefig(
             full_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -641,7 +643,7 @@ class ParetoPlotter(BasePlotter):
         plt.savefig(
             full_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -770,12 +772,12 @@ class ParetoPlotter(BasePlotter):
 
         ax.legend(loc="upper right", frameon=True, fancybox=True)
 
-        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
+        full_path = os.path.join(self.save_dir, f"{file_name}.tiff")
         plt.tight_layout()
         plt.savefig(
             full_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -785,7 +787,7 @@ class ParetoPlotter(BasePlotter):
         plt.savefig(
             full_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -952,12 +954,12 @@ class ParetoPlotter(BasePlotter):
 
         # 移除 ax.yaxis.set_major_formatter(FMT) 因为它会作用于归一化后的 [0, 1] 轴
 
-        full_path = os.path.join(self.save_dir, f"{file_name}.tif")
+        full_path = os.path.join(self.save_dir, f"{file_name}.tiff")
         plt.tight_layout()
         plt.savefig(
             full_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -967,7 +969,7 @@ class ParetoPlotter(BasePlotter):
         plt.savefig(
             full_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1169,12 +1171,12 @@ class BenchmarkPlotter(BasePlotter):
         # 应用科学计数法格式
         ax.yaxis.set_major_formatter(FMT)
 
-        save_path = os.path.join(self.save_dir, f"comparison_{metric}.tif")
+        save_path = os.path.join(self.save_dir, f"comparison_{metric}.tiff")
         plt.tight_layout()
         plt.savefig(
             save_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1185,7 +1187,7 @@ class BenchmarkPlotter(BasePlotter):
         plt.savefig(
             save_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1264,12 +1266,12 @@ class BenchmarkPlotter(BasePlotter):
             fontsize=10,
         )
 
-        save_path = os.path.join(self.save_dir, f"{file_name}.tif")
+        save_path = os.path.join(self.save_dir, f"{file_name}.tiff")
         plt.tight_layout()
         plt.savefig(
             save_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1280,7 +1282,7 @@ class BenchmarkPlotter(BasePlotter):
         plt.savefig(
             save_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1422,7 +1424,7 @@ class BenchmarkPlotter(BasePlotter):
 
         plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.97])  # 四周留3%安全区
         save_path = os.path.join(self.save_dir, file_name)
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.savefig(save_path, dpi=600, bbox_inches="tight")
         plt.close()
 
 
@@ -1596,7 +1598,7 @@ class SensitivityPlotter(BasePlotter):
             marker="o",
             markersize=8,
             linewidth=2.5,
-            label="Min Risk",
+            label="Total Risk",
             zorder=10,
         )
 
@@ -1613,9 +1615,9 @@ class SensitivityPlotter(BasePlotter):
 
         # --- E. 细节修饰 ---
         ax1.set_xlabel(xlabel, fontweight="bold")
-        ax1.set_ylabel("Min Cost (yuan)", fontweight="bold", color=c_trend)
+        ax1.set_ylabel("Total Cost (yuan)", fontweight="bold", color=c_trend)
         ax1.tick_params(axis="y", labelcolor=c_trend)
-        ax2.set_ylabel("Min Risk (people)", fontweight="bold", color=c_risk)
+        ax2.set_ylabel("Total Risk (people)", fontweight="bold", color=c_risk)
         ax2.tick_params(axis="y", labelcolor=c_risk)
 
         self._set_dynamic_ylim(ax1, total_costs, is_bar=True)
@@ -1637,23 +1639,26 @@ class SensitivityPlotter(BasePlotter):
 
         ax1.grid(True, axis="y", linestyle="--", alpha=0.3)
 
-        # ── 设置 L 形边框 ──
+        # ── 设置 L 形/U 形边框 ──
         ax1.spines["top"].set_visible(False)
         ax1.spines["right"].set_visible(False)
         ax1.spines["bottom"].set_linewidth(0.8)
         ax1.spines["left"].set_linewidth(0.8)
 
+        # 由于 ax2 是由于 twinx 产生的，默认会绘制右边框
+        # 确保其右侧边框可见，并隐藏其他无用边框
         ax2.spines["top"].set_visible(False)
-        ax2.spines["right"].set_visible(False)
+        ax2.spines["right"].set_visible(True)
+        ax2.spines["right"].set_linewidth(0.8)
         ax2.spines["left"].set_visible(False)
         ax2.spines["bottom"].set_visible(False)
 
-        full_path = os.path.join(self.save_dir, f"{filename}.tif")
+        full_path = os.path.join(self.save_dir, f"{filename}.tiff")
         plt.tight_layout()
         plt.savefig(
             full_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1663,7 +1668,7 @@ class SensitivityPlotter(BasePlotter):
         plt.savefig(
             full_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1677,6 +1682,7 @@ class SensitivityPlotter(BasePlotter):
         risk_data: List[float],
         xlabel: str,
         filename: str,
+        legend_loc: str = "upper left",
     ):
         """
         左轴: Cost (Teal Line), 右轴: Risk (Orange Line)
@@ -1716,10 +1722,10 @@ class SensitivityPlotter(BasePlotter):
             marker="o",
             markersize=6,
             linewidth=2,
-            label="Min Cost",
+            label="Total Cost",
             zorder=3,
         )
-        ax1.set_ylabel(r"Min Cost (yuan)", color=c_cost, fontweight="bold")
+        ax1.set_ylabel(r"Total Cost (yuan)", color=c_cost, fontweight="bold")
         ax1.yaxis.set_major_formatter(sci_fmt_left)  # 使用独立的实例
         ax1.yaxis.set_major_locator(MaxNLocator(nbins=6))
         self._set_dynamic_ylim(ax1, ys_cost)
@@ -1734,10 +1740,10 @@ class SensitivityPlotter(BasePlotter):
             markersize=6,
             linewidth=2,
             linestyle="--",
-            label="Min Risk",
+            label="Total Risk",
             zorder=3,
         )
-        ax2.set_ylabel(r"Min Risk (people)", color=c_risk, fontweight="bold")
+        ax2.set_ylabel(r"Total Risk (people)", color=c_risk, fontweight="bold")
         ax2.yaxis.set_major_formatter(sci_fmt_right)  # 使用独立的实例
         ax2.yaxis.set_major_locator(MaxNLocator(nbins=6))
         self._set_dynamic_ylim(ax2, ys_risk)
@@ -1756,28 +1762,30 @@ class SensitivityPlotter(BasePlotter):
         # 合并图例
         lines = line1 + line2
         labels = [l.get_label() for l in lines]
-        ax1.legend(lines, labels, loc="upper left", frameon=True, fancybox=True)
+        ax1.legend(lines, labels, loc=legend_loc, frameon=True, fancybox=True)
 
         # 网格只显示在左轴，避免双重网格叠加造成视觉混乱
         ax1.grid(True, linestyle="--", alpha=0.3)
 
-        # ── 设置 L 形边框 ──
+        # ── 设置 L 形/U 形边框 ──
         ax1.spines["top"].set_visible(False)
         ax1.spines["right"].set_visible(False)
         ax1.spines["bottom"].set_linewidth(0.8)
         ax1.spines["left"].set_linewidth(0.8)
 
+        # 确保 ax2 的右边框可见
         ax2.spines["top"].set_visible(False)
-        ax2.spines["right"].set_visible(False)
+        ax2.spines["right"].set_visible(True)
+        ax2.spines["right"].set_linewidth(0.8)
         ax2.spines["left"].set_visible(False)
         ax2.spines["bottom"].set_visible(False)
 
-        full_path = os.path.join(self.save_dir, f"{filename}.tif")
+        full_path = os.path.join(self.save_dir, f"{filename}.tiff")
         plt.tight_layout()
         plt.savefig(
             full_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1787,7 +1795,7 @@ class SensitivityPlotter(BasePlotter):
         plt.savefig(
             full_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1848,12 +1856,12 @@ class ModelComparisonPlotter(BasePlotter):
         plt.xlabel(xlabel, fontweight="bold")
         plt.ylabel(ylabel, fontweight="bold")
 
-        full_path = os.path.join(self.save_dir, f"{filename}.tif")
+        full_path = os.path.join(self.save_dir, f"{filename}.tiff")
         plt.tight_layout()
         plt.savefig(
             full_path,
-            format="tif",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            format="tiff",
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
@@ -1863,7 +1871,7 @@ class ModelComparisonPlotter(BasePlotter):
         plt.savefig(
             full_path,
             format="png",
-            dpi=300,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
+            dpi=600,  # 600 dpi 更保险，很多 Top 期刊接受甚至要求
             bbox_inches="tight",
             transparent=True,  # 可选：如果需要去背景
         )
