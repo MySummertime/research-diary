@@ -6,6 +6,7 @@
 并汇总计算解的适应度 (Fitness) 和约束违反度 (CV)。
 """
 
+import numpy as np
 from typing import Any, Dict, List, Tuple
 
 from app.core.fuzzy import FuzzyMath
@@ -34,6 +35,10 @@ class Evaluator:
 
         # 初始化物理风险模型
         self.risk_model = DynamicRiskModel(network, self.risk_config)
+
+        # 提取公平性配置 [方案一：基尼系数约束]
+        self.equity_config = self.config.get("equity_config", {"gini_epsilon": 0.2})
+        self.gini_epsilon = self.equity_config.get("gini_epsilon", 0.2)
 
         # --- 获取确定性成本参数 ---
 
@@ -80,7 +85,10 @@ class Evaluator:
         risk_scale = self.risk_config.get("risk_objective_scale", 1.0)
         solution.f1_risk_scaled = real_risk * risk_scale
 
-        # 3. 检查所有约束 (容量 + 模糊成本预算)
+        # 3. 计算公平性指标: 基尼系数 (由方案一要求，由结果指标变为内化约束)
+        solution.gini_coefficient = self._calculate_solution_gini(solution)
+
+        # 4. 检查所有约束 (容量 + 模糊成本预算 + 基尼系数上限)
         is_feasible, violation = self._check_constraints(solution)
         solution.is_feasible = is_feasible
         solution.constraint_violation = violation
@@ -339,4 +347,72 @@ class Evaluator:
                 time_violation = (path_pessimistic_time - t_max_limit) / t_max_limit
                 total_violation += time_violation
 
+        # 4. [方案一] 基尼系数公平性约束：Gini <= epsilon
+        # 计算违反度: CV = max(0, Gini - epsilon)
+        if solution.gini_coefficient > self.gini_epsilon:
+            # 归一化违反度，便于与其他约束统一量级
+            # 如果 epsilon 为 0，则无法作为分母，直接取差值 (即 Gini 值本身)
+            if self.gini_epsilon > 1e-9:
+                gini_violation = (solution.gini_coefficient - self.gini_epsilon) / self.gini_epsilon
+            else:
+                gini_violation = solution.gini_coefficient
+            total_violation += gini_violation
+
         return total_violation == 0.0, total_violation
+
+    # =========================================================================
+    # Equity Calculation (公平性计算 - 方案一核心)
+    # =========================================================================
+
+    def _calculate_solution_gini(self, solution: Solution) -> float:
+        """
+        [方案一] 计算给定解决方案的风险分布基尼系数。
+        逻辑说明：
+        1. 统计每个节点承担的“风险暴露”。
+        2. 将弧段风险平摊到其两端节点。
+        3. 利用 Lorenz 曲线原理计算不均衡程度。
+        """
+        node_risk_map: Dict[str, float] = {}
+
+        for path in solution.path_selections.values():
+            if not path.task:
+                continue
+
+            # 1. 累计弧段风险贡献 (平摊给端点)
+            for arc in path.arcs:
+                # 贡献 = 概率 * 后果 (此处沿用 analyzer.py 的物理含义)
+                p_ijm = arc.accident_prob_per_km * arc.length
+                c_base = self.risk_model.get_consequence(arc)
+                risk_contrib = p_ijm * c_base
+
+                u_id = arc.start.node_id
+                v_id = arc.end.node_id
+                node_risk_map[u_id] = node_risk_map.get(u_id, 0.0) + risk_contrib / 2.0
+                node_risk_map[v_id] = node_risk_map.get(v_id, 0.0) + risk_contrib / 2.0
+
+            # 2. 累计枢纽转运风险
+            for hub in path.transfer_hubs:
+                p_k = hub.accident_prob
+                c_base = self.risk_model.get_consequence(hub)
+                risk_contrib = p_k * c_base
+                node_risk_map[hub.node_id] = node_risk_map.get(hub.node_id, 0.0) + risk_contrib
+
+        # 3. 计算基尼系数
+        risk_vals = np.array(list(node_risk_map.values()), dtype=float)
+        n = len(risk_vals)
+
+        # 基础校验：如果节点少于2个或总风险为0，认为绝对公平 (Gini=0)
+        if n < 2 or np.sum(risk_vals) == 0:
+            return 0.0
+
+        # 快速矩阵计算 |Ri - Rj| 之和
+        diff_matrix = np.abs(risk_vals[:, None] - risk_vals[None, :])
+        numerator = np.sum(diff_matrix)
+        
+        # 分母: 2 * n^2 * mean
+        denominator = 2 * n * n * np.mean(risk_vals)
+        
+        if denominator == 0:
+            return 0.0
+            
+        return float(numerator / denominator)

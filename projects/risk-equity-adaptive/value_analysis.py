@@ -229,7 +229,7 @@ def run_value_analysis():
     metrics_csv_data = []
 
     for i, (name, sol) in enumerate(opinion_sols.items()):
-        m_name = model_names[0] if "Proposed" in name else model_names[1]
+        m_name = model_names[0] if "(I)" in name else model_names[1]
         d_type = (
             "Min Risk"
             if "Min Risk" in name

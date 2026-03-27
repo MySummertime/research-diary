@@ -32,10 +32,13 @@ def main():
     # 2. Run Experiments
 
     # Risk Aversion
-    perform_cvar_sensitivity(exp, sensitivity_dir)
+    # perform_cvar_sensitivity(exp, sensitivity_dir)
 
     # Reliability
     # perform_time_sensitivity(exp, sensitivity_dir)
+
+    # Gini Sensitivity (Equity Tolerance)
+    perform_gini_sensitivity(exp, sensitivity_dir)
 
 
 def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
@@ -210,12 +213,15 @@ def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
             min_risk_total_risk,  # 右轴: Min Risk Solution 的 Total Risk
             xlabel=r"CVaR Confidence Level $\alpha$",
             filename="Figure_Extreme_Cost_Risk_Trend",
+            legend_loc="upper right",
         )
 
     # Chart 3: Pareto Frontier Comparison
     if pareto_fronts:
         pareto_plotter.plot_frontier_comparison(
-            pareto_fronts, file_name="Figure_Extreme_Pareto_Shift"
+            pareto_fronts,
+            file_name="Figure_Extreme_Pareto_Shift",
+            x_prefix=r"$\alpha$=",
         )
 
 
@@ -240,8 +246,12 @@ def perform_time_sensitivity(exp: Experiment, save_dir: str):
     # 根据实际成功运行的组动态添加
     actual_x_labels = []
 
-    # 备份原始配置
-    original_alpha_t = exp.config["cost_model_f2"].get("time_confidence_level", 0.9)
+    # 备份原始配置，防止实验状态污染
+    conf_f2 = exp.config.get("cost_model_f2", {})
+    original_alpha_t = conf_f2.get("time_confidence_level", 0.9)
+    original_max_time = conf_f2.get("max_delivery_time", 96.0)
+
+    # 保留用户要求的硬编码 25 (用于测试较为严格的时效环境)
     exp.config["cost_model_f2"]["max_delivery_time"] = 25
 
     try:
@@ -327,8 +337,9 @@ def perform_time_sensitivity(exp: Experiment, save_dir: str):
             )
 
     finally:
-        # 恢复原始配置
+        # 恢复原始配置，确保其他实验模块的数据一致性
         exp.config["cost_model_f2"]["time_confidence_level"] = original_alpha_t
+        exp.config["cost_model_f2"]["max_delivery_time"] = original_max_time
 
     # 3. Plotting (传入 actual_x_labels)
     if actual_x_labels:
@@ -355,7 +366,165 @@ def perform_time_sensitivity(exp: Experiment, save_dir: str):
             pareto_plotter.plot_frontier_comparison(
                 pareto_fronts,
                 file_name="Figure_Time_Pareto_Shift",
+                x_prefix=r"$\alpha_t$=",
             )
+
+
+def perform_gini_sensitivity(exp: Experiment, save_dir: str):
+    """
+    公平性容忍度 (Gini Epsilon) 敏感性分析
+    分析当决策者对“区域不公平”的容忍上限 epsilon 变化时，对系统总风险和总成本的影响。
+    """
+    logging.info(
+        ">>> Starting Sensitivity Experiment: Gini Epsilon (Equity Tolerance)..."
+    )
+
+    # 1. 实验参数设置:
+    epsilons = [0.3, 0.34, 0.38, 0.42, 0.46, 0.5, 0.54, 0.6]
+
+    # 容器初始化
+    min_risk_routes = []
+    min_cost_risks = []
+    min_cost_total_cost = []
+    min_cost_breakdown = {"transport": [], "transshipment": [], "carbon": []}
+
+    min_risk_total_risk = []
+    min_risk_costs = []
+    min_risk_breakdown = {"transport": [], "transshipment": [], "carbon": []}
+
+    pareto_fronts = {}
+    x_labels = []
+
+    # 备份与配置准备
+    target_key = "equity_config"
+    if target_key not in exp.config:
+        exp.config[target_key] = {"gini_epsilon": 0.2}
+    original_epsilon = exp.config[target_key].get("gini_epsilon", 0.2)
+
+    try:
+        for epsilon in epsilons:
+            epsilon_val = float(epsilon)
+            label_str = f"{epsilon_val:.2f}"
+            logging.info(f"--- Testing Gini Epsilon = {label_str} ---")
+
+            # 固定随机种子保证实验可重复性
+            random.seed(49)
+            np.random.seed(49)
+
+            # 动态修改评估器配置
+            exp.config[target_key]["gini_epsilon"] = epsilon_val
+
+            # 热重载组件 (Evaluator 内部会计算 CV_gini)
+            exp.evaluator = Evaluator(exp.network, exp.config)
+            exp.algorithm = NSGA2(
+                exp.network, exp.evaluator, exp.candidate_paths_map, exp.config
+            )
+
+            # 运行算法
+            final_pop = exp.algorithm.run(callbacks=[], initial_population=None)
+
+            # 筛选出 Pareto 前沿 (Rank 0) 的可行解
+            feasible = [s for s in final_pop if s.is_feasible and s.rank == 0]
+
+            if feasible:
+                # A. 排序保存用于前沿移动分析
+                feasible.sort(key=lambda s: (s.f1_risk, s.f2_cost))
+                pareto_fronts[label_str] = feasible
+
+                # B. 节点提取：Min Cost 和 Min Risk (通常关注极端点)
+                min_cost_sol = min(feasible, key=lambda s: (s.f2_cost, s.f1_risk))
+                min_risk_sol = min(feasible, key=lambda s: (s.f1_risk, s.f2_cost))
+
+                # C. 记录 Min Risk 方案的路由路径细节
+                route_details_list = []
+                for tid in sorted(min_risk_sol.path_selections.keys()):
+                    path_obj = min_risk_sol.path_selections[tid]
+                    nodes_str = "->".join([n.node_id for n in path_obj.nodes])
+                    route_details_list.append(f"Task_{tid}: {nodes_str}")
+                min_risk_routes.append(" | ".join(route_details_list))
+
+                # D. 提取成本细分 (Min Cost 解)
+                bd_min_cost = exp.evaluator.calculate_cost_breakdown(min_cost_sol)
+                min_cost_breakdown["transport"].append(bd_min_cost["transport"])
+                min_cost_breakdown["transshipment"].append(bd_min_cost["transshipment"])
+                min_cost_breakdown["carbon"].append(bd_min_cost["carbon"])
+
+                # E. 提取成本细分 (Min Risk 解)
+                bd_min_risk = exp.evaluator.calculate_cost_breakdown(min_risk_sol)
+                min_risk_breakdown["transport"].append(bd_min_risk["transport"])
+                min_risk_breakdown["transshipment"].append(bd_min_risk["transshipment"])
+                min_risk_breakdown["carbon"].append(bd_min_risk["carbon"])
+
+                # F. 汇总主要指标
+                min_cost_total_cost.append(min_cost_sol.f2_cost)
+                min_risk_total_risk.append(min_risk_sol.f1_risk)
+                min_cost_risks.append(min_cost_sol.f1_risk)
+                min_risk_costs.append(min_risk_sol.f2_cost)
+
+                x_labels.append(label_str)
+            else:
+                logging.warning(
+                    f"No feasible solutions found for gini_epsilon = {label_str}"
+                )
+
+    finally:
+        # 恢复原始配置防止影响后续实验
+        exp.config[target_key]["gini_epsilon"] = original_epsilon
+
+    # 4. 数据保存与绘图
+    if x_labels:
+        # 导出 CSV 数据
+        data_for_csv = {
+            "gini_epsilon": x_labels,
+            "min_cost_sol_risk": min_cost_risks,
+            "min_cost_sol_cost": min_cost_total_cost,
+            "transport_cost_min_cost_sol": min_cost_breakdown["transport"],
+            "transshipment_cost_min_cost_sol": min_cost_breakdown["transshipment"],
+            "carbon_cost_min_cost_sol": min_cost_breakdown["carbon"],
+            "min_risk_sol_risk": min_risk_total_risk,
+            "min_risk_sol_cost": min_risk_costs,
+            "transport_cost_min_risk_sol": min_risk_breakdown["transport"],
+            "transshipment_cost_min_risk_sol": min_risk_breakdown["transshipment"],
+            "carbon_cost_min_risk_sol": min_risk_breakdown["carbon"],
+            "route_details_all_tasks": min_risk_routes,
+        }
+        df = pd.DataFrame(data_for_csv)
+        csv_path = os.path.join(save_dir, "Sensitivity_Gini_Epsilon_Data.csv")
+        df.to_csv(csv_path, index=False)
+        logging.info(f"Gini sensitivity data saved to: {csv_path}")
+
+        # 实例化绘图器
+        plotter = SensitivityPlotter(save_dir)
+        pareto_plotter = ParetoPlotter(save_dir=save_dir)
+
+        # 图表 1: 成本结构 (堆叠柱状) + 风险 (折线)
+        plotter.plot_cost_structure_dual_axis(
+            x_labels,
+            min_risk_breakdown,
+            min_risk_total_risk,
+            r"Gini Epsilon Tolerance $\epsilon$",
+            "Figure_Gini_Cost_Structure",
+        )
+
+        # 图表 2: 风险与成本的双轴演变趋势
+        plotter.plot_dual_line_chart(
+            x_labels,
+            min_risk_costs,
+            min_risk_total_risk,
+            r"Gini Epsilon Tolerance $\epsilon$",
+            "Figure_Gini_Risk_Trend",
+        )
+
+        # 图表 3: Pareto 前沿随公平性容忍度增加的平移现象
+        if pareto_fronts:
+            pareto_plotter.plot_frontier_comparison(
+                pareto_fronts,
+                file_name="Figure_Gini_Pareto_Shift",
+                x_prefix=r"$\epsilon$=",
+                legend_loc="lower right",
+            )
+    else:
+        logging.error("No data collected for Gini sensitivity analysis.")
 
 
 if __name__ == "__main__":
