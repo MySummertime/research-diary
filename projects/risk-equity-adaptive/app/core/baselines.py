@@ -259,11 +259,8 @@ class GurobiSolver:
 
         # --- 获取最新的成本和时效参数 ---
         alpha_t = self.evaluator.cost_config.get("time_confidence_level", 0.9)
-        c_tax = self.evaluator.carbon_tax_rate  # 0.015
         u_trans_cost = self.evaluator.unit_transport_cost  # {road: 0.23, railway: 0.05}
-        u_trans_emit = self.evaluator.transport_emission_factor  # {road: 0.05771, ...}
         u_hub_cost = self.evaluator.unit_transshipment_cost  # 3.090
-        u_hub_emit = self.evaluator.transshipment_emission_factor  # 0.128
 
         # 初始化枢纽路径索引映射
         self.hub_path_map = {h.node_id: [] for h in self.network.get_hubs()}
@@ -275,25 +272,21 @@ class GurobiSolver:
             dv = task.demand
 
             for p_idx, path in enumerate(paths):
-                # 1. Expected Cost: 运输成本 + 转运成本 + 运输碳排放 + 转运碳排放
+                # 1. Expected Cost: 运输成本 + 转运成本
                 cost_exp = 0.0
 
-                # 1a. 弧段相关 (运输 + 运输碳排放)
+                # 1a. 弧段相关 (运输)
                 for arc in path.arcs:
                     mode = arc.mode
                     dist = arc.length
                     # 运输: C_m * d^v * d_ij
                     c_m = u_trans_cost.get(mode, 0.0)
-                    # 运输碳: C_tax * omega_m * d^v * d_ij
-                    omega_m = u_trans_emit.get(mode, 0.0)
+                    cost_exp += c_m * dv * dist
 
-                    cost_exp += (c_m + c_tax * omega_m) * dv * dist
-
-                # 1b. 枢纽相关 (转运 + 转运碳排放)
+                # 1b. 枢纽相关 (转运)
                 for hub in path.transfer_hubs:
                     # 转运: C_k^b * d^v
-                    # 转运碳: C_tax * omega_k * d^v
-                    cost_exp += (u_hub_cost + c_tax * u_hub_emit) * dv
+                    cost_exp += u_hub_cost * dv
 
                 # 2. Risk (CVaR)
                 dummy_sol = Solution()

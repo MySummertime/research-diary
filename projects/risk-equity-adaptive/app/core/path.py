@@ -394,10 +394,7 @@ class PathFinder:
         # 2. 成本
         mode = arc.mode
         c_m = self.evaluator.unit_transport_cost.get(mode, 0.0)
-        # 考虑碳排放因子和碳税
-        omega_m = self.evaluator.transport_emission_factor.get(mode, 0.0)
-        c_tax = self.evaluator.carbon_tax_rate
-        v_cost = (c_m + c_tax * omega_m) * arc.length
+        v_cost = c_m * arc.length
 
         # 3. 响应时间
         arc_resp = self._get_actual_response_weight(arc)

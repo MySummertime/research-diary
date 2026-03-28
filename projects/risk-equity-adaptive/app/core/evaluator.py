@@ -47,22 +47,9 @@ class Evaluator:
             "unit_transport_cost", {"road": 0.23, "railway": 0.05}
         )
 
-        # 2. 单位碳排放因子 omega_m (kg/t·km)
-        self.transport_emission_factor = self.cost_config.get(
-            "transport_emission_factor", {"road": 0.05771, "railway": 0.00820}
-        )
-
-        # 3. 碳税率 C_tax (元/kg)
-        self.carbon_tax_rate = self.cost_config.get("carbon_tax_rate", 0.015)
-
         # 4. 单位转运成本 C_k^b (元/t)
         self.unit_transshipment_cost = self.cost_config.get(
             "unit_transshipment_cost", 3.090
-        )
-
-        # 5. 单位转运碳排放量 omega_k (kg/t)
-        self.transshipment_emission_factor = self.cost_config.get(
-            "transshipment_emission_factor", 0.128
         )
 
     # =========================================================================
@@ -96,16 +83,16 @@ class Evaluator:
     def calculate_cost_breakdown(self, solution: Solution) -> Dict[str, float]:
         """
         [Helper] 计算成本构成的详细拆解 (用于绘图)
-        返回: {'transport': val, 'transshipment': val, 'carbon': val}
+        返回: {'transport': val, 'transshipment': val}
         """
-        breakdown = {"transport": 0.0, "transshipment": 0.0, "carbon": 0.0}
+        breakdown = {"transport": 0.0, "transshipment": 0.0}
 
         for task_id, path in solution.path_selections.items():
             if not path.task:
                 continue
             dv = path.task.demand
 
-            # 1. 弧段相关成本 (运输成本 + 运输碳排放)
+            # 1. 弧段相关成本 (运输成本)
             for arc in path.arcs:
                 mode = arc.mode
                 d_ij = arc.length
@@ -114,19 +101,11 @@ class Evaluator:
                 c_m = self.unit_transport_cost.get(mode, 0.0)
                 breakdown["transport"] += c_m * dv * d_ij
 
-                # 运输碳排放成本: C_tax * omega_m * d^v * d_ij
-                omega_m = self.transport_emission_factor.get(mode, 0.0)
-                breakdown["carbon"] += self.carbon_tax_rate * omega_m * dv * d_ij
-
-            # 2. 枢纽相关成本 (转运成本 + 转运碳排放)
+            # 2. 枢纽相关成本 (转运成本)
             for hub in path.transfer_hubs:
                 # 转运成本: C_k^b * d^v
                 c_kb = self.unit_transshipment_cost
                 breakdown["transshipment"] += c_kb * dv
-
-                # 转运碳排放成本: C_tax * omega_k * d^v
-                omega_k = self.transshipment_emission_factor
-                breakdown["carbon"] += self.carbon_tax_rate * omega_k * dv
 
         return breakdown
 
@@ -279,7 +258,7 @@ class Evaluator:
 
     def _calculate_f2_cost(self, solution: Solution) -> float:
         bd = self.calculate_cost_breakdown(solution)
-        return bd["transport"] + bd["transshipment"] + bd["carbon"]
+        return bd["transport"] + bd["transshipment"]
 
     # =========================================================================
     # Constraints Checking (约束检查)

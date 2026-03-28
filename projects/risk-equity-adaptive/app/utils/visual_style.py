@@ -133,7 +133,6 @@ class ColorPalette:
     STACKED_BAR: List[Dict[str, str]] = [
         {"TRANSPORT_COLOR": DEEP_TEAL},
         {"TRANSSHIPMENT_COLOR": TEAL_GREEN},
-        {"CARBON_COLOR": LIGHT_GREEN},
         {"RISK_COLOR": RED_ORANGE},
         {"TREND": DARK_BLUE},
     ]

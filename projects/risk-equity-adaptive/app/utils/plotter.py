@@ -299,7 +299,6 @@ class ParetoPlotter(BasePlotter):
                 zorder=3,
             )
 
-
             # 标记 Rank 0 的特殊点
             if special_solutions:
                 self._highlight_special_solutions(
@@ -1462,14 +1461,12 @@ class SensitivityPlotter(BasePlotter):
         colors = self.stacked_bar_chart_colors
         c_transport = get_color_by_key(colors, "TRANSPORT_COLOR")
         c_transship = get_color_by_key(colors, "TRANSSHIPMENT_COLOR")
-        c_carbon = get_color_by_key(colors, "CARBON_COLOR")
         c_risk = get_color_by_key(colors, "RISK_COLOR")
         c_trend = get_color_by_key(colors, "TREND")
 
         trans = np.array(cost_data["transport"])
         ship = np.array(cost_data["transshipment"])
-        carb = np.array(cost_data["carbon"])
-        total_costs = trans + ship + carb
+        total_costs = trans + ship
 
         # --- A. 视觉增强辅助函数 ---
         def get_light_fill_color(base_color, sat_factor=0.4, alpha=0.25):
@@ -1511,21 +1508,10 @@ class SensitivityPlotter(BasePlotter):
             alpha=0.95,
             zorder=3,
         )
-        ax1.bar(
-            x,
-            carb,
-            width,
-            bottom=trans + ship,
-            label="Carbon Cost",
-            color=c_carbon,
-            alpha=0.95,
-            zorder=3,
-        )
 
         # 2. 绘制边缘对齐的填充带 (在柱子之间产生斜向流动效果)
         v_trans = get_edge_aligned_values(trans)
         v_ship = get_edge_aligned_values(trans + ship)
-        v_total = get_edge_aligned_values(total_costs)
 
         ax1.fill_between(
             x_fill,
@@ -1540,14 +1526,6 @@ class SensitivityPlotter(BasePlotter):
             v_trans,
             v_ship,
             color=get_light_fill_color(c_transship),
-            linewidth=0,
-            zorder=2,
-        )
-        ax1.fill_between(
-            x_fill,
-            v_ship,
-            v_total,
-            color=get_light_fill_color(c_carbon),
             linewidth=0,
             zorder=2,
         )
@@ -1759,10 +1737,10 @@ class SensitivityPlotter(BasePlotter):
         ax1.tick_params(axis="y", colors=c_cost, labelsize=11)
         ax2.tick_params(axis="y", colors=c_risk, labelsize=11)
 
-        # 合并图例
-        lines = line1 + line2
-        labels = [l.get_label() for l in lines]
-        ax1.legend(lines, labels, loc=legend_loc, frameon=True, fancybox=True)
+        # 合并图例 (左轴 + 右轴)
+        lns = line1 + line2
+        labs = [ln.get_label() for ln in lns]
+        ax1.legend(lns, labs, loc=legend_loc, frameon=True, fancybox=True)
 
         # 网格只显示在左轴，避免双重网格叠加造成视觉混乱
         ax1.grid(True, linestyle="--", alpha=0.3)
@@ -1833,10 +1811,8 @@ class ModelComparisonPlotter(BasePlotter):
         height = max(8, len(model_labels) * 1.2)
         fig, ax = plt.subplots(figsize=(10, height))
 
-        # 1. 强制全局 FMT 针对所有量级开启科学计数法
+        # 1. 对所有量级强制开启科学计数法（复用全局 FMT 逻辑）
         FMT.set_powerlimits((0, 0))
-
-        # 2. 准备热图标注数据：复用 FMT 的 LaTeX 渲染逻辑
         annot_data = np.vectorize(lambda x: f"${FMT.format_data(x)}$")(data)
 
         sns.heatmap(

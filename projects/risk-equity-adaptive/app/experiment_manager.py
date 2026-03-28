@@ -229,13 +229,13 @@ class Experiment:
 
         # 4.2 绘制平行坐标图
         # 只传入 Rank 0 可行解
-        rank_0_solutions = [s for s, g in solutions_with_gini if s.rank == 0]
-        self.plotter.plot_parallel_coordinates(
-            rank_0_solutions,
-            gini_calculator=calculate_solution_gini,
-            evaluator=self.evaluator,
-            file_name="gini_tradeoff_corrdinates",
-        )
+        # rank_0_solutions = [s for s, g in solutions_with_gini if s.rank == 0]
+        # self.plotter.plot_parallel_coordinates(
+        #    rank_0_solutions,
+        #    gini_calculator=calculate_solution_gini,
+        #    evaluator=self.evaluator,
+        #    file_name="gini_tradeoff_corrdinates",
+        # )
 
         # 5. 生成对比表格
         generate_routing_scheme_comparison(
