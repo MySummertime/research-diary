@@ -73,7 +73,6 @@ def generate_routing_scheme_comparison(
         "Total_Cost",
         "Transport_Cost",
         "Transshipment_Cost",
-        "Carbon_Cost",
         "Pessimistic_Time",
         "Time_Limit",
         "Is_On_Time",
@@ -101,7 +100,7 @@ def generate_routing_scheme_comparison(
                         continue
 
                     # 1. 计算单任务指标
-                    task_cost, transport_cost, transship_cost, carbon_cost = (
+                    task_cost, transport_cost, transship_cost = (
                         _calculate_single_task_cost(path, evaluator)
                     )
                     task_risk = _calculate_single_task_risk(path, evaluator)
@@ -148,7 +147,6 @@ def generate_routing_scheme_comparison(
                             f"{task_cost:.2f}",
                             f"{transport_cost:.2f}",
                             f"{transship_cost:.2f}",
-                            f"{carbon_cost:.2f}",
                             f"{pess_time:.2f}",
                             f"{t_max:.2f}",
                             is_on_time,
@@ -285,20 +283,14 @@ def _get_node_risk_exposure(
 
 def _calculate_single_task_cost(path, evaluator: Evaluator):
     """
-    [Helper] 重新计算单个任务的 Total Cost 和 Carbon Cost
+    [Helper] 重新计算单个任务的 Total Cost (不包含碳排放)
     """
     total_cost = 0.0
     transport_cost = 0.0
     transship_cost = 0.0
-    carbon_cost = 0.0
     dv = path.task.demand
 
-    # --- 获取参数 ---
-    c_tax = evaluator.carbon_tax_rate  # 0.015
-    u_trans_emit = evaluator.transport_emission_factor  # {road: 0.05771, ...}
-    u_hub_emit = evaluator.transshipment_emission_factor  # 0.128
-
-    # 1. 弧段相关 (运输成本 + 运输碳排放)
+    # 1. 弧段相关 (运输成本)
     for arc in path.arcs:
         mode = arc.mode
         d_ij = arc.length
@@ -307,28 +299,19 @@ def _calculate_single_task_cost(path, evaluator: Evaluator):
         c_m = evaluator.unit_transport_cost.get(mode, 0.0)
         seg_transport = c_m * dv * d_ij
 
-        # 运输碳排放: C_tax * omega_m * d^v * d_ij
-        omega_m = u_trans_emit.get(mode, 0.0)
-        seg_carbon = c_tax * omega_m * dv * d_ij
-
         transport_cost += seg_transport
-        carbon_cost += seg_carbon
-        total_cost += seg_transport + seg_carbon
+        total_cost += seg_transport
 
-    # 2. 枢纽相关 (转运成本 + 转运碳排放)
+    # 2. 枢纽相关 (转运成本)
     for hub in path.transfer_hubs:
         # 转运成本: C_k^b * d^v
         c_kb = evaluator.unit_transshipment_cost
         hub_transship = c_kb * dv
 
-        # 转运碳排放: C_tax * omega_k * d^v (0.128 kg/t)
-        hub_carbon = c_tax * u_hub_emit * dv
-
         transship_cost += hub_transship
-        carbon_cost += hub_carbon
-        total_cost += hub_transship + hub_carbon
+        total_cost += hub_transship
 
-    return total_cost, transport_cost, transship_cost, carbon_cost
+    return total_cost, transport_cost, transship_cost
 
 
 def _calculate_single_task_risk(path, evaluator: Evaluator) -> float:

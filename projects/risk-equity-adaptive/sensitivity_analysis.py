@@ -32,13 +32,13 @@ def main():
     # 2. Run Experiments
 
     # Risk Aversion
-    # perform_cvar_sensitivity(exp, sensitivity_dir)
+    perform_cvar_sensitivity(exp, sensitivity_dir)
 
     # Reliability
     # perform_time_sensitivity(exp, sensitivity_dir)
 
     # Gini Sensitivity (Equity Tolerance)
-    perform_gini_sensitivity(exp, sensitivity_dir)
+    # perform_gini_sensitivity(exp, sensitivity_dir)
 
 
 def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
@@ -60,7 +60,7 @@ def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
     min_cost_total_cost = []
 
     # 收集 Min Cost Solution 的成本构成，用于 Stacked Bar
-    min_cost_breakdown = {"transport": [], "transshipment": [], "carbon": []}
+    min_cost_breakdown = {"transport": [], "transshipment": []}
 
     # 收集 Min Risk Solution 的 Total Risk，用于双轴折线图和 Stacked Bar 右轴
     min_risk_total_risk = []
@@ -69,7 +69,7 @@ def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
     min_risk_costs = []
 
     # 收集 Min Risk Solution 的成本构成，用于 CSV
-    min_risk_breakdown = {"transport": [], "transshipment": [], "carbon": []}
+    min_risk_breakdown = {"transport": [], "transshipment": []}
 
     pareto_fronts = {}
     x_labels = []
@@ -134,13 +134,11 @@ def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
             bd_min_cost = exp.evaluator.calculate_cost_breakdown(min_cost_sol)
             min_cost_breakdown["transport"].append(bd_min_cost["transport"])
             min_cost_breakdown["transshipment"].append(bd_min_cost["transshipment"])
-            min_cost_breakdown["carbon"].append(bd_min_cost["carbon"])
 
             # C2. 提取数据 for CSV (Min Risk Solution 的成本结构)
             bd_min_risk = exp.evaluator.calculate_cost_breakdown(min_risk_sol)
             min_risk_breakdown["transport"].append(bd_min_risk["transport"])
             min_risk_breakdown["transshipment"].append(bd_min_risk["transshipment"])
-            min_risk_breakdown["carbon"].append(bd_min_risk["carbon"])
 
             # D. 提取数据 CSV
             min_cost_total_cost.append(min_cost_sol.f2_cost)
@@ -167,13 +165,11 @@ def perform_cvar_sensitivity(exp: Experiment, save_dir: str):
             "min_cost_sol_cost": min_cost_total_cost,
             "transport_cost_min_cost_sol": min_cost_breakdown["transport"],
             "transshipment_cost_min_cost_sol": min_cost_breakdown["transshipment"],
-            "carbon_cost_min_cost_sol": min_cost_breakdown["carbon"],
             # Min Risk Solution
             "min_risk_sol_risk": min_risk_total_risk,
             "min_risk_sol_cost": min_risk_costs,
             "transport_cost_min_risk_sol": min_risk_breakdown["transport"],
             "transshipment_cost_min_risk_sol": min_risk_breakdown["transshipment"],
-            "carbon_cost_min_risk_sol": min_risk_breakdown["carbon"],
             "route_details_all_tasks": min_risk_routes,
         }
 
@@ -241,7 +237,7 @@ def perform_time_sensitivity(exp: Experiment, save_dir: str):
     min_risk_routes = []
     min_risk_costs = []
     min_risk_total_risk = []
-    min_risk_breakdown = {"transport": [], "transshipment": [], "carbon": []}
+    min_risk_breakdown = {"transport": [], "transshipment": []}
 
     # 根据实际成功运行的组动态添加
     actual_x_labels = []
@@ -306,7 +302,6 @@ def perform_time_sensitivity(exp: Experiment, save_dir: str):
                 bd = exp.evaluator.calculate_cost_breakdown(min_risk_sol)
                 min_risk_breakdown["transport"].append(bd["transport"])
                 min_risk_breakdown["transshipment"].append(bd["transshipment"])
-                min_risk_breakdown["carbon"].append(bd["carbon"])
 
                 # 只有成功找到解，才记录这个 x 轴标签
                 actual_x_labels.append(label_str)
@@ -323,7 +318,6 @@ def perform_time_sensitivity(exp: Experiment, save_dir: str):
                 "Min_Risk_Total_Risk": min_risk_total_risk,
                 "Transport_Cost": min_risk_breakdown["transport"],
                 "Transshipment_Cost": min_risk_breakdown["transshipment"],
-                "Carbon_Cost": min_risk_breakdown["carbon"],
                 "Route_Details_All_Tasks": min_risk_routes,
             }
             # DataFrame 构建时所有 array 长度现在必然等于 len(actual_x_labels)
@@ -380,17 +374,17 @@ def perform_gini_sensitivity(exp: Experiment, save_dir: str):
     )
 
     # 1. 实验参数设置:
-    epsilons = [0.3, 0.34, 0.38, 0.42, 0.46, 0.5, 0.54, 0.6]
+    epsilons = [0.3, 0.34, 0.38, 0.42, 0.46, 0.5, 0.54, 0.6, 0.64]
 
     # 容器初始化
     min_risk_routes = []
     min_cost_risks = []
     min_cost_total_cost = []
-    min_cost_breakdown = {"transport": [], "transshipment": [], "carbon": []}
+    min_cost_breakdown = {"transport": [], "transshipment": []}
 
     min_risk_total_risk = []
     min_risk_costs = []
-    min_risk_breakdown = {"transport": [], "transshipment": [], "carbon": []}
+    min_risk_breakdown = {"transport": [], "transshipment": []}
 
     pareto_fronts = {}
     x_labels = []
@@ -447,13 +441,11 @@ def perform_gini_sensitivity(exp: Experiment, save_dir: str):
                 bd_min_cost = exp.evaluator.calculate_cost_breakdown(min_cost_sol)
                 min_cost_breakdown["transport"].append(bd_min_cost["transport"])
                 min_cost_breakdown["transshipment"].append(bd_min_cost["transshipment"])
-                min_cost_breakdown["carbon"].append(bd_min_cost["carbon"])
 
                 # E. 提取成本细分 (Min Risk 解)
                 bd_min_risk = exp.evaluator.calculate_cost_breakdown(min_risk_sol)
                 min_risk_breakdown["transport"].append(bd_min_risk["transport"])
                 min_risk_breakdown["transshipment"].append(bd_min_risk["transshipment"])
-                min_risk_breakdown["carbon"].append(bd_min_risk["carbon"])
 
                 # F. 汇总主要指标
                 min_cost_total_cost.append(min_cost_sol.f2_cost)
@@ -480,12 +472,10 @@ def perform_gini_sensitivity(exp: Experiment, save_dir: str):
             "min_cost_sol_cost": min_cost_total_cost,
             "transport_cost_min_cost_sol": min_cost_breakdown["transport"],
             "transshipment_cost_min_cost_sol": min_cost_breakdown["transshipment"],
-            "carbon_cost_min_cost_sol": min_cost_breakdown["carbon"],
             "min_risk_sol_risk": min_risk_total_risk,
             "min_risk_sol_cost": min_risk_costs,
             "transport_cost_min_risk_sol": min_risk_breakdown["transport"],
             "transshipment_cost_min_risk_sol": min_risk_breakdown["transshipment"],
-            "carbon_cost_min_risk_sol": min_risk_breakdown["carbon"],
             "route_details_all_tasks": min_risk_routes,
         }
         df = pd.DataFrame(data_for_csv)

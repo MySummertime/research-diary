@@ -86,7 +86,6 @@ def export_detailed_routing_csv(
         "Gini_Coefficient",
         "Transport_Cost",
         "Transshipment_Cost",
-        "Carbon_Cost",
         "Transfers",
         "RoadOverRail_Ratio",
         "Transfer_Hubs",
@@ -101,7 +100,7 @@ def export_detailed_routing_csv(
         for task in evaluator.network.tasks:
             tid = task.task_id
             path = sol.path_selections[tid]
-            total_c, trans_c, ship_c, carb_c = _calculate_single_task_cost(
+            total_c, trans_c, ship_c = _calculate_single_task_cost(
                 path, evaluator
             )
             risk = _calculate_single_task_risk(path, evaluator)
@@ -122,7 +121,6 @@ def export_detailed_routing_csv(
                     f"{gini_val:.6f}",
                     f"{trans_c:.2f}",
                     f"{ship_c:.2f}",
-                    f"{carb_c:.2f}",
                     len(path.transfer_hubs),
                     ratio_str,
                     ", ".join([h.node_id for h in path.transfer_hubs]),
@@ -210,7 +208,6 @@ def run_value_analysis():
 
     # 4. 准备数据矩阵用于热图和 CSV
     tasks = [t.task_id for t in exp.network.tasks]
-    labels = ["Min Risk", "Knee", "Min Cost"]
     model_names = ["Proposed (Dynamic)", "Static (Traditional)"]
 
     # 构造 Opinion 字典用于导出
