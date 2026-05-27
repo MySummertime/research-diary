@@ -1,0 +1,15 @@
+# RHMVSP - Reliable Hazardous Materials Multi-modal Vehicle Scheduling Problem
+# Conda Environment Configuration
+name: rhmvsp
+channels:
+  - conda-forge
+  - defaults
+  - gurobi
+dependencies:
+  - python
+  - numpy
+  - networkx
+  - matplotlib
+  - gurobi # Commercial solver (primary)
+  - pulp # Open-source LP/MILP modeling (fallback)
+  - ruff # Code formatter and linter

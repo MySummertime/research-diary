@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "RHMVSP: Run Main (Solve)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "console": "integratedTerminal",
+      "args": ["--mode", "solve", "--solver", "gurobi"],
+      "justMyCode": true
+    },
+    {
+      "name": "RHMVSP: Run Demo",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "console": "integratedTerminal",
+      "args": ["--mode", "demo"],
+      "justMyCode": true
+    },
+    {
+      "name": "RHMVSP: Generate Instance",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "console": "integratedTerminal",
+      "args": ["--mode", "generate"],
+      "justMyCode": true
+    }
+  ]
+}

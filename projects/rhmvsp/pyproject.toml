@@ -1,0 +1,20 @@
+[tool.ruff]
+# 目标 Python 版本
+target-version = "py314"
+# 每行最大长度 (推荐 88-120 之间)
+line-length = 100
+# 排除不需要检查的目录
+exclude = [".git", ".venv", "build", "dist", "results", "data", "__pycache__"]
+
+[tool.ruff.lint]
+# 开启 I (isort 排序) 与 F (Pyflakes 核心检查，包含 F401 无用导入)
+select = ["I", "F"]
+ignore = []
+
+[tool.ruff.format]
+# 使用双引号
+quote-style = "double"
+# 缩进使用 Tab
+indent-style = "tab"
+# 自动在 docstring 中格式化代码示例
+docstring-code-format = true

@@ -1,0 +1,6 @@
+5-colour set:
+Warm Terracotta: #C26B48
+Celadon Green: #94C1B7
+Sage Green: #ABBCAA
+Warm Sand: #DDBF91
+Pale Lime: #DDE4B6

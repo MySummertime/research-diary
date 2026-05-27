@@ -1,0 +1,9 @@
+Esters: #013464
+Alcohols: #0366a7
+Acids: #6698c9
+Aldoketones: #a7cefe
+Aromatics: #e1efed
+Furans: #fce6ce
+Pyrazines: #fdb283
+Phenols: #eb673e
+Sulfides: #a90224

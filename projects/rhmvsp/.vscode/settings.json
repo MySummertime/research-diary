@@ -1,0 +1,47 @@
+{
+  // --- 解释器与路径配置 ---
+  "python.defaultInterpreterPath": "/opt/homebrew/Caskroom/miniforge/base/envs/rhmvsp/bin/python",
+  "python.analysis.extraPaths": ["."],
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.typeCheckingMode": "basic",
+  "python.terminal.activateEnvInCurrentTerminal": true,
+  // --- 编辑器全局视觉配置 ---
+  "editor.tabSize": 4,
+  "editor.insertSpaces": false,
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": "active",
+  "editor.renderWhitespace": "selection",
+  "editor.cursorSmoothCaretAnimation": "on",
+  // --- 文件管理与搜索过滤 ---
+  "files.exclude": {
+    "**/.git": true,
+    "**/.DS_Store": true,
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/results/**": false // 保持可见但不在默认搜索中干扰
+  },
+  "search.exclude": {
+    "**/results": true,
+    "**/data": true,
+    "**/build": true
+  },
+  "files.associations": {
+    "*.yml": "yaml"
+  },
+  // --- Python 专属配置 (Ruff 核心) ---
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports.ruff": "explicit",
+      "source.fixAll.ruff": "explicit"
+    },
+    "editor.insertSpaces": false,
+    "editor.tabSize": 4
+  },
+  // --- 插件特定配置 ---
+  "ruff.importStrategy": "fromEnvironment",
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportUnknownMemberType": "none"
+  }
+}
