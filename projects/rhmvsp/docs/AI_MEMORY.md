@@ -2,13 +2,12 @@
 
 ## 1. Problem Definition and Research Objectives (要解决的问题和研究目的)
 
-Problem: The Reliable Hazardous Materials Multi-modal Vehicle Scheduling Problem (RHMVSP) addresses the complex logistics of transporting hazardous materials across a multi-modal network (road and rail) under supply uncertainty and time-varying risk factors.
-Objectives: The research aims to formulate a mixed-integer programming model that minimizes total expected logistics costs (including vehicle deployment, transportation, hub transfer, and recourse penalties for unmet demand) while ensuring strict time and risk reliability bounds. The goal is to provide a robust routing and scheduling solution that dynamically adapts to uncertain supply at origins and time-dependent population exposure along routes.
+Problem: The Reliable Hazardous Materials Multi-modal Vehicle Scheduling Problem (RHMVSP) addresses the complex logistics of transporting hazardous materials across a multi-modal network (road and rail) under time-varying risk factors.
+Objectives: The research aims to formulate a mixed-integer programming model that minimizes total expected logistics costs (including vehicle deployment, transportation, hub transfer, and recourse penalties for unmet demand) while ensuring strict time and risk reliability bounds. The goal is to provide a robust routing and scheduling solution that dynamically adapts to time-dependent population exposure along routes.
 
 ## 2. Model Architecture and Main Components (模型架构与主要部件)
 
 Multi-modal Network: Routes strictly follow a Road-Rail-Road transfer sequence. Pure road or pure rail routes are invalid.
-Fuzzy Supply Uncertainty: Origin supply is modeled using TrapezoidalFuzzy variables instead of fixed-seed SAA scenarios. The expected supply dictates delivery capacity and recourse costs.
 Time-Varying Risk and Consequence:
 
 1. Accident probability relies on a time-varying traffic multiplier reflecting congestion and fatigue.

@@ -3,6 +3,7 @@
 # Usage: python main.py [--instance FILE] [--mode solve|generate|demo] [--solver pulp|gurobi]
 
 import argparse
+import copy
 import csv
 import json
 import os
@@ -121,7 +122,6 @@ def run_demo(config: RHMVSPConfig, size: str, logger: Logger):
 	logger.info("\nUncertainty Parameters:")
 	logger.info(f"  Alpha_max (arc risk threshold): {config.alpha_max}")
 	logger.info(f"  Alpha_T (time reliability threshold): {config.alpha_T}")
-	logger.info(f"  Gamma_sys (comprehensive reliability): {config.gamma_sys}")
 
 	# Solve with Branch-and-Price
 	logger.info("\n" + "=" * 60)
@@ -177,7 +177,10 @@ def run_generate(config: RHMVSPConfig, size: str, logger: Logger):
 	"""Generate and save an instance in JSON and CSV format within data/{size}/."""
 	logger.info(f"Generating {size}-size instance...")
 
-	gen = InstanceGenerator(config, seed=config.seed)
+	# Work on a deep copy so that config.T_max mutations during generation
+	# do not leak back to the caller.
+	gen_config = copy.deepcopy(config)
+	gen = InstanceGenerator(gen_config, seed=config.seed)
 	instance = gen.generate(size=size)
 
 	dir_path = f"data/{size}"
@@ -233,7 +236,7 @@ def run_generate(config: RHMVSPConfig, size: str, logger: Logger):
 
 	try:
 		network = MultimodalNetwork.from_instance(instance)
-		viz = Visualizer(config)
+		viz = Visualizer(gen_config)
 		net_path = os.path.join(dir_path, "network.png")
 		viz.plot_network(network, net_path)
 		logger.info(f"Network topology plot saved to: {net_path} (and .tiff)")
@@ -278,6 +281,7 @@ def main():
 
 	# Dispatch
 	instance = None
+	solution = None
 	if args.mode == "demo":
 		solution, instance = run_demo(config, args.size, logger)
 	elif args.mode == "solve":
@@ -287,7 +291,6 @@ def main():
 		solution, instance = run_solve(config, args.instance, logger)
 	elif args.mode == "generate":
 		instance = run_generate(config, args.size, logger)
-		solution = None
 
 	# Save results
 	if solution is not None:
