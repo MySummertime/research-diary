@@ -8,11 +8,6 @@ Based on Liu (2007/2015) Uncertainty Theory.
 When alpha_T > 0.5, uncertain measure M{...} is mathematically equivalent to
 credibility measure Cr{...} (Liu 2007, §1.12).
 
-Supply uncertainty (§3.2): Origin supply Q~_i is modeled as a trapezoidal fuzzy
-variable Q~_i = (q_a, q_b, q_c, q_d) representing the range of available hazmat
-stock at origin i, following Liu (2007) uncertain variable framework. The uncertain
-measure M{Q~_i >= D_i} quantifies whether supply is adequate to meet demand D_i.
-
 Time-varying risk (§2.2): Both accident probability alpha_ij^m(t) and consequence
 C_ij^m(t) are time-dependent. alpha scales with a traffic/fatigue multiplier
 phi(t) and C scales with a population exposure multiplier psi(t) reflecting
@@ -79,13 +74,13 @@ class TriangularFuzzy:
         When alpha > 0.5, equivalent to: L >= (2*alpha-1)*c + 2*(1-alpha)*b
         Returns the minimum L satisfying the constraint.
         """
-        # Support full alpha range (0,1]. For alpha <= 0.5 the required L
+        # Support full alpha range (0,1]. For alpha < 0.5 the required L
         # lies on the left slope [a, b] of the triangular membership where
         # M{t~ <= x} = 0.5 * (x - a) / (b - a).
-        if alpha <= 0.5:
+        if alpha < 0.5:
             # Solve 0.5 * (x - a) / (b - a) = alpha => x = a + 2*alpha*(b-a)
             return self.a + 2.0 * alpha * (self.b - self.a)
-        # alpha > 0.5: use right-tail deterministic equivalent
+        # alpha >= 0.5: use right-tail deterministic equivalent
         return (2.0 * alpha - 1.0) * self.c + 2.0 * (1.0 - alpha) * self.b
 
     def deterministic_equivalent_lower(self, alpha: float) -> float:
@@ -123,8 +118,7 @@ class TrapezoidalFuzzy:
         mu(x) = (d-x)/(d-c)  if c <= x <= d
         mu(x) = 0            otherwise
 
-    Used for: transfer time (§3.2, Eq.8), repositioning time,
-              and supply quantity uncertainty (§3.2, supply model).
+    Used for: transport time (§3.2, Eq.7) and transfer time (§3.2, Eq.8).
     """
     a: float  # Minimum
     b: float  # Lower mode start
@@ -179,12 +173,14 @@ class TrapezoidalFuzzy:
         For trapezoidal, when alpha > 0.5 (right tail):
             L >= (2*alpha-1)*d + 2*(1-alpha)*c
         """
-        # For alpha in (0, 0.5], the required L lies on the rising slope [a,b]
+        # For alpha < 0.5, the required L lies on the rising slope [a,b]
         # where M{tau~ <= x} = (x - a) / (2*(b-a)). Solve for x:
         #   (x - a) / (2*(b-a)) = alpha  => x = a + 2*alpha*(b-a)
-        if alpha <= 0.5:
+        # For alpha >= 0.5, use right-tail formula to be consistent with
+        # compute_time_reliability_od which always uses the right-branch.
+        if alpha < 0.5:
             return self.a + 2.0 * alpha * (self.b - self.a)
-        # alpha > 0.5: right-tail formula
+        # alpha >= 0.5: right-tail formula
         return (2.0 * alpha - 1.0) * self.d + 2.0 * (1.0 - alpha) * self.c
 
     def deterministic_equivalent_lower(self, alpha: float) -> float:
@@ -232,9 +228,12 @@ class BoolUncertainVariable:
 # Time-varying Risk Multipliers (§2.2, S2-2 fix)
 # ============================================================
 
-def _traffic_multiplier(hour_of_day: float) -> float:
+def _traffic_multiplier(hour_of_day: float, risk_scale: float = 1.0) -> float:
     """
     Time-varying accident probability multiplier phi(t) (S2-2).
+
+    risk_scale in [0,1]: 0 → constant 1.0, 1 → full time-varying formula.
+    phi_eff(t) = 1 + risk_scale * (phi(t) - 1).
 
     Models elevated hazmat accident risk during:
     - Night/early morning (22:00-06:00): multiplier=1.5 (fatigue, low visibility)
@@ -245,26 +244,28 @@ def _traffic_multiplier(hour_of_day: float) -> float:
     """
     h = hour_of_day % 24.0
     if h < 6.0:
-        return 1.5
+        raw = 1.5
     elif h < 7.0:
-        # Smooth transition: 22:00-06:00 -> 07:00-09:00
-        return 1.5 - 0.2 * (h - 6.0)
+        raw = 1.5 - 0.2 * (h - 6.0)
     elif h < 9.0:
-        return 1.3
+        raw = 1.3
     elif h < 17.0:
-        return 1.0
+        raw = 1.0
     elif h < 19.0:
-        return 1.3
+        raw = 1.3
     elif h < 22.0:
-        return 1.0
+        raw = 1.0
     else:
-        # 22:00 -> gradually rising back to 1.5 by midnight
-        return 1.0 + 0.5 * ((h - 22.0) / 2.0)
+        raw = 1.0 + 0.5 * ((h - 22.0) / 2.0)
+    return 1.0 + risk_scale * (raw - 1.0)
 
 
-def _population_exposure_multiplier(hour_of_day: float) -> float:
+def _population_exposure_multiplier(hour_of_day: float, risk_scale: float = 1.0) -> float:
     """
     Time-varying consequence multiplier psi(t) (S2-2).
+
+    risk_scale in [0,1]: 0 → constant 1.0, 1 → full time-varying formula.
+    psi_eff(t) = 1 + risk_scale * (psi(t) - 1).
 
     Hazmat accident consequence C(t) scales with population exposure:
     - Daytime (08:00-20:00): peak activity, psi=1.0 (reference)
@@ -276,18 +277,20 @@ def _population_exposure_multiplier(hour_of_day: float) -> float:
     """
     h = hour_of_day % 24.0
     if h < 6.0:
-        return 0.5
+        raw = 0.5
     elif h < 8.0:
-        return 0.5 + 0.25 * ((h - 6.0) / 2.0)  # ramp up 0.5->0.75
+        raw = 0.5 + 0.25 * ((h - 6.0) / 2.0)
     elif h < 20.0:
-        return 1.0
+        raw = 1.0
     elif h < 22.0:
-        return 1.0 - 0.25 * ((h - 20.0) / 2.0)  # ramp down 1.0->0.75
+        raw = 1.0 - 0.25 * ((h - 20.0) / 2.0)
     else:
-        return 0.75 - 0.25 * ((h - 22.0) / 2.0)  # ramp down 0.75->0.5
+        raw = 0.75 - 0.25 * ((h - 22.0) / 2.0)
+    return 1.0 + risk_scale * (raw - 1.0)
 
 
-def time_varying_alpha(alpha_base: float, start_time: float, end_time: float) -> float:
+def time_varying_alpha(alpha_base: float, start_time: float, end_time: float,
+                       risk_scale: float = 1.0) -> float:
     """
     Compute time-averaged accident probability over transit window [start_time, end_time].
 
@@ -297,7 +300,7 @@ def time_varying_alpha(alpha_base: float, start_time: float, end_time: float) ->
     Returns effective alpha for the transit.
     """
     if start_time >= end_time:
-        return min(0.95, alpha_base * _traffic_multiplier(start_time))
+        return min(0.95, alpha_base * _traffic_multiplier(start_time, risk_scale))
 
     total_integral = 0.0
     current_t = start_time
@@ -310,8 +313,8 @@ def time_varying_alpha(alpha_base: float, start_time: float, end_time: float) ->
         seg_end = min(end_time, day * 24.0 + next_h)
         step = seg_end - current_t
         # Trapezoidal integration within segment
-        phi_start = _traffic_multiplier(current_t)
-        phi_end = _traffic_multiplier(seg_end - 1e-9)
+        phi_start = _traffic_multiplier(current_t, risk_scale)
+        phi_end = _traffic_multiplier(seg_end - 1e-9, risk_scale)
         total_integral += (phi_start + phi_end) / 2.0 * step
         current_t = seg_end
 
@@ -319,229 +322,15 @@ def time_varying_alpha(alpha_base: float, start_time: float, end_time: float) ->
     return min(0.95, alpha_base * avg_multiplier)
 
 
-def time_varying_consequence(C_base: float, hour_of_day: float) -> float:
+def time_varying_consequence(C_base: float, hour_of_day: float,
+                             risk_scale: float = 1.0) -> float:
     """
     Compute time-dependent consequence C(t) = C_base * psi(t).
 
     Consequence reflects population exposure at time of accident.
     """
-    return C_base * _population_exposure_multiplier(hour_of_day)
+    return C_base * _population_exposure_multiplier(hour_of_day, risk_scale)
 
-
-# ============================================================
-# Supply Uncertainty Model (§3.2, S2-1 fix)
-# ============================================================
-
-class SupplyUncertaintyModel:
-    """
-    Models supply uncertainty at hazmat origins using uncertainty theory (Liu 2007).
-
-    For each origin i, the available supply Q~_i is modeled as a trapezoidal fuzzy
-    uncertain variable:
-        Q~_i = (q_a, q_b, q_c, q_d)
-    where:
-        q_a = minimum guaranteed supply (safety stock floor)
-        q_b = pessimistic expected supply
-        q_c = optimistic expected supply
-        q_d = maximum possible supply (capacity ceiling)
-
-    The uncertain measure M{Q~_i >= D_i} gives the degree of belief that supply
-    is adequate to meet demand D_i without shortfall.
-
-    For supply adequacy constraint M{Q~_i >= D_i} >= gamma_s (supply reliability
-    threshold), the deterministic equivalent (alpha > 0.5) is:
-        D_i <= (2*gamma_s - 1)*q_a + 2*(1 - gamma_s)*q_b
-
-    This replaces the ad-hoc SAA approach with a theoretically grounded
-    uncertainty-measure-based supply reliability constraint.
-
-    References:
-        Liu B. (2007). Uncertainty Theory, 2nd ed. Springer.
-        Liu B. (2015). Uncertainty Theory, 4th ed. Springer.
-        Delbart et al. (2025). Three-stage service network design in rail-road
-            networks with demand and capacity uncertainty. EJOR 320:550-568.
-    """
-
-    def __init__(self, config):
-        self.config = config
-
-    def make_supply_fuzzy(self, demand: float, od_idx: int) -> TrapezoidalFuzzy:
-        """
-        Construct trapezoidal fuzzy supply variable for OD pair od_idx.
-
-        Calibrated from Delbart et al. (2025) supply variability model:
-          - Safety stock floor:   q_a = 0.3 * D
-          - Pessimistic mode:     q_b = 0.6 * D
-          - Optimistic mode:      q_c = 0.9 * D
-          - Maximum capacity:     q_d = 1.3 * D
-
-        The plateau [q_b, q_c] represents the most credible supply range.
-        """
-        return TrapezoidalFuzzy(
-            a=round(demand * 0.3, 2),
-            b=round(demand * 0.6, 2),
-            c=round(demand * 0.9, 2),
-            d=round(demand * 1.3, 2),
-        )
-
-    def supply_adequacy_measure(self, demand: float, od_idx: int) -> float:
-        """
-        Compute M{Q~_i >= D_i}: uncertain measure that supply meets demand exactly.
-
-        Returns value in [0, 1] indicating belief that supply >= demand.
-        """
-        q_fuzzy = self.make_supply_fuzzy(demand, od_idx)
-        return q_fuzzy.uncertain_measure_geq(demand)
-
-    def expected_supply(self, demand: float, od_idx: int) -> float:
-        """
-        Compute E^M[Q~_i]: expected available supply under uncertainty theory.
-
-        E^M[Q~] = (q_a + q_b + q_c + q_d) / 4 for trapezoidal.
-        """
-        q_fuzzy = self.make_supply_fuzzy(demand, od_idx)
-        return q_fuzzy.mean()
-
-    def expected_shortfall(self, demand: float, capacity_available: float,
-                           od_idx: int) -> float:
-        """
-        Compute E^M[max(0, D - min(Q~_i, CAP))]: expected unmet demand.
-
-        Uses 5‑point Gauss‑Legendre quadrature over the fuzzy supply distribution
-        to integrate the shortfall under the uncertainty measure.
-        """
-        q_fuzzy = self.make_supply_fuzzy(demand, od_idx)
-        # #12: Read Gauss-Legendre from config (no hardcoding)
-        alphas = list(getattr(self.config, 'gauss_legendre_nodes_5',
-                              (0.04691008, 0.23076534, 0.5, 0.76923466, 0.95308992)))
-        weights = list(getattr(self.config, 'gauss_legendre_weights_5',
-                               (0.11846344, 0.23931434, 0.28444444, 0.23931434, 0.11846344)))
-        total = 0.0
-        for alpha, w in zip(alphas, weights):
-            # Conservative supply estimate: lower bound of fuzzy supply at level alpha
-            if alpha > 0.5:
-                q_low = q_fuzzy.deterministic_equivalent_upper(alpha)
-            else:
-                q_low = q_fuzzy.a + 2.0 * alpha * (q_fuzzy.b - q_fuzzy.a)
-            effective_supply = min(q_low, capacity_available)
-            shortfall = max(0.0, demand - effective_supply)
-            total += w * shortfall
-        return total
-
-    def expected_holding_cost(self, demand: float, capacity_available: float,
-                              od_idx: int, c_holding_base: float) -> float:
-        """
-        Compute expected inventory holding cost for residual supply not transported,
-        coupled with uncertain holding penalty.
-        
-        E^M[c~_h * max(0, Q~_i - min(D, CAP))]
-        where c~_h = c_h_base * (1 + delta_H * xi_S) and xi_S is the underlying shock.
-        Uses 5-point Gauss-Legendre quadrature to rigorously evaluate the expected 
-        value of the product of monotonically comonotonic uncertain variables.
-        """
-        q_fuzzy = self.make_supply_fuzzy(demand, od_idx)
-        delivered = min(demand, capacity_available)
-        delta_H = getattr(self.config, 'delta_H', 0.4)  # Holding penalty fluctuation
-        
-        # 5-point Gauss-Legendre nodes and weights on [0, 1]
-        alphas = getattr(self.config, 'gauss_legendre_nodes_5', (0.04691008, 0.23076534, 0.5, 0.76923466, 0.95308992))
-        weights = getattr(self.config, 'gauss_legendre_weights_5', (0.11846344, 0.23931434, 0.28444444, 0.23931434, 0.11846344))
-        total = 0.0
-        
-        for alpha, w in zip(alphas, weights):
-            # Inverse distribution of Trapezoidal Uncertain Variable Q~
-            if alpha < 0.5:
-                q_val = q_fuzzy.a + 2.0 * alpha * (q_fuzzy.b - q_fuzzy.a)
-            elif alpha == 0.5:
-                q_val = (q_fuzzy.b + q_fuzzy.c) / 2.0
-            else:
-                q_val = (2.0 * alpha - 1.0) * q_fuzzy.d + 2.0 * (1.0 - alpha) * q_fuzzy.c
-                
-            # Inverse distribution of linear shock xi_S ~ L(-1, 1) -> c~_h
-            xi_val = 2.0 * alpha - 1.0
-            c_val = c_holding_base * (1.0 + delta_H * xi_val)
-            
-            surplus = max(0.0, q_val - delivered)
-            total += w * c_val * surplus
-            
-        return total
-
-    def deterministic_supply_equivalent(self, demand: float, od_idx: int,
-                                         gamma_s: float = 0.8) -> float:
-        """
-        Deterministic equivalent for supply adequacy constraint:
-        M{Q~_i >= D_i} >= gamma_s
-
-        When gamma_s > 0.5: equivalent to D_i <= (2*g-1)*q_a + 2*(1-g)*q_b
-        Returns the maximum demand that satisfies this supply reliability level.
-        """
-        q_fuzzy = self.make_supply_fuzzy(demand, od_idx)
-        assert gamma_s > 0.5, "Supply reliability threshold must be > 0.5"
-        return q_fuzzy.deterministic_equivalent_lower(gamma_s)
-
-
-class DemandUncertaintyModel:
-    """
-    Models demand-side uncertainty and opportunity cost (penalty) uncertainty.
-    Each OD pair uses an independent basic uncertain variable xi_i ~ Tri(-1, 0, 1).
-    Within each OD, demand and penalty are correlated through the same xi_i.
-    Demand D~_i = D_base * (1 + delta_D * xi_i)
-    Penalty c~_i = c_base * (1 + delta_C * xi_i)
-
-    #11: Independence across OD pairs is achieved via per-OD quadrature offsets.
-    """
-
-    def __init__(self, config):
-        self.config = config
-
-    def _inverse_distribution_xi(self, alpha: float) -> float:
-        """
-        Inverse uncertainty distribution of xi ~ Tri(-1, 0, 1).
-        Phi^{-1}(alpha) = 2*alpha - 1
-        """
-        return 2.0 * alpha - 1.0
-
-    def _od_independent_alpha(self, alpha: float, od_idx: int) -> float:
-        """
-        #11: Map alpha to an OD-specific shifted alpha for independent ξ_i.
-        Uses golden-ratio offset to ensure each OD samples different points
-        while preserving the uniform coverage of [0,1].
-        """
-        golden_ratio = 0.618033988749895
-        shifted = (alpha + od_idx * golden_ratio) % 1.0
-        # Clamp to (0,1) open interval to avoid boundary issues
-        return max(1e-10, min(1.0 - 1e-10, shifted))
-
-    def deterministic_demand_equivalent(self, d_base: float) -> float:
-        """
-        Deterministic equivalent for chance constraint M{q_del >= D~_i} >= beta_D.
-        Since D~_i is strictly increasing w.r.t xi, the beta_D-optimistic value is:
-        D_sup = D_base * (1 + delta_D * Phi^{-1}_xi(beta_D))
-        """
-        xi_val = self._inverse_distribution_xi(self.config.beta_D)
-        return d_base * (1.0 + self.config.delta_D * xi_val)
-
-    def expected_correlated_penalty(self, d_base: float, c_base: float, q_delivered: float,
-                                     od_idx: int = 0) -> float:
-        """
-        Expected value of the product: E^M[ c~_opp * max(0, D~ - q_delivered) ].
-        #11: Each OD pair uses independent ξ_i via per-OD quadrature offset.
-        Uses 5-point Gaussian quadrature from config.
-        """
-        alphas = list(getattr(self.config, 'gauss_legendre_nodes_5',
-                              (0.04691008, 0.23076534, 0.5, 0.76923466, 0.95308992)))
-        weights = list(getattr(self.config, 'gauss_legendre_weights_5',
-                               (0.11846344, 0.23931434, 0.28444444, 0.23931434, 0.11846344)))
-        total = 0.0
-        for alpha, w in zip(alphas, weights):
-            # #11: Use OD-specific independent ξ_i
-            od_alpha = self._od_independent_alpha(alpha, od_idx)
-            xi_val = self._inverse_distribution_xi(od_alpha)
-            d_val = d_base * (1.0 + self.config.delta_D * xi_val)
-            c_val = c_base * (1.0 + self.config.delta_C * xi_val)
-            shortage = max(0.0, d_val - q_delivered)
-            total += w * c_val * shortage
-        return total
 
 
 class UncertaintyEngine:
@@ -554,8 +343,7 @@ class UncertaintyEngine:
 
     def __init__(self, config):
         self.config = config
-        self.supply_model = SupplyUncertaintyModel(config)
-        self.demand_model = DemandUncertaintyModel(config)
+        self.risk_scale = getattr(config, 'risk_scale', 1.0)
 
     def make_transport_time(self, distance: float, mode: int) -> TrapezoidalFuzzy:
         """Create transport time fuzzy variable for an arc (§3.2, Eq.7).
@@ -596,27 +384,13 @@ class UncertaintyEngine:
             d=base * (1.0 + 3.0 * scale)
         )
 
-    def make_reposition_time(self, distance: float = 50.0) -> TrapezoidalFuzzy:
-        """Create dynamic empty repositioning time fuzzy variable based on road distance plus safety buffer."""
-        buffer_h = self.config.empty_reposition_buffer_hours
-        base_time = max(0.1, distance / self.config.road_speed) + buffer_h
-        dt = getattr(self.config, 'delta_T', 0.2)
-        scale = dt / 0.2 if dt > 0 else 0.001
-        
-        return TrapezoidalFuzzy(
-            a=base_time * max(0.1, 1.0 - 0.2 * scale), 
-            b=base_time, 
-            c=base_time * (1.0 + 0.2 * scale), 
-            d=base_time * (1.0 + 0.5 * scale)
-        )
-
     def _integrate_risk_multiplier(self, t1: float, t2: float) -> float:
         """
         Calculate time-averaged accident probability multiplier phi(t) over [t1, t2].
         Uses exact piecewise integration of the traffic-dependent multiplier.
         """
         if t1 >= t2:
-            return _traffic_multiplier(t1)
+            return _traffic_multiplier(t1, self.risk_scale)
 
         total_integral = 0.0
         current_t = t1
@@ -627,8 +401,8 @@ class UncertaintyEngine:
             next_h = next((bp for bp in breakpoints if bp > h), 24.0)
             seg_end = min(t2, day * 24.0 + next_h)
             step = seg_end - current_t
-            phi_s = _traffic_multiplier(current_t)
-            phi_e = _traffic_multiplier(seg_end - 1e-9)
+            phi_s = _traffic_multiplier(current_t, self.risk_scale)
+            phi_e = _traffic_multiplier(seg_end - 1e-9, self.risk_scale)
             total_integral += (phi_s + phi_e) / 2.0 * step
             current_t = seg_end
 
@@ -640,7 +414,7 @@ class UncertaintyEngine:
         Uses exact piecewise integration (Simpson's 1/3 rule) of the multipliers.
         """
         if t1 >= t2:
-            return _traffic_multiplier(t1) * _population_exposure_multiplier(t1)
+            return _traffic_multiplier(t1, self.risk_scale) * _population_exposure_multiplier(t1, self.risk_scale)
 
         total_integral = 0.0
         current_t = t1
@@ -653,9 +427,9 @@ class UncertaintyEngine:
             step = seg_end - current_t
             
             mid_t_seg = (current_t + seg_end) / 2.0
-            v_start = _traffic_multiplier(current_t) * _population_exposure_multiplier(current_t)
-            v_mid = _traffic_multiplier(mid_t_seg) * _population_exposure_multiplier(mid_t_seg)
-            v_end = _traffic_multiplier(seg_end - 1e-9) * _population_exposure_multiplier(seg_end - 1e-9)
+            v_start = _traffic_multiplier(current_t, self.risk_scale) * _population_exposure_multiplier(current_t, self.risk_scale)
+            v_mid = _traffic_multiplier(mid_t_seg, self.risk_scale) * _population_exposure_multiplier(mid_t_seg, self.risk_scale)
+            v_end = _traffic_multiplier(seg_end - 1e-9, self.risk_scale) * _population_exposure_multiplier(seg_end - 1e-9, self.risk_scale)
             
             total_integral += (step / 6.0) * (v_start + 4.0 * v_mid + v_end)
             current_t = seg_end
@@ -683,7 +457,8 @@ class UncertaintyEngine:
             start_time = arrival_time
             end_time = arrival_time + 1.0
 
-        if not time_dependent:
+        # Config switch: when enable_time_varying_risk=False, treat as constant alpha
+        if not time_dependent or not getattr(self.config, 'enable_time_varying_risk', True):
             return 1.0 - alpha
 
         if fuzzy_duration is not None:
@@ -777,15 +552,6 @@ class UncertaintyEngine:
             coeffs.append(fv.deterministic_equivalent_lower(alpha_T))
         return coeffs
 
-    def make_transport_cost_fuzzy(self, base_cost: float) -> TriangularFuzzy:
-        """
-        Create transport cost fuzzy variable.
-        """
-        spread = self.config.fuzzy_cost_spread
-        return TriangularFuzzy(
-            a=base_cost * spread[0],
-            b=base_cost * spread[1],
-            c=base_cost * spread[2]
-        )
+
 
 

@@ -1,8 +1,8 @@
 """
 Reliability Analysis Module (§2).
 
-Implements the three-level risk reliability, three-level time reliability,
-and comprehensive reliability framework.
+Implements the three-level risk reliability and three-level time reliability
+framework.
 
 S2-3 fix: Time reliability R_T is now a continuous uncertain measure value
           M{Z~ <= L_od} in [alpha_T, 1], not a binary {0,1} indicator.
@@ -28,7 +28,6 @@ class PathReliabilityResult:
     # Path-level
     risk_reliability: float = 1.0  # R(P) = min arc/node R (Eq.4)
     time_reliability: float = 1.0  # R_T^od(v) as continuous M{Z~<=L} (Eq.10, S2-3)
-    comprehensive: float = 1.0  # R_sys = min{R, R_T} (Eq.5c)
 
     # Feasibility flags
     arc_risk_feasible: bool = True  # All arcs satisfy alpha_max
@@ -54,6 +53,9 @@ class ReliabilityAnalyzer:
     def __init__(self, config, engine: UncertaintyEngine):
         self.config = config
         self.engine = engine
+        # Cache for dynamically computed transport times per arc
+        # key: (arc_id, config_signature) -> TrapezoidalFuzzy
+        self._arc_time_cache: dict[tuple, 'TrapezoidalFuzzy'] = {}
 
     def check_arc_risk(self, arc: Arc, start_time: float = 0.0, end_time: float = 0.0,
                        time_dependent: bool = True,
@@ -123,10 +125,13 @@ class ReliabilityAnalyzer:
         """
         Compute O-D level time reliability (§2.3.2, Eq.10). S2-3 fix.
 
+        Uses engine.make_transport_time() for dynamic fuzzy time parameters
+        so that config changes (rail_fuzzy_time_ratio, delta_T) take effect.
+
         Returns: (feasible, R_T, arrival_upper, arrival_lower, arrival_times_upper)
         """
         alpha_T = od.alpha_T_od
-        
+
         # Initialize accumulators for fuzzy time parameters
         z_a = 0.0
         z_b = 0.0
@@ -143,25 +148,42 @@ class ReliabilityAnalyzer:
             if prev_mode is not None and prev_mode != mode:
                 if transfer_idx < len(transfer_nodes):
                     tn = transfer_nodes[transfer_idx]
-                    z_a += tn.transfer_time_a
-                    z_b += tn.transfer_time_b
-                    z_c += tn.transfer_time_c
-                    z_d += tn.transfer_time_d
+                    # Use engine for dynamic transfer time (responds to delta_T)
+                    trap_transfer = self.engine.make_transfer_time()
+                    # Blend engine transfer time with instance-specified parameters:
+                    # use engine values which respect config.delta_T
+                    z_a += trap_transfer.a
+                    z_b += trap_transfer.b
+                    z_c += trap_transfer.c
+                    z_d += trap_transfer.d
                     transfer_idx += 1
             # Rail waiting window
             if mode == 2:
                 arrival_upper = max(arrival_upper, arc.e_window)
                 arrival_lower = max(arrival_lower, arc.e_window)
-            # Transport time accumulation (#9: trapezoidal for rail)
-            arrival_upper += getattr(arc, 'time_d', arc.time_c)
-            arrival_lower += arc.time_a
-            z_a += arc.time_a
-            z_b += arc.time_b
-            z_c += arc.time_c
-            z_d += getattr(arc, 'time_d', arc.time_c)
+            # Transport time: use engine for dynamic fuzzy parameters (#9)
+            # This ensures config.rail_fuzzy_time_ratio and config.delta_T
+            # are reflected in the evaluation, not just in pricing.
+            trap_time = self.engine.make_transport_time(arc.distance, mode)
+            arrival_upper += trap_time.d
+            arrival_lower += trap_time.a
+            z_a += trap_time.a
+            z_b += trap_time.b
+            z_c += trap_time.c
+            z_d += trap_time.d
             arrival_times_upper.append(arrival_upper)
             prev_mode = mode
-        time_feasible = (departure_time + z_c) <= od.L_od
+
+        # Feasibility: deterministic equivalent arrival <= L_od
+        if alpha_T < 0.5:
+            # Left branch: x = z_a + 2*alpha*(z_b - z_a)
+            det_equiv_coeff = z_a + 2.0 * alpha_T * (z_b - z_a)
+        else:
+            # Right branch (alpha_T >= 0.5): det_equiv = (2*alpha_T-1)*z_d + 2*(1-alpha_T)*z_c
+            det_equiv_coeff = (2.0 * alpha_T - 1.0) * z_d + 2.0 * (1.0 - alpha_T) * z_c
+        det_upper_arrival = departure_time + det_equiv_coeff
+        time_feasible = det_upper_arrival <= od.L_od
+
         # The fuzzy trapezoid Z~ must include the departure time offset so that
         # uncertain_measure_leq(L_od) correctly evaluates M{departure + Z_arcs <= L_od}.
         trap_Z = TrapezoidalFuzzy(
@@ -267,9 +289,11 @@ class ReliabilityAnalyzer:
         result.time_window_feasible = time_ok
 
         # 1. Arc-level risk reliability (Eq.1, Eq.9) with time-dependent risk (S2-2)
-        for k, arc in enumerate(arcs):
+        for k, (arc, mode) in enumerate(zip(arcs, arc_modes)):
             start_t = arr_times[k - 1] if k > 0 else departure_time
-            f_dur = (arc.time_a, arc.time_b, arc.time_c, getattr(arc, 'time_d', arc.time_c))
+            # Use engine-computed fuzzy duration for consistency with time reliability
+            trap_dur = self.engine.make_transport_time(arc.distance, mode)
+            f_dur = (trap_dur.a, trap_dur.b, trap_dur.c, trap_dur.d)
             feasible, R = self.check_arc_risk(arc, start_t, time_dependent=True, fuzzy_duration=f_dur)
             result.arc_reliabilities[(arc.i, arc.j)] = R
             if not feasible:
@@ -295,11 +319,6 @@ class ReliabilityAnalyzer:
         result.transfer_feasible = tr_ok
         if not (op_ok and tr_ok):
             result.time_window_feasible = False
-
-        # 5. Comprehensive reliability (Eq.5c)
-        result.comprehensive = self.engine.comprehensive_reliability(
-            result.risk_reliability, result.time_reliability
-        )
 
         return result
 
@@ -359,18 +378,20 @@ class ReliabilityAnalyzer:
         """
         Analyze reliability of a complete solution. S2-5 fix.
 
-        Returns dict with per-OD and network-level reliability metrics,
-        including the true continuous R_net computed from path analysis.
+        Returns dict with per-OD and network-level risk and time reliability
+        metrics computed independently from path analysis.
         """
         od_results = {}
-        od_reliabilities = []
+        od_risks = []
+        od_times = []
 
         for od_idx, od in enumerate(network.od_pairs):
             if od_idx not in vehicle_assignments:
                 continue
 
             assignments = vehicle_assignments[od_idx]
-            batch_reliabilities = []
+            batch_risks = []
+            batch_times = []
 
             for assignment in assignments:
                 arcs = assignment.get("arcs", [])
@@ -379,22 +400,29 @@ class ReliabilityAnalyzer:
                 transfers = assignment.get("transfer_nodes", [])
 
                 result = self.analyze_path(arcs, modes, transfers, od, dep_time)
-                batch_reliabilities.append(result.comprehensive)
+                batch_risks.append(result.risk_reliability)
+                batch_times.append(result.time_reliability)
 
-            # O-D reliability = min over batches (Eq.5a)
-            R_od = self.engine.od_reliability(batch_reliabilities)
+            # O-D risk = min over batches (serial, Eq.5a)
+            R_od_risk = min(batch_risks) if batch_risks else 1.0
+            # O-D time = min over batches (serial, Eq.5a)
+            R_od_time = min(batch_times) if batch_times else 1.0
+
             od_results[od_idx] = {
-                "R_od": R_od,
-                "num_batches": len(batch_reliabilities),
-                "batch_reliabilities": batch_reliabilities,
+                "R_od_risk": R_od_risk,
+                "R_od_time": R_od_time,
+                "num_batches": len(batch_risks),
+                "batch_risks": batch_risks,
+                "batch_times": batch_times,
             }
-            od_reliabilities.append(R_od)
+            od_risks.append(R_od_risk)
+            od_times.append(R_od_time)
 
-        # Network reliability (Eq.5b): min over all O-D pairs
-        R_net = self.engine.network_reliability(od_reliabilities)
+        R_net_risk = min(od_risks) if od_risks else 1.0
+        R_net_time = min(od_times) if od_times else 1.0
 
         return {
             "od_results": od_results,
-            "R_net": R_net,
-            "all_od_reliable": all(r >= self.config.beta_net for r in od_reliabilities),
+            "R_net_risk": R_net_risk,
+            "R_net_time": R_net_time,
         }

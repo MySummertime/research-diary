@@ -1,7 +1,9 @@
 """Instance Data Generator (§3.1, §4.4.2)."""
 
 
+import math
 import numpy as np
+import networkx as nx
 
 from config import RHMVSPConfig
 from .uncertainty import UncertaintyEngine
@@ -27,10 +29,9 @@ class InstanceGenerator:
 	Generate synthetic test instances for RHMVSP.
 
 	Creates road-rail multimodal networks with:
-	- Hub nodes (rail stations) connected by rail arcs
-	- Road arcs connecting nearby hubs and providing last-mile access
-	- Transfer nodes at rail stations
-	- O-D pairs with hazmat demand
+	- Hub nodes (rail stations) forming an inner core.
+	- Spoke nodes forming an outer ring.
+	- Unrestricted road-rail-road hops via distance-based arc generation.
 	"""
 
 	def __init__(self, config: RHMVSPConfig, seed: int = 42):
@@ -41,303 +42,158 @@ class InstanceGenerator:
 	def generate(self, size: str = "small") -> dict:
 		"""Generate an instance of given size."""
 		sizes = {
-			"small": {"nodes": 20, "od_pairs": 5, "vehicles": 15},
-			"medium": {"nodes": 50, "od_pairs": 15, "vehicles": 40},
-			"large": {"nodes": 100, "od_pairs": 30, "vehicles": 80},
+			"small":  {"nodes": 25,  "hubs": 5,  "od_pairs": 5,  "vehicles": 30, "T_max_init": 24},
+			"medium": {"nodes": 60,  "hubs": 10, "od_pairs": 15, "vehicles": 90, "T_max_init": 36},
+			"large":  {"nodes": 120, "hubs": 20, "od_pairs": 30, "vehicles": 150, "T_max_init": 48},
 		}
 		params = sizes[size]
+		self.config.T_max = max(self.config.T_max, params["T_max_init"])
 		return self._generate_instance(
 			name=f"rhmvsp_{size}",
 			num_nodes=params["nodes"],
+			num_hubs=params["hubs"],
 			num_od_pairs=params["od_pairs"],
 			num_vehicles=params["vehicles"],
 		)
 
 	def _generate_instance(
-		self, name: str, num_nodes: int, num_od_pairs: int, num_vehicles: int
+		self, name: str, num_nodes: int, num_hubs: int = None, num_od_pairs: int = 5, num_vehicles: int = 50
 	) -> dict:
-		"""Generate a rigorous Hub-and-Spoke multimodal instance."""
+		"""Generate a rigorously connected Hub-and-Spoke multimodal instance."""
 		rng = self.rng
 
-		# Dynamic timetable: scale services with network size, minimum every 6h
-		# small(20)=8 services, medium(50)=12, large(100)=16
+		# Dynamic timetable: scale services with network size
 		num_services = max(8, num_nodes // 3)
 		interval = 48.0 / num_services
 		dynamic_schedule_hours = [round(interval / 2.0 + i * interval, 1) for i in range(num_services)]
 
-		# 1. Partition Nodes into Central Hubs (Rail Stations) and Peripheral Spokes
-		num_hubs = max(3, int(np.floor(0.4 * num_nodes)))
-
+		# 1. Partition Nodes into Hubs (Inner) and Spokes (Outer)
+		if num_hubs is None:
+			num_hubs = max(3, int(np.floor(0.3 * num_nodes)))
 		hub_ids = list(range(1, num_hubs + 1))
 		spoke_ids = list(range(num_hubs + 1, num_nodes + 1))
 
-		# Split spokes into Origins (West/North) and Destinations (East/South)
-		mid_spoke = len(spoke_ids) // 2
-		origin_spokes = spoke_ids[:mid_spoke]
-		dest_spokes = spoke_ids[mid_spoke:]
-		if not origin_spokes or not dest_spokes:
-			origin_spokes = spoke_ids
-			dest_spokes = spoke_ids
-
-		# Split hubs into West Hubs (for origin transfer) and East Hubs (for destination transfer)
-		mid_hub = max(1, len(hub_ids) // 2)
-		west_hubs = hub_ids[:mid_hub]
-		east_hubs = hub_ids[mid_hub:]
-		if not west_hubs or not east_hubs:
-			west_hubs = hub_ids
-			east_hubs = hub_ids
-
-		# 2. Assign precise physical coordinates
+		# 2. Constructive Spatial Generation
 		coords = {}
-		
-		# Scale coordinate span based on network size to simulate larger geographical area.
-		# Larger networks occupy proportionally larger coordinate spans to preserve spatial realism.
-		scale = float(num_nodes) / 20.0
-		base_width = 100 * scale
-		base_height = 100 * scale
+		coords[hub_ids[0]] = (0.0, 0.0)
+		for h in hub_ids[1:]:
+			for _ in range(100):
+				theta = rng.uniform(0, 2 * np.pi)
+				r = rng.uniform(450, 550)
+				x, y = r * np.cos(theta), r * np.sin(theta)
+				too_close = False
+				for eh in coords:
+					if np.hypot(x - coords[eh][0], y - coords[eh][1]) < 100:
+						too_close = True
+						break
+				if not too_close:
+					coords[h] = (x, y)
+					break
+			else:
+				coords[h] = (x, y)
 
-		# West Hubs: X in [0.3*W, 0.48*W]
-		for h in west_hubs:
-			x = rng.uniform(0.3 * base_width, 0.48 * base_width)
-			y = rng.uniform(0.35 * base_height, 0.65 * base_height)
-			coords[h] = (round(x, 2), round(y, 2))
+		for s in spoke_ids:
+			ref_hub = rng.choice(hub_ids[1:]) if len(hub_ids) > 1 else hub_ids[0]
+			ref_x, ref_y = coords[ref_hub]
+			ref_angle = np.arctan2(ref_y, ref_x)
+			for _ in range(100):
+				theta = ref_angle + rng.uniform(-np.pi/3, np.pi/3)
+				r = rng.uniform(150, 350)
+				x = ref_x + r * np.cos(theta)
+				y = ref_y + r * np.sin(theta)
+				too_close = False
+				for en, (ex, ey) in coords.items():
+					if np.hypot(x - ex, y - ey) < 60:
+						too_close = True
+						break
+				if not too_close:
+					coords[s] = (x, y)
+					break
+			else:
+				coords[s] = (x, y)
 
-		# East Hubs: X in [0.52*W, 0.70*W]
-		for h in east_hubs:
-			x = rng.uniform(0.52 * base_width, 0.70 * base_width)
-			y = rng.uniform(0.35 * base_height, 0.65 * base_height)
-			coords[h] = (round(x, 2), round(y, 2))
-
-		# Origin Spokes on West/North perimeter: X in [0.05*W, 0.25*W]
-		for s in origin_spokes:
-			x = rng.uniform(0.05 * base_width, 0.25 * base_width)
-			y = rng.uniform(0.10 * base_height, 0.90 * base_height)
-			coords[s] = (round(x, 2), round(y, 2))
-
-		# Destination Spokes on East/South perimeter: X in [0.75*W, 0.95*W]
-		for s in dest_spokes:
-			x = rng.uniform(0.75 * base_width, 0.95 * base_width)
-			y = rng.uniform(0.10 * base_height, 0.90 * base_height)
-			coords[s] = (round(x, 2), round(y, 2))
-
-		nodes = [{"id": i, "x": coords[i][0], "y": coords[i][1]} for i in list(hub_ids + spoke_ids)]
-
-		arcs = []
-		railway_timetable = []
-		arc_id = 1
-
-		# 3. Create Internal Railway Trunk Network (Mode 2) between Hubs
-		# Exactly one physical rail arc per connected hub pair, timetable is decoupled
-		train_id_counter = 101
+		# Build graphs
+		G_rail = nx.Graph()
+		G_road = nx.Graph()
 		for i in range(len(hub_ids)):
 			for j in range(i + 1, len(hub_ids)):
 				u, v = hub_ids[i], hub_ids[j]
-				dist = rng.uniform(400, 1500)
-				base_time = dist / self.config.rail_speed
-				
-				# 铁路两部制运价公式：(发到基价 + 运行基价 × 里程) × (1 + 危险品加成) + 建设基金 × 里程
-				unit_cost_rail = (self.config.c_rail_base_fixed + self.config.c_rail_base_var * dist) * (1 + self.config.c_rail_hazmat_markup) + self.config.c_rail_fund * dist
+				d = np.hypot(coords[u][0] - coords[v][0], coords[u][1] - coords[v][1])
+				if 400 <= d <= 1200:
+					G_rail.add_edge(u, v, weight=d)
+		all_nodes = hub_ids + spoke_ids
+		for i in range(len(all_nodes)):
+			for j in range(i + 1, len(all_nodes)):
+				u, v = all_nodes[i], all_nodes[j]
+				d = np.hypot(coords[u][0] - coords[v][0], coords[u][1] - coords[v][1])
+				if 100 <= d <= 400:
+					G_road.add_edge(u, v, weight=d)
 
-				# Unique risk parameters for the undirected rail edge (shared by both directions for realism)
-				alpha_rail_val = float(round(rng.uniform(0.0005, 0.003), 5))
-				c_conseq_rail_val = float(round(rng.uniform(30.0, 100.0), 2))
-				pop_dens_rail_val = float(round(rng.uniform(0.5, 3.0), 2))
+		# 3. Assemble Network Attributes
+		nodes = [{"id": i, "x": round(coords[i][0], 2), "y": round(coords[i][1], 2)} for i in all_nodes]
+		arcs = []
+		railway_timetable = []
+		arc_id = 1
+		train_id_counter = 101
 
-				# Single physical rail arc u -> v (trapezoidal fuzzy time, #9)
-				rail_ratios = getattr(self.config, 'rail_fuzzy_time_ratio', (0.9, 1.0, 1.0, 1.3))
-				rail_arc_u_v = {
-					"id": arc_id, "i": u, "j": v, "mode": 2, "distance": round(float(dist), 2),
+		for u, v in G_rail.edges():
+			dist = G_rail[u][v]['weight']
+			base_time = dist / self.config.rail_speed
+			unit_cost_rail = (self.config.c_rail_base_fixed + self.config.c_rail_base_var * dist) * (1 + self.config.c_rail_hazmat_markup) + self.config.c_rail_fund * dist
+			alpha_rail_val = float(round(rng.uniform(0.0005, 0.003), 5))
+			rail_ratios = getattr(self.config, 'rail_fuzzy_time_ratio', (0.9, 1.0, 1.0, 1.3))
+			for src, dst in [(u, v), (v, u)]:
+				arcs.append({
+					"id": arc_id, "i": src, "j": dst, "mode": 2, "distance": round(float(dist), 2),
 					"time_a": round(float(base_time * rail_ratios[0]), 2),
 					"time_b": round(float(base_time * rail_ratios[1]), 2),
 					"time_c": round(float(base_time * rail_ratios[2]), 2),
 					"time_d": round(float(base_time * rail_ratios[3]), 2),
 					"alpha": alpha_rail_val,
-					"C_consequence": c_conseq_rail_val,
 					"e_window": 0.0, "l_window": float(self.config.T_max),
+					"e_window_fmt": float_to_day_time(0.0), "l_window_fmt": float_to_day_time(self.config.T_max),
 					"capacity": float(self.config.q_rail),
 					"unit_cost": round(float(unit_cost_rail), 2),
 					"deploy_cost": float(self.config.c_deploy_rail), "min_units": 1,
-					"population_density": pop_dens_rail_val,
-				}
+				})
 				arc_id += 1
-				arcs.append(rail_arc_u_v)
-
-				# Single physical rail arc v -> u (trapezoidal fuzzy time, #9)
-				rail_arc_v_u = {
-					"id": arc_id, "i": v, "j": u, "mode": 2, "distance": round(float(dist), 2),
-					"time_a": round(float(base_time * rail_ratios[0]), 2),
-					"time_b": round(float(base_time * rail_ratios[1]), 2),
-					"time_c": round(float(base_time * rail_ratios[2]), 2),
-					"time_d": round(float(base_time * rail_ratios[3]), 2),
-					"alpha": alpha_rail_val,
-					"C_consequence": c_conseq_rail_val,
-					"e_window": 0.0, "l_window": float(self.config.T_max),
+			for dep_h in dynamic_schedule_hours:
+				arr_h = round(dep_h + base_time, 2)
+				railway_timetable.append({
+					"train_id": f"X{train_id_counter}", "origin_hub": u, "destination_hub": v, "departure_time": dep_h,
+					"departure_time_fmt": float_to_day_time(dep_h), "arrival_time": arr_h, "arrival_time_fmt": float_to_day_time(arr_h),
 					"capacity": float(self.config.q_rail),
-					"unit_cost": round(float(unit_cost_rail), 2),
-					"deploy_cost": float(self.config.c_deploy_rail), "min_units": 1,
-					"population_density": pop_dens_rail_val,
-				}
-				arc_id += 1
-				arcs.append(rail_arc_v_u)
+				})
+				train_id_counter += 1
+				railway_timetable.append({
+					"train_id": f"X{train_id_counter}", "origin_hub": v, "destination_hub": u, "departure_time": dep_h,
+					"departure_time_fmt": float_to_day_time(dep_h), "arrival_time": arr_h, "arrival_time_fmt": float_to_day_time(arr_h),
+					"capacity": float(self.config.q_rail),
+				})
+				train_id_counter += 1
 
-				# Generate Timetabled Train Services for u -> v and v -> u
-				for dep_h in dynamic_schedule_hours:
-					arr_h = round(dep_h + base_time, 2)
-					railway_timetable.append({
-						"train_id": f"X{train_id_counter}",
-						"origin_hub": u, "destination_hub": v, "departure_time": dep_h,
-						"departure_time_fmt": float_to_day_time(dep_h),
-						"arrival_time": arr_h, "arrival_time_fmt": float_to_day_time(arr_h),
-						"capacity": float(self.config.q_rail),
-					})
-					train_id_counter += 1
-					
-					arr_h_rev = round(dep_h + base_time, 2)
-					railway_timetable.append({
-						"train_id": f"X{train_id_counter}",
-						"origin_hub": v, "destination_hub": u, "departure_time": dep_h,
-						"departure_time_fmt": float_to_day_time(dep_h),
-						"arrival_time": arr_h_rev, "arrival_time_fmt": float_to_day_time(arr_h_rev),
-						"capacity": float(self.config.q_rail),
-					})
-					train_id_counter += 1
-
-
-
-
-		# 4. Create Feeder/Distribution Road Network (Mode 1) from Spokes to Hubs
-		for s in spoke_ids:
-			# Strict topological island isolation: West spokes ONLY connect to West hubs; East spokes ONLY connect to East hubs
-			target_hubs = west_hubs if s in origin_spokes else east_hubs
-			hub_distances = [(h, np.linalg.norm(np.array(coords[s]) - np.array(coords[h]))) for h in target_hubs]
-			hub_distances.sort(key=lambda x: x[1])
-			closest_hubs = [h for h, _ in hub_distances[:min(2, len(target_hubs))]]
-
-			for h in closest_hubs:
-				dist = rng.uniform(50, 300)
-				base_time = dist / self.config.road_speed
-
-				# Unique risk parameters for the undirected road edge
-				alpha_road_val = float(round(rng.uniform(0.005, 0.03), 4))
-				c_conseq_road_val = float(round(rng.uniform(50.0, 200.0), 2))
-				pop_dens_road_val = float(round(rng.uniform(1.0, 5.0), 2))
-
-				feeder_arc_s_h = {
-					"id": arc_id, "i": s, "j": h, "mode": 1, "distance": round(float(dist), 2),
-					"time_a": round(float(base_time * 0.8), 2),
-					"time_b": round(float(base_time), 2),
-					"time_c": round(float(base_time * 1.5), 2),
+		for u, v in G_road.edges():
+			dist = G_road[u][v]['weight']
+			base_time = dist / self.config.road_speed
+			alpha_road_val = float(round(rng.uniform(0.005, 0.03), 4))
+			road_ratios = getattr(self.config, 'road_fuzzy_time_ratio', (0.8, 1.0, 1.0, 1.5))
+			for src, dst in [(u, v), (v, u)]:
+				arcs.append({
+					"id": arc_id, "i": src, "j": dst, "mode": 1, "distance": round(float(dist), 2),
+					"time_a": round(float(base_time * road_ratios[0]), 2),
+					"time_b": round(float(base_time * road_ratios[1]), 2),
+					"time_c": round(float(base_time * road_ratios[2]), 2),
+					"time_d": round(float(base_time * road_ratios[3]), 2),
 					"alpha": alpha_road_val,
-					"C_consequence": c_conseq_road_val,
 					"e_window": 0.0, "l_window": float(self.config.T_max),
+					"e_window_fmt": float_to_day_time(0.0), "l_window_fmt": float_to_day_time(self.config.T_max),
 					"capacity": float(self.config.q_road),
 					"unit_cost": round(float(self.config.c_road * dist), 2),
 					"deploy_cost": float(self.config.c_deploy_road), "min_units": 1,
-					"population_density": pop_dens_road_val,
-				}
+				})
 				arc_id += 1
-				feeder_arc_h_s = {
-					"id": arc_id, "i": h, "j": s, "mode": 1, "distance": round(float(dist), 2),
-					"time_a": round(float(base_time * 0.8), 2),
-					"time_b": round(float(base_time), 2),
-					"time_c": round(float(base_time * 1.5), 2),
-					"alpha": alpha_road_val,
-					"C_consequence": c_conseq_road_val,
-					"e_window": 0.0, "l_window": float(self.config.T_max),
-					"capacity": float(self.config.q_road),
-					"unit_cost": round(float(self.config.c_road * dist), 2),
-					"deploy_cost": float(self.config.c_deploy_road), "min_units": 1,
-					"population_density": pop_dens_road_val,
-				}
-				arc_id += 1
-				arcs.extend([feeder_arc_s_h, feeder_arc_h_s])
 
-		# 4.5 Create Peripheral Ring Road Network (Mode 1) strictly within each island (West only, East only)
-		existing_spoke_edges = set()
-		for spoke_group in [origin_spokes, dest_spokes]:
-			for s1 in spoke_group:
-				spoke_dists = [(s2, np.linalg.norm(np.array(coords[s1]) - np.array(coords[s2]))) for s2 in spoke_group if s2 != s1]
-				spoke_dists.sort(key=lambda x: x[1])
-				closest_spokes = [s2 for s2, _ in spoke_dists[:min(2, len(spoke_group) - 1)]]
-
-				for s2 in closest_spokes:
-					edge_key = frozenset({s1, s2})
-					if edge_key not in existing_spoke_edges:
-						existing_spoke_edges.add(edge_key)
-						dist = rng.uniform(50, 300)
-						base_time = dist / self.config.road_speed
-
-						# Unique risk parameters for the undirected peripheral edge
-						alpha_periph_val = float(round(rng.uniform(0.005, 0.03), 4))
-						c_conseq_periph_val = float(round(rng.uniform(50.0, 200.0), 2))
-						pop_dens_periph_val = float(round(rng.uniform(1.0, 5.0), 2))
-
-						spoke_arc_1 = {
-							"id": arc_id, "i": s1, "j": s2, "mode": 1, "distance": round(float(dist), 2),
-							"time_a": round(float(base_time * 0.8), 2), "time_b": round(float(base_time), 2),
-							"time_c": round(float(base_time * 1.5), 2), "alpha": alpha_periph_val,
-							"C_consequence": c_conseq_periph_val, "e_window": 0.0,
-							"l_window": float(self.config.T_max), "capacity": float(self.config.q_road),
-							"unit_cost": round(float(self.config.c_road * dist), 2),
-							"deploy_cost": float(self.config.c_deploy_road), "min_units": 1,
-							"population_density": pop_dens_periph_val,
-						}
-						arc_id += 1
-						spoke_arc_2 = {
-							"id": arc_id, "i": s2, "j": s1, "mode": 1, "distance": round(float(dist), 2),
-							"time_a": round(float(base_time * 0.8), 2), "time_b": round(float(base_time), 2),
-							"time_c": round(float(base_time * 1.5), 2), "alpha": alpha_periph_val,
-							"C_consequence": c_conseq_periph_val, "e_window": 0.0,
-							"l_window": float(self.config.T_max), "capacity": float(self.config.q_road),
-							"unit_cost": round(float(self.config.c_road * dist), 2),
-							"deploy_cost": float(self.config.c_deploy_road), "min_units": 1,
-							"population_density": pop_dens_periph_val,
-						}
-						arc_id += 1
-						arcs.extend([spoke_arc_1, spoke_arc_2])
-
-		# 4.6 Create Inter-Hub Highway Network (Mode 1) for fully connected road repositioning
-		# This ensures empty trucks can reposition globally, but containers are still bound by ESPPRC stage transitions
-		existing_hub_edges = set()
-		for h1 in hub_ids:
-			for h2 in hub_ids:
-				if h1 == h2:
-					continue
-				edge_key = tuple(sorted([h1, h2]))
-				if edge_key not in existing_hub_edges:
-					existing_hub_edges.add(edge_key)
-					dist = rng.uniform(50, 300)
-					base_time = dist / self.config.road_speed
-					
-					alpha_hwy_val = float(round(rng.uniform(0.005, 0.03), 4))
-					c_conseq_hwy_val = float(round(rng.uniform(50.0, 200.0), 2))
-					pop_dens_hwy_val = float(round(rng.uniform(1.0, 5.0), 2))
-
-					hwy_arc_1 = {
-						"id": arc_id, "i": h1, "j": h2, "mode": 1, "distance": round(float(dist), 2),
-						"time_a": round(float(base_time * 0.8), 2), "time_b": round(float(base_time), 2),
-						"time_c": round(float(base_time * 1.5), 2), "alpha": alpha_hwy_val,
-						"C_consequence": c_conseq_hwy_val, "e_window": 0.0,
-						"l_window": float(self.config.T_max), "capacity": float(self.config.q_road),
-						"unit_cost": round(float(self.config.c_road * dist), 2),
-						"deploy_cost": float(self.config.c_deploy_road), "min_units": 1,
-						"population_density": pop_dens_hwy_val,
-					}
-					arc_id += 1
-					hwy_arc_2 = {
-						"id": arc_id, "i": h2, "j": h1, "mode": 1, "distance": round(float(dist), 2),
-						"time_a": round(float(base_time * 0.8), 2), "time_b": round(float(base_time), 2),
-						"time_c": round(float(base_time * 1.5), 2), "alpha": alpha_hwy_val,
-						"C_consequence": c_conseq_hwy_val, "e_window": 0.0,
-						"l_window": float(self.config.T_max), "capacity": float(self.config.q_road),
-						"unit_cost": round(float(self.config.c_road * dist), 2),
-						"deploy_cost": float(self.config.c_deploy_road), "min_units": 1,
-						"population_density": pop_dens_hwy_val,
-					}
-					arc_id += 1
-					arcs.extend([hwy_arc_1, hwy_arc_2])
-
-		# 5. Transfer facilities strictly at Hub nodes
+		# 4. Transfer facilities at Hub nodes
 		transfer_nodes = []
 		for hub in hub_ids:
 			gamma_val = float(round(rng.uniform(0.001, 0.01), 5))
@@ -349,89 +205,130 @@ class InstanceGenerator:
 				"facility_cost": float(self.config.c_hub),
 			})
 
-		# 6. O-D Pairs: Strictly cross-network from Origin Spokes to Destination Spokes
+		# 5. O-D Pairs: far apart, unique O and D nodes, different hubs
+		G_road_dir = nx.DiGraph()
+		for a in arcs:
+			if a["mode"] == 1:
+				G_road_dir.add_edge(a["i"], a["j"], weight=a["time_b"])
+
 		od_pairs = []
-		existing_od_keys = set()
+		used_nodes = set()  # All O and D nodes must be globally unique
+
+		def _angle_from_center(node_id):
+			x, y = coords[node_id]
+			return math.atan2(y, x)
+
+		def _euclidean_dist(n1, n2):
+			return np.hypot(coords[n1][0] - coords[n2][0], coords[n1][1] - coords[n2][1])
+
+		MIN_OD_ANGLE = math.pi / 4.0  # 45 degrees minimum separation
+		MIN_OD_EUCLIDEAN = 400.0
+
 		for od_idx in range(num_od_pairs):
-			while True:
-				o = int(rng.choice(origin_spokes))
-				d = int(rng.choice(dest_spokes))
-				if o == d:
-					d_cands = [s for s in dest_spokes if s != o]
-					d = int(rng.choice(d_cands)) if d_cands else int(rng.choice(hub_ids))
-				if (o, d) not in existing_od_keys:
-					existing_od_keys.add((o, d))
+			found = False
+			o, d = None, None
+			t_road_1, t_road_2, t_rail = 0.0, 0.0, 0.0
+			candidates = list(spoke_ids)
+			rng.shuffle(candidates)
+			for o_cand in candidates:
+				if o_cand in used_nodes:
+					continue
+				for d_cand in candidates:
+					if d_cand == o_cand or d_cand in used_nodes:
+						continue
+					# Directional constraint: O must be west of D (x_origin < x_destination)
+					if coords[o_cand][0] >= coords[d_cand][0]:
+						continue
+					# Also require vertical separation to ensure multi-directional diversity
+					y_diff = abs(coords[o_cand][1] - coords[d_cand][1])
+					x_diff = abs(coords[d_cand][0] - coords[o_cand][0])
+					if _euclidean_dist(o_cand, d_cand) < MIN_OD_EUCLIDEAN:
+						continue
+					try:
+						o_dists = nx.single_source_dijkstra_path_length(G_road_dir, o_cand, weight='weight')
+						o_hub_dists = {h: o_dists[h] for h in hub_ids if h in o_dists}
+						if not o_hub_dists:
+							continue
+						h_o = min(o_hub_dists, key=o_hub_dists.get)
+						_t_road_1 = o_hub_dists[h_o]
+						d_hub_dists = {}
+						for h in hub_ids:
+							if h not in G_road_dir or d_cand not in G_road_dir:
+								continue
+							try:
+								d_hub_dists[h] = nx.shortest_path_length(G_road_dir, h, d_cand, weight='weight')
+							except nx.NetworkXNoPath:
+								pass
+						if not d_hub_dists:
+							continue
+						h_d = min(d_hub_dists, key=d_hub_dists.get)
+						_t_road_2 = d_hub_dists[h_d]
+						if h_o == h_d:
+							if len(d_hub_dists) > 1:
+								h_d = [h for h in d_hub_dists if h != h_o][0]
+								_t_road_2 = d_hub_dists[h_d]
+							else:
+								continue
+						if h_o not in G_rail or h_d not in G_rail:
+							continue
+						_t_rail = nx.shortest_path_length(G_rail, h_o, h_d, weight='weight') / self.config.rail_speed
+						o, d = o_cand, d_cand
+						t_road_1, t_road_2, t_rail = _t_road_1, _t_road_2, _t_rail
+						used_nodes.add(o)
+						used_nodes.add(d)
+						found = True
+						break
+					except nx.NetworkXNoPath:
+						continue
+				if found:
 					break
 
-			demand = float(rng.uniform(20, 200))
-			
-			# Dynamically calculate physically feasible L_od using topology, timetable and travel speeds.
-			# This makes feasible deliveries narrowly bound by actual network performance.
-			# 1. Road leg: origin -> closest west hub
-			o_hubs = [(h, np.linalg.norm(np.array(coords[o]) - np.array(coords[h]))) for h in west_hubs]
-			o_hubs.sort(key=lambda x: x[1])
-			best_o_hub = o_hubs[0][0]
-			dist_1 = rng.uniform(50, 300)
-			t_road_1 = dist_1 / self.config.road_speed
-			
-			# 2. Road leg: closest east hub -> destination
-			d_hubs = [(h, np.linalg.norm(np.array(coords[d]) - np.array(coords[h]))) for h in east_hubs]
-			d_hubs.sort(key=lambda x: x[1])
-			best_d_hub = d_hubs[0][0]
-			dist_2 = rng.uniform(50, 300)
-			t_road_2 = dist_2 / self.config.road_speed
-			
-			# 3. Rail leg
-			dist_rail = rng.uniform(400, 1500)
-			t_rail_b = dist_rail / self.config.rail_speed
-			t_rail_c = t_rail_b * 1.3
-			
-			# 4. Anchor earliest departure to the timetable to keep time windows tight and realistic
-			# We select a random train from the schedule to anchor this OD pair's demand,
-			# ensuring that demand is distributed uniformly across the 48-hour planning horizon
-			# rather than clustered at the very first train.
-			target_train_h = float(rng.choice(dynamic_schedule_hours))
-			origin_ready_center = target_train_h - t_road_1 - 1.0
-			E_od = float(round(max(0.0, rng.uniform(origin_ready_center - 2.0, origin_ready_center + 2.0)), 1))
-			
-			t_arrive_hub = E_od + t_road_1 + 1.0  # 1 hour transfer
-			valid_deps = [h for h in dynamic_schedule_hours if h >= t_arrive_hub]
-			t_dep = valid_deps[0] if valid_deps else t_arrive_hub + 12.0
-			
-			t_expected_arrival = t_dep + t_rail_b + 1.0 + t_road_2
-			t_worst_arrival = t_dep + t_rail_c + 2.0 + t_road_2 * 1.5
-			L_od = float(round(t_expected_arrival, 1))
-			
-			# Bound L_od up to T_max if needed, but ensure it's feasible
-			self.config.T_max = max(self.config.T_max, L_od + 72.0)
+			if not found:
+				remaining = [s for s in spoke_ids if s not in used_nodes]
+				o = remaining[0] if remaining else rng.choice(spoke_ids)
+				while True:
+					d = int(rng.choice(spoke_ids))
+					if d != o and d not in used_nodes:
+						break
+				o_dists = nx.single_source_dijkstra_path_length(G_road_dir, o, weight='weight')
+				o_hub_dists = {h: o_dists[h] for h in hub_ids if h in o_dists}
+				h_o = min(o_hub_dists, key=o_hub_dists.get)
+				t_road_1 = o_hub_dists[h_o]
+				d_hub_dists = {}
+				for h in hub_ids:
+					if h not in G_road_dir or d not in G_road_dir:
+						continue
+					try:
+						d_hub_dists[h] = nx.shortest_path_length(G_road_dir, h, d, weight='weight')
+					except nx.NetworkXNoPath:
+						pass
+				h_d = min(d_hub_dists, key=d_hub_dists.get)
+				t_road_2 = d_hub_dists[h_d]
+				if h_o == h_d and len(d_hub_dists) > 1:
+					h_d = [h for h in d_hub_dists if h != h_o][0]
+					t_road_2 = d_hub_dists[h_d]
+				t_rail = nx.shortest_path_length(G_rail, h_o, h_d, weight='weight') / self.config.rail_speed
+				used_nodes.add(o)
+				used_nodes.add(d)
+
+			multiplier = int(rng.uniform(1, 10))
+			demand = float(multiplier * self.config.q_road)
+			E_od = float(round(rng.uniform(0, 24), 1))
+			transfer_time = 1.0
+			wait_time_est = interval
+			t_expected = E_od + t_road_1 + transfer_time + wait_time_est + t_rail + transfer_time + t_road_2
+			L_od = float(round(t_expected + self.config.prep_time_hours + self.config.dispatch_buffer_hours + self.config.L_od_buffer_hours, 1))
+			self.config.T_max = max(self.config.T_max, L_od + 12.0)
 
 			od_pairs.append({
 				"id": od_idx + 1,
 				"origin": o, "destination": d, "demand": round(demand, 1),
 				"E_od": round(E_od, 1), "L_od": round(L_od, 1),
+				"E_od_fmt": float_to_day_time(E_od), "L_od_fmt": float_to_day_time(L_od),
 				"alpha_T_od": float(self.config.alpha_T),
 			})
 
-		# Ensure all arc time windows are consistent with the final planning horizon
-		for arc in arcs:
-			arc["l_window"] = float(self.config.T_max)
-			arc["e_window_fmt"] = float_to_day_time(arc["e_window"])
-			arc["l_window_fmt"] = float_to_day_time(arc["l_window"])
-
-		for od in od_pairs:
-			od["E_od_fmt"] = float_to_day_time(od["E_od"])
-			od["L_od_fmt"] = float_to_day_time(od["L_od"])
-
-		# Adaptive vehicle limit multiplier based on instance size
-		# Small: 1.5x (tight fleet), Medium: 2.0x, Large: 2.5x
-		if num_nodes <= 25:
-			veh_limit_mult = 1.5
-		elif num_nodes <= 60:
-			veh_limit_mult = 2.0
-		else:
-			veh_limit_mult = 2.5
-
-		instance = {
+		return {
 			"name": name,
 			"railway_timetable": railway_timetable,
 			"network": {
@@ -441,12 +338,10 @@ class InstanceGenerator:
 			"od_pairs": od_pairs,
 			"num_vehicles": num_vehicles,
 			"config": {
-				"T_max": self.config.T_max, "K_max": self.config.K_max,
-				"alpha_max": self.config.alpha_max, "alpha_T": self.config.alpha_T,
-				"gamma_sys": self.config.gamma_sys,
-				"vehicle_limit_multiplier": veh_limit_mult,
+				"T_max": self.config.T_max,
+				"K_max": self.config.K_max,
+				"alpha_max": self.config.alpha_max,
+				"alpha_T": self.config.alpha_T,
 				"timetable_services_per_direction": num_services,
 			},
 		}
-
-		return instance
