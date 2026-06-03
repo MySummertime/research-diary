@@ -88,7 +88,7 @@ class SensitivityAnalyzer:
             "hub_cost": sol.get("hub_cost", 0.0),
             "transport_cost": sol.get("transport_cost", 0.0),
             "c_unmet": sol.get("c_unmet", 0.0),
-            "holding_cost": sol.get("holding_cost", 0.0),
+            "idle_cost": sol.get("idle_cost", 0.0),
             "reposition_cost": sol.get("reposition_cost", 0.0),
             "opportunity_cost": sol.get("opportunity_cost", 0.0),
             "active_hubs": len(sol.get("active_hubs", [])),
@@ -174,7 +174,7 @@ class SensitivityAnalyzer:
             # --- Generate Extra Tables ---
             # 1. Cost Percentage Table
             df_pct = df[[param]].copy()
-            cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "c_unmet", "holding_cost", "opportunity_cost"]
+            cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "c_unmet", "idle_cost", "opportunity_cost"]
             for col in cost_cols:
                 actual_col = f"{col}_metric_out" if (col == param and output_metric_renamed) else col
                 df_pct[f"{col}_pct"] = (df[actual_col] / df["total_cost"] * 100).round(2)

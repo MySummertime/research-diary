@@ -31,7 +31,7 @@ def run_tests():
             results_list.append({
                 "alpha_max": a,
                 "delta_D": d,
-                "holding_cost": sol.get("holding_cost", 0.0),
+                "idle_cost": sol.get("idle_cost", 0.0),
                 "reposition_cost": sol.get("reposition_cost", 0.0),
                 "opportunity_cost": sol.get("opportunity_cost", 0.0),
                 "unmet_penalty": sol.get("unmet_penalty_cost", 0.0),
@@ -39,14 +39,14 @@ def run_tests():
             })
             
     # Extract data
-    holding = np.array([r["holding_cost"] for r in results_list])
+    idle = np.array([r["idle_cost"] for r in results_list])
     reposition = np.array([r["reposition_cost"] for r in results_list])
     opportunity = np.array([r["opportunity_cost"] for r in results_list])
     unmet = np.array([r["unmet_penalty"] for r in results_list])
     total = np.array([r["total_cost"] for r in results_list])
     
     print("=== Cost Parameter Variation ===")
-    print(f"Holding Cost Variance: {np.var(holding):.2f}")
+    print(f"Vehicle Idle Cost Variance: {np.var(idle):.2f}")
     print(f"Reposition Cost Variance: {np.var(reposition):.2f}")
     print(f"Opportunity Cost Variance: {np.var(opportunity):.2f}")
     

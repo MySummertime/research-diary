@@ -53,9 +53,8 @@ class RHMVSPConfig:
 	c_hub: float = 1000.0  # Transfer facility setup cost (¥)
 	max_cranes: int = 2  # Max concurrent transfer cranes per hub
 	max_storage_tons: float = 500.0  # Max hazmat storage capacity per hub (tons)
-	c_unmet: float = 0.0  # Unmet demand penalty (set to 0: all demand must be satisfied)
-	c_opp_base: float = 500.0 # Base opportunity cost for unfulfilled demand (¥/ton, reduced to decrease total penalty)
-	c_holding: float = 10.0    # Inventory holding cost per ton for remaining hazmat stock at origin (¥/ton)
+	c_opp_base: float = 1000.0 # Base opportunity cost for unfulfilled demand (¥/ton). Must exceed transport cost per ton to ensure delivery is always preferred over forfeiture.
+	c_vehicle_idle: float = 10.0  # Vehicle idle/waiting cost per ton-hour during reposition gap (¥/ton·h)
 	crane_daily_lifts: int = 200  # Daily lifts per crane
 	max_hubs: int | None = None  # Max active transfer hubs (None means unlimited)
 	alpha_c: float = 0.85  # Confidence level for fuzzy cost equivalents
@@ -66,7 +65,6 @@ class RHMVSPConfig:
 	# beta_od derived: beta_od = 1 - alpha_max
 	# beta_net derived: beta_net = min(beta_od)
 	alpha_T: float = 0.8  # Time reliability threshold (alpha_T > 0.5)
-	# gamma_sys derived: gamma_sys = min(1 - alpha_max, alpha_T)
 
 	# ============================================================
 	# Risk Parameters (§2.2)	# ============================================================
@@ -78,21 +76,28 @@ class RHMVSPConfig:
 	# Trapezoidal fuzzy time ratios for rail: (a_ratio, b_ratio, c_ratio, d_ratio)
 	# Rail time ~ Trap(base*a, base*b, base*c, base*d) with plateau [b,c]
 	rail_fuzzy_time_ratio: tuple = (0.9, 1.0, 1.0, 1.3)
+	# Trapezoidal fuzzy time ratios for road: (a_ratio, b_ratio, c_ratio, d_ratio)
+	# Road time ~ Trap(base*a, base*b, base*c, base*d) with plateau [b,c]
+	road_fuzzy_time_ratio: tuple = (0.8, 1.0, 1.0, 1.5)
 	# Bidirectional label correction overlap ratio (§4.5)
 	pricing_overlap_ratio: float = 0.75  # each direction covers this fraction of time span
 
-	empty_reposition_buffer_hours: float = 1.0  # Safety buffer (cleaning, inspection)
+	prep_time_hours: float = 2.0  # Empty vehicle preparation time (inspection, cleaning, driver rest)
+	dispatch_buffer_hours: float = 1.0  # Cross-station dispatch buffer
+	c_prep_reposition: float = 200.0  # Fixed preparation cost per reposition event (¥)
 
 	# ============================================================
-	# Demand and Cost Uncertainty Parameters (Wang 2025 Inspired)
+	# Time Uncertainty Parameter
 	# ============================================================
-	delta_D: float = 0.2  # Demand fluctuation factor
-	delta_C: float = 0.3  # Penalty cost fluctuation factor
 	delta_T: float = 0.8  # Time fluctuation factor (controls fuzzy spread of travel/transfer times)
-	beta_D: float = 0.8   # Service level threshold for Demand Chance Constraint
-	fuzzy_cost_spread: tuple = (0.9, 1.0, 1.2)  # Triangular fuzzy spread for unit transport costs
 
-	# Solver settings
+	# ============================================================
+	# Time-Varying Risk Switches (S2-2, §2.2)
+	# ============================================================
+	enable_time_varying_risk: bool = True       # Enable phi(t) traffic/fatigue multiplier on accident probability
+	enable_time_varying_consequence: bool = True  # Enable psi(t) population exposure multiplier on consequence
+	risk_scale: float = 1.0                       # Continuous scaling for time-varying risk (0.0=constant phi=psi=1, 1.0=full time-varying)
+	lp_only: bool = False                         # If True, BAP stops after root-node CG (LP relaxation, no branching)
 	solver_name: str = "gurobi"
 	solver_backend: str = "gurobi"  # Default solver backend
 
@@ -105,20 +110,19 @@ class RHMVSPConfig:
 	# Branch-and-Price Parameters (§4.5)
 	# ============================================================
 	bap_max_iterations: int = 1000
-	bap_pricing_columns_limit: int = 10  # Max columns returned per pricing OD
+	bap_pricing_columns_limit: int = 999  # No limit — return all negative reduced cost columns
 	bap_ng_route_size: int = 15  # ng-route neighborhood size
 	bap_stabilization: bool = True  # Interior point stabilization
 	stabilization_mu: float = 0.5  # Smoothing factor for duals
-	max_labels_exact: int = 100  # Max labels to keep in exact pricing (reduced for speed)
+	max_labels_exact: int = 500  # Bound ESPPRC label count to prevent explosion
 	max_labels_heuristic: int = 20  # Max labels to keep in heuristic pricing
 
 	# ============================================================
 	# Soft Time Window Design
 	# ============================================================
 	# L_od = expected_arrival + L_od_buffer_hours.
-	# A small buffer (e.g. 0.5 h) creates a meaningful but proportional
-	# delay penalty that trades off against unmet/opportunity costs.
-	L_od_buffer_hours: float = 1.5
+	# A small buffer creates slack in the time window.
+	L_od_buffer_hours: float = 3.0
 
 	# Vehicle limit = num_vehicles × vehicle_limit_multiplier
 	# Default overridden by instance-specific adaptive value in data_generator
@@ -140,12 +144,7 @@ class RHMVSPConfig:
 	# ============================================================
 	seed: int = 7
 
-	# ============================================================
-	# Numerical Integration Constants (Gauss-Legendre 5-point)
-	# ============================================================
-	gauss_legendre_nodes_5: tuple = (0.04691008, 0.23076534, 0.5, 0.76923466, 0.95308992)
-	gauss_legendre_weights_5: tuple = (0.11846344, 0.23931434, 0.28444444, 0.23931434, 0.11846344)
-	# ============================================================
+
 	@property
 	def beta_od(self) -> float:
 		"""Path risk reliability threshold (derived from alpha_max)."""
@@ -156,10 +155,6 @@ class RHMVSPConfig:
 		"""Network risk reliability threshold."""
 		return self.beta_od
 
-	@property
-	def gamma_sys(self) -> float:
-		"""Comprehensive reliability threshold."""
-		return min(1.0 - self.alpha_max, self.alpha_T)
 
 	@property
 	def q_bar(self) -> float:
@@ -185,7 +180,6 @@ class RHMVSPConfig:
 		data = asdict(self)
 		data["beta_od"] = self.beta_od
 		data["beta_net"] = self.beta_net
-		data["gamma_sys"] = self.gamma_sys
 		data["q_bar"] = self.q_bar
 
 		rev_map = {
@@ -204,11 +198,8 @@ class RHMVSPConfig:
 			"c_deploy_rail": "fixed_dispatch_cost_rail_d_rail",
 			"c_transfer": "unit_transfer_cost_kappa_transfer",
 			"c_hub": "fixed_transfer_facility_cost_H_transfer",
-			"c_unmet": "unmet_demand_penalty_c_unmet",
 			"alpha_max": "risk_threshold_alpha_max",
 			"alpha_T": "time_reliability_threshold_alpha_T",
-			"beta_D": "demand_chance_constraint_threshold_beta_D",
-			"fuzzy_cost_spread": "fuzzy_multiplier_transport_cost_triangular",
 		}
 		output_data = {}
 		for k, v in data.items():

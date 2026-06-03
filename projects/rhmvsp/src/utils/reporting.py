@@ -1,4 +1,3 @@
-
 def float_to_day_time(time_hours: float) -> str:
     """Convert continuous float hours (0~48) into Day 1/2 24-hour real time format (Day X HH:MM)."""
     day = int(time_hours // 24) + 1
@@ -43,11 +42,15 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
     lines.append(f"  Hub setup cost:      ¥{solution.get('hub_cost', 0):>12,.2f}")
     lines.append(f"  Transport cost:      ¥{solution.get('transport_cost', 0):>12,.2f}")
     lines.append(f"  Transfer cost:       ¥{solution.get('transfer_cost', 0):>12,.2f}")
-    lines.append(f"  Reposition cost:     ¥{solution.get('reposition_cost', 0):>12,.2f}")
-    lines.append(f"  Inventory holding:   ¥{solution.get('holding_cost', 0):>12,.2f}")
-    lines.append(f"  Opportunity cost:    ¥{solution.get('opportunity_cost', 0):>12,.2f}")
-
-    lines.append(f"  Total penalty sum:   ¥{solution.get('penalty_cost', 0):>12,.2f}")
+    reposition_total = (solution.get('reposition_cost', 0) + solution.get('prep_cost', 0)
+                        + solution.get('idle_cost', 0) + solution.get('repo_extra_opp', 0))
+    lines.append(f"  Reposition cost:     ¥{reposition_total:>12,.2f}")
+    lines.append(f"    └─ empty drive:    ¥{solution.get('reposition_cost', 0):>12,.2f}")
+    lines.append(f"    └─ preparation:    ¥{solution.get('prep_cost', 0):>12,.2f}")
+    lines.append(f"    └─ vehicle idle:   ¥{solution.get('idle_cost', 0):>12,.2f}")
+    lines.append(f"    └─ repo delay:     ¥{solution.get('repo_extra_opp', 0):>12,.2f}")
+    shortfall = solution.get('opportunity_cost', 0) - solution.get('repo_extra_opp', 0)
+    lines.append(f"  Opportunity cost:    ¥{shortfall:>12,.2f}")
     lines.append("")
 
     lines.append("--- Resource Budget & Infrastructure ---")
@@ -57,7 +60,6 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
     lines.append("")
 
     lines.append("--- Reliability & Fleet ---")
-    lines.append(f"  Network R_sys:       {solution.get('R_net', 0):.6f}")
     if 'R_net_risk' in solution:
         lines.append(f"  Network R_risk:      {solution.get('R_net_risk', 0):.6f}")
     if 'R_net_time' in solution:
@@ -84,56 +86,44 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
 
     details = solution.get("s2_allocation_details", [])
     if details:
-        lines.append("--- Supply Inventory & Dispatch Details ---")
+        lines.append("--- Dispatch Details ---")
         for d in details:
             lines.append(
-                f"  {d['od_pair']:<8s} | Demand: {d['demand']:>6.1f}t | Delivered: {d.get('delivered', 0):>6.1f}t"
-            )
-            lines.append(
-                f"           | Shortfall: {d.get('shortfall', 0):>5.1f}t | Opp Cost: ¥{d.get('opp_cost', 0):.1f}"
+                f"  {d['od_pair']:<8s} | Demand: {d['demand']:>6.1f}t | Delivered: {d.get('delivered', 0):>6.1f}t | Shortfall: {d.get('shortfall', 0):>5.1f}t"
             )
         lines.append("")
 
-    schedule = solution.get("vehicle_schedule", [])
+    # Reposition events (optimal solution)
     repo_events = solution.get("reposition_events", [])
-    
-    if schedule:
-        lines.append("--- Detailed Vehicle Itineraries ---")
-        
-        veh_tasks = {}
-        for t in schedule:
-            v = t['vehicle']
-            if v not in veh_tasks:
-                veh_tasks[v] = []
-            veh_tasks[v].append(t)
-            
-        veh_repos = {}
+    if repo_events:
+        lines.append("--- Reposition Details ---")
+        lines.append(f"  Total repositions: {len(repo_events)} | Empty: ¥{solution.get('reposition_cost', 0):,.2f} | Idle: ¥{solution.get('repo_pure_idle', 0):,.2f} | Opp: ¥{solution.get('repo_extra_opp', 0):,.2f}")
+        lines.append(f"  {'Veh':>4s} | {'From':>10s} | {'To':>10s} | {'Dep-Node':>8s} | {'Arr-Node':>8s} | {'Time':>16s} | {'Dist':>8s} | {'Empty':>10s} | {'Idle':>10s} | {'Opp':>10s}")
+        lines.append(f"  {'-'*4:>4s} | {'-'*10:>10s} | {'-'*10:>10s} | {'-'*8:>8s} | {'-'*8:>8s} | {'-'*16:>16s} | {'-'*8:>8s} | {'-'*10:>10s} | {'-'*10:>10s} | {'-'*10:>10s}")
         for r in repo_events:
-            v = r['vehicle']
-            if v not in veh_repos:
-                veh_repos[v] = []
-            veh_repos[v].append(r)
-            
-        for v in sorted(veh_tasks.keys()):
-            tasks = sorted(veh_tasks[v], key=lambda x: x['departure_time'])
-            repos = sorted(veh_repos.get(v, []), key=lambda x: x.get('from_arrival', 0))
-            
-            fleet_str = "Own Fleet" if tasks and tasks[0].get('fleet_type') == 'own' else "Rented Fleet" if tasks and tasks[0].get('fleet_type') == 'rent' else "Rail Wagon"
-            lines.append(f"  [Vehicle {v:4d}] ({fleet_str})")
-            
-            # Print tasks and interleaved repos
-            for i, task in enumerate(tasks):
-                dep = float_to_day_time(task['departure_time'])
-                arr = float_to_day_time(task['arrival_time'])
-                lines.append(f"    - Task: {task.get('od_pair', '')} | {task.get('origin', '')} -> {task.get('destination', '')} | {dep} to {arr}")
-                
-                # Check if there is a repo starting after this task
-                for r in repos:
-                    if abs(r['from_arrival'] - task['arrival_time']) < 1e-4:
-                        r_dep = float_to_day_time(r['from_arrival'])
-                        r_arr = float_to_day_time(r['to_departure'])
-                        gap = max(0.0, r['to_departure'] - r['from_arrival'])
-                        lines.append(f"      * Reposition: {r['from_node']} -> {r['to_node']} | {r_dep} to {r_arr} ({gap:.1f}h) | Cost: ¥{r['cost']:.1f}")
+            r_dep = float_to_day_time(r['from_arrival'])
+            r_arr = float_to_day_time(r['to_departure'])
+            gap = max(0.0, r['to_departure'] - r['from_arrival'])
+            lines.append(
+                f"  {r['vehicle']:>4d} | {r['from_od']:>10s} | {r['to_od']:>10s} | {str(r['from_node']):>8s} | {str(r['to_node']):>8s} | {r_dep} to {r_arr} ({gap:.1f}h) | {r.get('distance_km', 0):>6.1f}km | ¥{r.get('empty_fee', 0):>9.1f} | ¥{r.get('pure_idle', 0):>9.1f} | ¥{r.get('extra_opp', 0):>9.1f}"
+            )
+        lines.append("")
+
+    schedule = solution.get("transport_routes", [])
+    if schedule:
+        lines.append("--- Active Transport Routes ---")
+        total_vehicles = 0
+        for t in schedule:
+            dep = float_to_day_time(t['departure_time'])
+            arr = float_to_day_time(t['arrival_time'])
+            n_veh = t.get('num_vehicles', 1)
+            total_vehicles += n_veh
+            lines.append(
+                f"  {t.get('od_pair', '')} | {t.get('origin', '')} -> {t.get('destination', '')} | {dep} to {arr} | {n_veh} vehicle(s)"
+            )
+        # Use num_vehicles_used (unique vehicles after stitching) instead of summing route segments
+        unique_vehicles = solution.get('num_vehicles_used', total_vehicles)
+        lines.append(f"  {'':>4s}   Unique vehicles used: {unique_vehicles} (route segments: {total_vehicles})")
         lines.append("")
 
     rail_summary = solution.get("rail_consolidation_summary", [])
