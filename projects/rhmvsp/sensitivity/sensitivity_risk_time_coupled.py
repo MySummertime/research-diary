@@ -173,8 +173,11 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
     csv_path = os.path.join(exp_dir, "summary_coupled.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
+        cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                     "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
         w.writerow(["alpha_max", "delta_T", "status",
-                     "cost", "R_risk", "R_time", "Gap_pct", "iterations",
+                     "cost"] + cost_cols +
+                    ["R_risk", "R_time", "Gap_pct", "iterations",
                      "cost_bench", "R_risk_bench", "R_time_bench",
                      "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%"])
 
@@ -212,6 +215,14 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
                     rec.update({
                         "status": sol.get("status", "optimal"),
                         "cost": sol.get("total_cost", 0),
+                        "deploy_cost": sol.get("deploy_cost", 0),
+                        "hub_cost": sol.get("hub_cost", 0),
+                        "transport_cost": sol.get("transport_cost", 0),
+                        "transfer_cost": sol.get("transfer_cost", 0),
+                        "reposition_cost": sol.get("reposition_cost", 0),
+                        "prep_cost": sol.get("prep_cost", 0),
+                        "idle_cost": sol.get("idle_cost", 0),
+                        "opportunity_cost": sol.get("opportunity_cost", 0),
                         "R_risk": sol.get("R_net_risk", 0),
                         "R_time": sol.get("R_net_time", 0),
                         "gap_pct": sol.get("gap_pct", 0.0),
@@ -246,10 +257,12 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
                 else:
                     cost_g = rr_g = rt_g = ""
 
-                w.writerow([
-                    f"{a_max:.3f}", f"{dT:.2f}",
+                row = [f"{a_max:.3f}", f"{dT:.2f}",
                     rec.get("status", "?"),
-                    f"{rc:.0f}"  if ok else "",
+                    f"{rc:.0f}"  if ok else ""]
+                for col in cost_cols:
+                    row.append(f"{rec.get(col, 0):.0f}" if ok else "")
+                row += [
                     f"{rr:.4f}"  if ok else "",
                     f"{rt:.4f}"  if ok else "",
                     f"{rec.get('gap_pct', 0):.4f}" if ok else "",
@@ -258,7 +271,8 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
                     f"{bench_rrisk:.4f}" if bench_rrisk else "",
                     f"{bench_rtime:.4f}" if bench_rtime else "",
                     cost_g, rr_g, rt_g,
-                ])
+                ]
+                w.writerow(row)
 
     print(f"\nCSV saved → {csv_path}")
 

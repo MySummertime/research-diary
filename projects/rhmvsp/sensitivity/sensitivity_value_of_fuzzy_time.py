@@ -105,6 +105,14 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
                 r = {
                     "param": dT, "status": "optimal",
                     "cost": sol.get("total_cost", 0),
+                    "deploy_cost": sol.get("deploy_cost", 0),
+                    "hub_cost": sol.get("hub_cost", 0),
+                    "transport_cost": sol.get("transport_cost", 0),
+                    "transfer_cost": sol.get("transfer_cost", 0),
+                    "reposition_cost": sol.get("reposition_cost", 0),
+                    "prep_cost": sol.get("prep_cost", 0),
+                    "idle_cost": sol.get("idle_cost", 0),
+                    "opportunity_cost": sol.get("opportunity_cost", 0),
                     "R_risk": sol.get("R_net_risk", 0),
                     "R_time": sol.get("R_net_time", 0),
                     "gap_pct": sol.get("gap_pct", 0.0),
@@ -128,10 +136,13 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
     csv_path = os.path.join(exp_dir, f"summary_delta_T.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        hdr = ["delta_T", "alpha_T", "alpha_max", "status", "iterations",
-               "cost", "R_risk", "R_time",
+        cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                     "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+        hdr = (["delta_T", "alpha_T", "alpha_max", "status", "iterations",
+               "cost"] + cost_cols +
+              ["R_risk", "R_time",
                "cost_bench", "R_risk_bench", "R_time_bench",
-               "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%"]
+               "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%"])
         w.writerow(hdr)
 
         # Benchmark = ablation row (delta_T = 0.01, first entry)
@@ -160,20 +171,25 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
                 rr_g = f"{(r['R_risk'] - br_risk) / br_risk * 100:+.2f}" if br_risk else ""
                 rt_g = f"{(r['R_time'] - br_time) / br_time * 100:+.2f}" if br_time else ""
 
-            w.writerow([
+            row = [
                 f"{r['param']:.2f}",
                 f"{cfg.alpha_T:.2f}",
                 f"{cfg.alpha_max:.2f}",
                 "optimal",
                 r.get("iterations", ""),
                 f"{r['cost']:.0f}",
+            ]
+            for col in cost_cols:
+                row.append(f"{r.get(col, 0):.0f}")
+            row += [
                 f"{r['R_risk']:.4f}",
                 f"{r['R_time']:.4f}",
                 f"{bc:.0f}",
                 f"{br_risk:.4f}",
                 f"{br_time:.4f}",
                 cost_g, rr_g, rt_g,
-            ])
+            ]
+            w.writerow(row)
     print(f"CSV saved to: {csv_path}")
 
     # ---- Charts ----

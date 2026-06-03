@@ -201,6 +201,14 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                     "param": val, "status": "optimal",
                     "cost": cost, "R_risk": r_risk, "R_time": r_time,
                     "gap_pct": gap_pct,
+                    "deploy_cost": sol.get("deploy_cost", 0),
+                    "hub_cost": sol.get("hub_cost", 0),
+                    "transport_cost": sol.get("transport_cost", 0),
+                    "transfer_cost": sol.get("transfer_cost", 0),
+                    "reposition_cost": sol.get("reposition_cost", 0),
+                    "prep_cost": sol.get("prep_cost", 0),
+                    "idle_cost": sol.get("idle_cost", 0),
+                    "opportunity_cost": sol.get("opportunity_cost", 0),
                     "od_details": sol.get("od_reliability_details", {}),
                 })
                 logger.info(f"\nResult: {label}={val}: Cost=¥{cost:,.0f}, R_risk={r_risk:.4f}, R_time={r_time:.4f}")
@@ -241,15 +249,20 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
 
     # Save summary CSV
     csv_path = os.path.join(exp_dir, f"summary_{param_name}.csv")
+    cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                 "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
     with open(csv_path, "w") as f:
-        f.write(f"{param_name},status,cost,R_risk,R_time,Gap_pct")
+        f.write(f"{param_name},status,cost,{','.join(cost_cols)},R_risk,R_time,Gap_pct")
         for od_idx in range(5):
             f.write(f",R_od_{od_idx+1}_risk,R_od_{od_idx+1}_time")
         f.write("\n")
         for r in results:
             f.write(f"{r['param']},{r.get('status','?')}")
             if r.get("status") == "optimal":
-                f.write(f",{r['cost']:.0f},{r['R_risk']:.4f},{r['R_time']:.4f},{r.get('gap_pct',0.0):.4f}")
+                f.write(f",{r['cost']:.0f}")
+                for col in cost_cols:
+                    f.write(f",{r.get(col, 0):.0f}")
+                f.write(f",{r['R_risk']:.4f},{r['R_time']:.4f},{r.get('gap_pct',0.0):.4f}")
                 od_details = r.get("od_details", {})
                 for od_idx in range(5):
                     od_r = od_details.get(od_idx, {})

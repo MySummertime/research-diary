@@ -92,14 +92,20 @@ def _update_od_deadlines(instance, config):
 
 
 def _run_single(config, inst, logger):
-    """Run one BAP solve → (cost, status, elapsed)."""
+    """Run one BAP solve → dict with cost and sub-components."""
     solver = BAPSolver(config, json.loads(json.dumps(inst)), logger)
     t0 = time.time()
     sol = solver.solve()
     elapsed = time.time() - t0
     status = sol.get("status", "unknown")
-    cost   = sol.get("total_cost") if status != "infeasible" else None
-    return cost, status, elapsed
+    ok = status != "infeasible"
+    cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                 "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+    result = {"cost": sol.get("total_cost") if ok else None,
+              "status": status, "elapsed": round(elapsed, 2)}
+    for col in cost_cols:
+        result[col] = sol.get(col, 0) if ok else None
+    return result
 
 
 def run_deterministic_vs_uncertain():
@@ -142,10 +148,11 @@ def run_deterministic_vs_uncertain():
     total = len(DELTA_T_GRID) * N_SCENARIOS * 2
     done  = 0
 
+    cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                 "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
     with open(csv_path, "w", newline="") as f:
         csv.writer(f).writerow(["model", "delta_T_group", "scenario_id",
-            "cost", "status", "elapsed_s",
-        ])
+            "cost"] + cost_cols + ["status", "elapsed_s"])
 
     # ── Pre-generate scenarios (shared across all groups for fairness) ────────
     # Same physical realizations; only the solver config differs per group.
@@ -175,15 +182,17 @@ def run_deterministic_vs_uncertain():
             scen_det = json.loads(json.dumps(scen))
             _update_od_deadlines(scen_det, cfg_det)
 
-            cost_det, status_det, elapsed_det = _run_single(
+            r_det = _run_single(
                 cfg_det, scen_det, Logger(level="ERROR", log_file=None)
             )
             done += 1
 
             with open(csv_path, "a", newline="") as f:
-                csv.writer(f).writerow(["DET", dT, s_id,
-                    cost_det, status_det, round(elapsed_det, 2),
-                ])
+                row = ["DET", dT, s_id, r_det["cost"]]
+                for col in cost_cols:
+                    row.append(r_det.get(col) if r_det["cost"] is not None else None)
+                row += [r_det["status"], r_det["elapsed"]]
+                csv.writer(f).writerow(row)
 
             # ── Uncertainty-aware model (full uncertainty) ──────────────────
             cfg_unc = RHMVSPConfig()
@@ -195,19 +204,21 @@ def run_deterministic_vs_uncertain():
             scen_unc = json.loads(json.dumps(scen))
             _update_od_deadlines(scen_unc, cfg_unc)
 
-            cost_unc, status_unc, elapsed_unc = _run_single(
+            r_unc = _run_single(
                 cfg_unc, scen_unc, Logger(level="ERROR", log_file=None)
             )
             done += 1
 
             with open(csv_path, "a", newline="") as f:
-                csv.writer(f).writerow(["UNC", dT, s_id,
-                    cost_unc, status_unc, round(elapsed_unc, 2),
-                ])
+                row = ["UNC", dT, s_id, r_unc["cost"]]
+                for col in cost_cols:
+                    row.append(r_unc.get(col) if r_unc["cost"] is not None else None)
+                row += [r_unc["status"], r_unc["elapsed"]]
+                csv.writer(f).writerow(row)
 
             # Store aligned (NaN keeps index correspondence)
-            det_costs[label].append(cost_det if cost_det is not None else float("nan"))
-            unc_costs[label].append(cost_unc if cost_unc is not None else float("nan"))
+            det_costs[label].append(r_det["cost"] if r_det["cost"] is not None else float("nan"))
+            unc_costs[label].append(r_unc["cost"] if r_unc["cost"] is not None else float("nan"))
 
             d_str = f"CNY {cost_det:,.0f}" if cost_det is not None else status_det
             u_str = f"CNY {cost_unc:,.0f}" if cost_unc is not None else status_unc

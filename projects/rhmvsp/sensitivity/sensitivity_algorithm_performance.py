@@ -118,9 +118,15 @@ def run_2d_sensitivity():
     csv_path = os.path.join(exp_dir, "algorithm_performance.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["alpha_T", "alpha_max", "status", "Time", "Iter", "Cost", "R_risk", "R_time", "Gap_pct",
-                     "Time_LP", "Iter_LP", "Cost_LP", "R_risk_LP", "R_time_LP",
-                     "Time_Gap%", "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%"])
+        cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                     "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+        w.writerow(["alpha_T", "alpha_max", "status", "Time", "Iter", "Cost"]
+                    + cost_cols
+                    + ["R_risk", "R_time", "Gap_pct",
+                       "Time_LP", "Iter_LP", "Cost_LP"]
+                    + [f"{c}_LP" for c in cost_cols]
+                    + ["R_risk_LP", "R_time_LP",
+                       "Time_Gap%", "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%"])
         
     results = []
         
@@ -168,27 +174,38 @@ def run_2d_sensitivity():
             lp_ok = sol_lp and sol_lp.get("status") != "infeasible"
 
             row = [f"{a_T:.1f}", f"{a_max:.3f}"]
+            cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                         "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
             if bap_ok:
                 cost_bap = sol["total_cost"]
                 r_risk_bap = sol.get("R_net_risk", 0)
-                r_time_bap = sol.get("R_net_time", 0)
+                r_time_bap = sol.get("R_net_risk", 0)
                 gap_pct_bap = sol.get("gap_pct", 0.0)
                 iter_bap = sol.get("iterations", 0)
                 row += ["optimal", f"{elapsed_bap:.2f}", str(iter_bap),
-                        f"{cost_bap:.0f}", f"{r_risk_bap:.4f}", f"{r_time_bap:.4f}",
-                        f"{gap_pct_bap:.4f}"]
+                        f"{cost_bap:.0f}"]
+                for col in cost_cols:
+                    row.append(f"{sol.get(col, 0):.0f}")
+                row += [f"{r_risk_bap:.4f}", f"{r_time_bap:.4f}", f"{gap_pct_bap:.4f}"]
             else:
-                row += ["infeasible", "", "", "", "", "", ""]
+                row += ["infeasible", "", "", ""]
+                row += [""] * len(cost_cols)
+                row += ["", "", ""]
 
             if lp_ok:
                 cost_lp = sol_lp["total_cost"]
                 r_risk_lp = sol_lp.get("R_net_risk", 0)
-                r_time_lp = sol_lp.get("R_net_time", 0)
+                r_time_lp = sol_lp.get("R_net_risk", 0)
                 iter_lp = sol_lp.get("iterations", 0)
                 row += [f"{elapsed_lp:.2f}", str(iter_lp),
-                        f"{cost_lp:.0f}", f"{r_risk_lp:.4f}", f"{r_time_lp:.4f}"]
+                        f"{cost_lp:.0f}"]
+                for col in cost_cols:
+                    row.append(f"{sol_lp.get(col, 0):.0f}")
+                row += [f"{r_risk_lp:.4f}", f"{r_time_lp:.4f}"]
             else:
-                row += ["", "", "", "", ""]
+                row += ["", "", ""]
+                row += [""] * len(cost_cols)
+                row += ["", ""]
 
             # --- Gap columns ---
             if bap_ok and lp_ok and elapsed_lp > 0:
@@ -278,8 +295,13 @@ def run_2d_sensitivity():
         csv.writer(f).writerow([])  # blank separator
     with open(csv_path, "a", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["delta_T", "status", "Time", "Iter", "Cost", "R_risk", "R_time",
-                     "Time_LP", "Iter_LP", "Cost_LP"])
+        dt_cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                        "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+        w.writerow(["delta_T", "status", "Time", "Iter", "Cost"]
+                    + dt_cost_cols
+                    + ["R_risk", "R_time",
+                       "Time_LP", "Iter_LP", "Cost_LP"]
+                    + [f"{c}_LP" for c in dt_cost_cols])
 
     for dT in delta_T_values:
         config_dt = RHMVSPConfig()
@@ -330,18 +352,27 @@ def run_2d_sensitivity():
             "iter": sol.get("iterations", 0) if bap_ok else None,
         })
 
+        dt_cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                        "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
         row = [f"{dT:.2f}"]
         if bap_ok:
             row += ["optimal", f"{elapsed_bap:.2f}", str(sol.get("iterations", 0)),
-                    f"{sol['total_cost']:.0f}", f"{sol.get('R_net_risk',0):.4f}",
-                    f"{sol.get('R_net_time',0):.4f}"]
+                    f"{sol['total_cost']:.0f}"]
+            for col in dt_cost_cols:
+                row.append(f"{sol.get(col, 0):.0f}")
+            row += [f"{sol.get('R_net_risk',0):.4f}", f"{sol.get('R_net_time',0):.4f}"]
         else:
-            row += ["infeasible", "", "", "", "", ""]
+            row += ["infeasible", "", "", ""]
+            row += [""] * len(dt_cost_cols)
+            row += ["", ""]
         if lp_ok:
             row += [f"{elapsed_lp:.2f}", str(sol_lp.get("iterations", 0)),
                     f"{sol_lp['total_cost']:.0f}"]
+            for col in dt_cost_cols:
+                row.append(f"{sol_lp.get(col, 0):.0f}")
         else:
             row += ["", "", ""]
+            row += [""] * len(dt_cost_cols)
 
         with open(csv_path, "a", newline="") as f:
             csv.writer(f).writerow(row)

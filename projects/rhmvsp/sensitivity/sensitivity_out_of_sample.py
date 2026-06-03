@@ -77,7 +77,7 @@ def _update_od_deadlines(instance, config):
 
 
 def _run_single(config, inst, exp_dir, model_tag, dT, a_max, seed):
-    """Run one BAP/LP-only solve and return (cost, status, elapsed)."""
+    """Run one BAP/LP-only solve and return dict with cost and sub-components."""
     logger = Logger(level="ERROR", log_file=None)  # output via stdout → Tee
     solver = BAPSolver(config, json.loads(json.dumps(inst)), logger)
     import time
@@ -86,8 +86,14 @@ def _run_single(config, inst, exp_dir, model_tag, dT, a_max, seed):
     elapsed = time.time() - t0
 
     status  = sol.get("status", "unknown")
-    cost    = sol.get("total_cost") if status != "infeasible" else None
-    return cost, status, elapsed
+    ok = status != "infeasible"
+    cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                 "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+    result = {"cost": sol.get("total_cost") if ok else None,
+              "status": status, "elapsed": round(elapsed, 2)}
+    for col in cost_cols:
+        result[col] = sol.get(col, 0) if ok else None
+    return result
 
 
 def run_out_of_sample():
@@ -124,10 +130,12 @@ def run_out_of_sample():
 
     # CSV header
     csv_path = os.path.join(exp_dir, "experiment.csv")
+    cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
+                 "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
     with open(csv_path, "w", newline="") as f:
         csv.writer(f).writerow(
             ["group_label", "delta_T", "alpha_max", "scenario_id",
-             "model", "cost", "status", "elapsed_s"]
+             "model", "cost"] + cost_cols + ["status", "elapsed_s"]
         )
 
     for dT, a_max in PARAM_GRID:
@@ -151,16 +159,17 @@ def run_out_of_sample():
             scen_bap = json.loads(json.dumps(scen))  # deep copy for isolation
             _update_od_deadlines(scen_bap, cfg_bap)
 
-            cost_b, status_b, elapsed_b = _run_single(
+            r_bap = _run_single(
                 cfg_bap, scen_bap, exp_dir, "bap", dT, a_max, s_id
             )
             done += 1
 
             with open(csv_path, "a", newline="") as f:
-                csv.writer(f).writerow([
-                    label, dT, a_max, s_id, "BAP",
-                    cost_b, status_b, round(elapsed_b, 2),
-                ])
+                row = [label, dT, a_max, s_id, "BAP", r_bap["cost"]]
+                for col in cost_cols:
+                    row.append(r_bap.get(col) if r_bap["cost"] is not None else None)
+                row += [r_bap["status"], r_bap["elapsed"]]
+                csv.writer(f).writerow(row)
 
             # ── LP-only (benchmark) — same scenario, different config ─────────
             cfg_lp  = RHMVSPConfig()
@@ -173,26 +182,27 @@ def run_out_of_sample():
             scen_lp = json.loads(json.dumps(scen))  # deep copy of same scenario
             _update_od_deadlines(scen_lp, cfg_lp)
 
-            cost_l, status_l, elapsed_l = _run_single(
+            r_lp = _run_single(
                 cfg_lp, scen_lp, exp_dir, "lp", dT, a_max, s_id
             )
             done += 1
 
             # Store aligned — NaN for failed runs keeps index correspondence
-            bap_costs[label].append(cost_b if cost_b is not None else float("nan"))
-            bench_costs[label].append(cost_l if cost_l is not None else float("nan"))
+            bap_costs[label].append(r_bap["cost"] if r_bap["cost"] is not None else float("nan"))
+            bench_costs[label].append(r_lp["cost"] if r_lp["cost"] is not None else float("nan"))
 
             with open(csv_path, "a", newline="") as f:
-                csv.writer(f).writerow([
-                    label, dT, a_max, s_id, "LP",
-                    cost_l, status_l, round(elapsed_l, 2),
-                ])
+                row = [label, dT, a_max, s_id, "LP", r_lp["cost"]]
+                for col in cost_cols:
+                    row.append(r_lp.get(col) if r_lp["cost"] is not None else None)
+                row += [r_lp["status"], r_lp["elapsed"]]
+                csv.writer(f).writerow(row)
 
             # Progress
-            b_str = f"CNY {cost_b:,.0f}" if cost_b is not None else status_b
-            l_str = f"CNY {cost_l:,.0f}" if cost_l is not None else status_l
+            b_str = f"CNY {r_bap['cost']:,.0f}" if r_bap["cost"] is not None else r_bap["status"]
+            l_str = f"CNY {r_lp['cost']:,.0f}" if r_lp["cost"] is not None else r_lp["status"]
             print(f"  [{done:3d}/{total}]  s={s_id:2d}  BAP={b_str:>14s}  LP={l_str:>14s}  "
-                  f"({elapsed_b:.1f}s / {elapsed_l:.1f}s)")
+                  f"({r_bap['elapsed']:.1f}s / {r_lp['elapsed']:.1f}s)")
 
     # ── Plot enhanced box-plots ───────────────────────────────────────────────
     bap_list   = [bap_costs[l]   for l in group_labels]
