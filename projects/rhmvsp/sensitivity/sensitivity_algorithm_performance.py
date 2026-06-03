@@ -179,7 +179,7 @@ def run_2d_sensitivity():
             if bap_ok:
                 cost_bap = sol["total_cost"]
                 r_risk_bap = sol.get("R_net_risk", 0)
-                r_time_bap = sol.get("R_net_risk", 0)
+                r_time_bap = sol.get("R_net_time", 0)
                 gap_pct_bap = sol.get("gap_pct", 0.0)
                 iter_bap = sol.get("iterations", 0)
                 row += ["optimal", f"{elapsed_bap:.2f}", str(iter_bap),
@@ -195,7 +195,7 @@ def run_2d_sensitivity():
             if lp_ok:
                 cost_lp = sol_lp["total_cost"]
                 r_risk_lp = sol_lp.get("R_net_risk", 0)
-                r_time_lp = sol_lp.get("R_net_risk", 0)
+                r_time_lp = sol_lp.get("R_net_time", 0)
                 iter_lp = sol_lp.get("iterations", 0)
                 row += [f"{elapsed_lp:.2f}", str(iter_lp),
                         f"{cost_lp:.0f}"]
