@@ -13,22 +13,18 @@ except ImportError:
 
 from config import RHMVSPConfig
 from ..core.network import ODPair
-from ..core.uncertainty import TrapezoidalFuzzy, SupplyUncertaintyModel, DemandUncertaintyModel, UncertaintyEngine
+from ..core.uncertainty import TrapezoidalFuzzy, UncertaintyEngine
 
 
 class MasterProblem:
     """
-    Restricted Master Problem (RMP) for RHMVSP with supply uncertainty modeled
-    via Liu (2007) uncertainty theory rather than SAA with fixed random seeds.
+    Restricted Master Problem (RMP) for RHMVSP.
 
-    S2-8 fix: Supply-side uncertainty cost (expected shortfall penalty + holding cost)
-    is now derived from the trapezoidal fuzzy supply variable Q~_i, making the
-    column cost structure consistent with what the pricing problem evaluates.
-    The fuzzy expected shortfall replaces the 10-scenario fixed-seed SAA approach.
-
-    S2-1 fix: Supply uncertainty is modeled as TrapezoidalFuzzy(0.3D, 0.6D, 0.9D, 1.3D)
-    per OD pair. Expected values and shortfalls are computed analytically via
-    uncertainty theory, providing theoretically grounded supply reliability constraints.
+    Objective:
+      min  sum_col cost * lambda_col
+         + sum_hub c_hub * g_hub
+         + sum_od [p_pen + c_opp] * shortfall_i
+         + repositioning costs (vehicle idle + empty drive + opportunity)
     """
 
     def __init__(self, config: RHMVSPConfig, network, num_vehicles: int, logger, instance: dict = None):
@@ -38,8 +34,6 @@ class MasterProblem:
         self.num_vehicles = num_vehicles
         self.logger = logger
         self.instance = instance or {}
-        self.supply_model = SupplyUncertaintyModel(config)
-        self.demand_model = DemandUncertaintyModel(config)
         self.engine = UncertaintyEngine(config)
 
         # Stabilization state
@@ -60,19 +54,15 @@ class MasterProblem:
 
         return c_opp
 
-    def solve(self, columns: list, branch_constraints: list = None) -> tuple[float | None, dict]:
+    def solve(self, columns: list, branch_constraints: list = None, is_integer: bool = False) -> tuple[float | None, dict]:
         """
-        Solve exact RMP LP relaxation with fuzzy supply uncertainty recourse.
+        Solve exact RMP LP relaxation / MIP.
 
         Objective:
           min  sum_col cost * lambda_col
              + sum_hub c_hub * g_hub
-             + sum_od [p_pen + c_opp] * E^M[shortfall_i(lambda)]
-             + sum_od c_holding * E^M[surplus_i(lambda)]
-             + repositioning costs
-
-        The supply uncertainty cost term is computed analytically using the
-        TrapezoidalFuzzy supply model, replacing the SAA fixed-seed approach.
+             + sum_od [p_pen + c_opp] * shortfall_i
+             + repositioning costs (vehicle idle + empty drive + opportunity)
         """
         if not columns:
             return None, {}
@@ -85,7 +75,7 @@ class MasterProblem:
         c_opp = self._compute_opportunity_costs()
 
         q_veh = self.config.q_road
-        c_holding = self.config.c_holding
+        c_idle = self.config.c_vehicle_idle
         d_road = self.config.c_deploy_road
 
         # 3. Create LP Problem
@@ -109,11 +99,11 @@ class MasterProblem:
         # Decision Variables
         if use_gurobi:
             lambdas_own = {
-                col.col_id: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"lambda_own_{col.col_id}")
+                col.col_id: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"lambda_own_{col.col_id}")
                 for col in columns
             }
             lambdas_rent = {
-                col.col_id: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"lambda_rent_{col.col_id}")
+                col.col_id: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"lambda_rent_{col.col_id}")
                 for col in columns
             }
             g_vars = {
@@ -157,9 +147,9 @@ class MasterProblem:
                         dist = 0.0
                     else:
                         dist = self.network.get_exact_road_distance(od_i.destination, od_j.origin)
-                        alpha_T = od_i.alpha_T_od
-                        rep_fuzzy = self.engine.make_reposition_time(dist)
-                        req_gap = rep_fuzzy.deterministic_equivalent_upper(alpha_T)
+                        prep_h = getattr(self.config, 'prep_time_hours', 2.0)
+                        dispatch_buf = getattr(self.config, 'dispatch_buffer_hours', 1.0)
+                        req_gap = max(0.1, dist / self.config.road_speed) + prep_h + dispatch_buf
 
                     # #10: Vehicle completes OD_i transport at arrival_time, not E_od
                     buffer_i = getattr(self.config, 'L_od_buffer_hours', 1.5)
@@ -171,9 +161,9 @@ class MasterProblem:
                         # Time-dependent inventory cost while waiting for the repositioned vehicle
                         reposition_arrival = arrival_time_i + req_gap
                         extra_wait = max(0.0, reposition_arrival - od_j.E_od)
-                        inv_rate = (self.config.c_holding + self.config.c_opp_base) / 24.0
+                        inv_rate = (self.config.c_vehicle_idle + self.config.c_opp_base) / 24.0
                         
-                        # Non-linear holding cost penalty: accelerates with longer wait
+                        # Non-linear vehicle idle cost penalty: accelerates with longer wait
                         time_factor = 0.05  # cost accelerates 5% per hour squared
                         extra_inv_cost = q_veh * inv_rate * (extra_wait + 0.5 * time_factor * extra_wait**2)
 
@@ -182,22 +172,21 @@ class MasterProblem:
 
         if use_gurobi:
             pi_own = {
-                pair: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"pi_own_{pair[0]}_{pair[1]}")
+                pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_own_{pair[0]}_{pair[1]}")
                 for pair in valid_transitions
             }
             pi_rent = {
-                pair: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"pi_rent_{pair[0]}_{pair[1]}")
+                pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_rent_{pair[0]}_{pair[1]}")
                 for pair in valid_transitions
             }
             q_delivered = {
                 i: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"q_del_{i}")
                 for i, od in enumerate(self.od_pairs)
             }
-            # Shortfall variables for Gauss-Legendre quadrature (Wang 2025 demand uncertainty)
+            # Shortfall variables
             shortage_vars = {}
             for i in range(len(self.od_pairs)):
-                for k in range(5):
-                    shortage_vars[(i, k)] = prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"shortage_{i}_{k}")
+                shortage_vars[i] = prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"shortage_{i}")
             prob.update()
         else:
             pi_own = {
@@ -214,21 +203,9 @@ class MasterProblem:
             }
             shortage_vars = {}
             for i in range(len(self.od_pairs)):
-                for k in range(5):
-                    shortage_vars[(i, k)] = pulp.LpVariable(f"shortage_{i}_{k}", 0, None, pulp.LpContinuous)
+                shortage_vars[i] = pulp.LpVariable(f"shortage_{i}", 0, None, pulp.LpContinuous)
 
-        # 4. Objective function (Wang 2025: Gauss quadrature over demand & supply uncertainty)
-        # #12: Read Gauss-Legendre nodes/weights from config (no hardcoding)
-        alphas = list(self.config.gauss_legendre_nodes_5)
-        weights = list(self.config.gauss_legendre_weights_5)
-
-        def _get_dc_vals(i, od, k, alpha):
-            d_base = od.demand
-            c_base = c_opp[i]
-            xi_val = self.demand_model._inverse_distribution_xi(alpha)
-            d_val = d_base * (1.0 + self.config.delta_D * xi_val)
-            c_val = c_base * (1.0 + self.config.delta_C * xi_val)
-            return d_val, c_val
+        # 4. Objective function
 
         # Removed _get_q_c_vals since supply uncertainty is disabled
         if use_gurobi:
@@ -264,16 +241,15 @@ class MasterProblem:
             repo_cost_term = repo_own + repo_rent
             hub_cost_term = gp.quicksum(self.config.c_hub * g_vars[i] for i in transfer_node_ids)
             
-            supply_cost_term = gp.quicksum(
-                weights[k] * _get_dc_vals(i, od, k, alphas[k])[1] * shortage_vars[(i, k)]
-                for i, od in enumerate(self.od_pairs) for k in range(5)
+            demand_penalty_cost_term = gp.quicksum(
+                c_opp[i] * shortage_vars[i] for i, od in enumerate(self.od_pairs)
             )
             
             dummy_cost_term = gp.quicksum(self.config.big_m * dummy_vars[i] for i in range(len(self.od_pairs)))
             
             prob.setObjective(
                 transport_cost_term + repo_cost_term + hub_cost_term
-                + supply_cost_term + dummy_cost_term,
+                + demand_penalty_cost_term + dummy_cost_term,
                 GRB.MINIMIZE
             )
         else:
@@ -306,28 +282,25 @@ class MasterProblem:
             repo_cost_term = repo_own + repo_rent
             hub_cost_term = pulp.lpSum(self.config.c_hub * g_vars[i] for i in transfer_node_ids)
             
-            supply_cost_term = pulp.lpSum(
-                weights[k] * _get_dc_vals(i, od, k, alphas[k])[1] * shortage_vars[(i, k)]
-                for i, od in enumerate(self.od_pairs) for k in range(5)
+            demand_penalty_cost_term = pulp.lpSum(
+                c_opp[i] * shortage_vars[i] for i, od in enumerate(self.od_pairs)
             )
             
             dummy_cost_term = pulp.lpSum(self.config.big_m * dummy_vars[i] for i in range(len(self.od_pairs)))
             
             prob += (
                 transport_cost_term + repo_cost_term + hub_cost_term
-                + supply_cost_term + dummy_cost_term
+                + demand_penalty_cost_term + dummy_cost_term
             )
 
         # 5. Constraints
 
-        # Demand uncertainty: shortfall at each Gauss node (Wang 2025 correlated)
+        # Demand shortfall definition
         for i, od in enumerate(self.od_pairs):
-            for k, alpha in enumerate(alphas):
-                d_val, c_val = _get_dc_vals(i, od, k, alpha)
-                if use_gurobi:
-                    prob.addConstr(shortage_vars[(i, k)] >= d_val - q_delivered[i], name=f"short_def1_{i}_{k}")
-                else:
-                    prob += shortage_vars[(i, k)] >= d_val - q_delivered[i], f"short_def1_{i}_{k}"
+            if use_gurobi:
+                prob.addConstr(shortage_vars[i] >= od.demand - q_delivered[i], name=f"short_def1_{i}")
+            else:
+                prob += shortage_vars[i] >= od.demand - q_delivered[i], f"short_def1_{i}"
 
         # S2-8: Capacity link — delivered quantity <= physical capacity from dispatched columns + dummy variables
         capacity_constraints = {}
@@ -523,7 +496,11 @@ class MasterProblem:
                 return None, {}
             elif prob.status == GRB.OPTIMAL or prob.status == GRB.SUBOPTIMAL:
                 lp_val = prob.ObjVal
-                duals = self._extract_gurobi_duals(prob, capacity_constraints, transfer_node_ids)
+                # Skip dual extraction for MIP
+                if is_integer:
+                    duals = {}
+                else:
+                    duals = self._extract_gurobi_duals(prob, capacity_constraints, transfer_node_ids)
             else:
                 self.logger.warning(f"Gurobi did not find an optimal solution. Status: {prob.status}")
                 return None, {}
@@ -539,7 +516,11 @@ class MasterProblem:
 
             if prob.status == pulp.LpStatusOptimal:
                 lp_val = pulp.value(prob.objective)
-                duals = self._extract_pulp_duals(prob, capacity_constraints, transfer_node_ids)
+                # Skip dual extraction for MIP
+                if is_integer:
+                    duals = {}
+                else:
+                    duals = self._extract_pulp_duals(prob, capacity_constraints, transfer_node_ids)
             else:
                 self.logger.warning(f"Pulp did not find an optimal solution. Status: {prob.status}")
                 return None, {}

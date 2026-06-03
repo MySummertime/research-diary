@@ -39,14 +39,11 @@ class Column:
     deploy_cost: float = 0.0
     transport_cost: float = 0.0
     transfer_cost: float = 0.0
-    delay_penalty_cost: float = 0.0
     arrival_time: float = 0.0
     time_R: float = 1.0
-    sys_R: float = 1.0
     bottleneck_capacity: float = 20.0
     lp_value: float = 0.0
     lp_value_own: float = 0.0
-    lp_value_rent: float = 0.0
     transport_cost_upper_bound: float = 0.0
     risk_R: float = 1.0
 
@@ -93,6 +90,7 @@ class BranchAndPriceController:
         self.open_nodes = []
         self.node_counter = 0
         self.col_gen_iterations = 0
+        self.cg_history: list[tuple[int, float, float]] = []  # [(iter, lp_bound, best_ub)]
 
     def solve(self) -> dict:
         """Main solve loop using Best-First Search."""
@@ -100,6 +98,7 @@ class BranchAndPriceController:
         self.solve_start_time = time.time()
 
         root_cols = self._generate_initial_columns()
+        self.cg_history = []
         root = BAPNode(lower_bound=-self.config.big_m, depth=0, node_id=0, columns=root_cols)
         heapq.heappush(self.open_nodes, root)
         self.node_counter += 1
@@ -139,6 +138,11 @@ class BranchAndPriceController:
                 )
                 
                 self.logger.info("  Continuing search to prove optimality (or until time limit).")
+
+            # LP-only mode: stop after root-node CG (no branching)
+            if self.config.lp_only:
+                self.logger.info("  LP-only mode: stopping after root node.")
+                break
 
             if self._is_integer(curr_node):
                 continue
@@ -182,6 +186,8 @@ class BranchAndPriceController:
             if lp_val is None:
                 return None, False
 
+            self.cg_history.append((self.col_gen_iterations, lp_val, self.best_ub))
+
             # Dual Stabilization (Moving Average)
             if self.config.bap_stabilization and previous_duals is not None:
                 duals = {}
@@ -217,44 +223,36 @@ class BranchAndPriceController:
 
                 new_node_cols = []
                 for lab in labels:
-                    # #18: Include time_upper to distinguish same-path different-timing labels
                     fp = tuple((a.i, a.j, a.arc_id) for a in lab.arc_sequence) + (round(lab.time_upper, 1),)
                     if fp not in existing_fingerprints:
                         col = self._label_to_column(lab, i)
-                        new_node_cols.append(col)
+                        if col is not None:
+                            new_node_cols.append(col)
                         existing_fingerprints.add(fp)
 
-                filtered_cols = self._apply_branch_constraints(
-                    new_node_cols, node.branch_constraints
-                )
-
-                if filtered_cols:
-                    node.columns.extend(filtered_cols)
+                if new_node_cols:
+                    node.columns.extend(new_node_cols)
                     new_cols_found = True
 
-            # 2. If heuristic pricing fails to find any new columns, run Exact Pricing (exact=True) to prove optimality
-            if not new_cols_found:
-                for i, od in enumerate(self.network.od_pairs):
-                    labels = self.pp.solve(
-                        od.origin, od.destination, i, duals, od.E_od, od.L_od, od.alpha_T_od,
-                        node.branch_constraints, exact=True
-                    )
+            # 2. Always run Exact Pricing (exact=True) to prove optimality
+            for i, od in enumerate(self.network.od_pairs):
+                labels = self.pp.solve(
+                    od.origin, od.destination, i, duals, od.E_od, od.L_od, od.alpha_T_od,
+                    node.branch_constraints, exact=True
+                )
 
-                    new_node_cols = []
-                    for lab in labels:
-                        fp = tuple((a.i, a.j, a.arc_id) for a in lab.arc_sequence) + (round(lab.time_upper, 1),)
-                        if fp not in existing_fingerprints:
-                            col = self._label_to_column(lab, i)
+                new_node_cols = []
+                for lab in labels:
+                    fp = tuple((a.i, a.j, a.arc_id) for a in lab.arc_sequence) + (round(lab.time_upper, 1),)
+                    if fp not in existing_fingerprints:
+                        col = self._label_to_column(lab, i)
+                        if col is not None:
                             new_node_cols.append(col)
-                            existing_fingerprints.add(fp)
+                        existing_fingerprints.add(fp)
 
-                    filtered_cols = self._apply_branch_constraints(
-                        new_node_cols, node.branch_constraints
-                    )
-
-                    if filtered_cols:
-                        node.columns.extend(filtered_cols)
-                        new_cols_found = True
+                if new_node_cols:
+                    node.columns.extend(new_node_cols)
+                    new_cols_found = True
 
             if not new_cols_found:
                 break
@@ -262,7 +260,6 @@ class BranchAndPriceController:
             self.logger.debug(
                 f"  Iteration {iteration}: LP={lp_val:.2f}, PoolSize={len(node.columns)}"
             )
-
 
         if iteration >= max_iters:
             self.logger.warning(f"  Column generation reached max iterations ({max_iters})")
@@ -282,7 +279,7 @@ class BranchAndPriceController:
         return True
 
     def _apply_branch_constraints(self, columns, constraints):
-        """Filter columns based on branching constraints (Ryan-Foster and Hub Activation)."""
+        """Filter columns based on branching constraints (Hub Activation and OD-specific Arc Branching)."""
         if not constraints:
             return columns
 
@@ -290,56 +287,38 @@ class BranchAndPriceController:
         for col in columns:
             valid = True
             for c_type, c_data in constraints:
-                if c_type == "rf_same":
-                    i, j = c_data
-                    if not self._check_rf(col, i, j, True):
-                        valid = False
-                        break
-                elif c_type == "rf_diff":
-                    i, j = c_data
-                    if not self._check_rf(col, i, j, False):
-                        valid = False
-                        break
-                elif c_type == "hub_close":
+                if c_type == "hub_close":
                     hub_id = c_data
                     if hub_id in col.transfer_nodes:
                         valid = False
                         break
                 elif c_type == "arc_forbid":
-                    u, v, m = c_data
-                    if self._contains_arc(col, u, v, m):
+                    od_idx, u, v, m = c_data
+                    if col.od_idx == od_idx and self._contains_arc(col, u, v, m):
                         valid = False
                         break
                 elif c_type == "arc_enforce":
-                    u, v, m = c_data
-                    if not self._contains_arc(col, u, v, m):
+                    od_idx, u, v, m = c_data
+                    if col.od_idx == od_idx and not self._contains_arc(col, u, v, m):
                         valid = False
                         break
             if valid:
                 filtered.append(col)
         return filtered
 
-    def _label_to_column(self, label, od_idx) -> Column:
+    def _label_to_column(self, label, od_idx) -> Column | None:
         """Convert a PricingProblem Label to a MasterProblem Column with exact Wait-Shift timing."""
         q_veh = self.config.q_road
         q_rail = self.config.q_rail
 
         deploy_cost = sum(a.deploy_cost * a.min_units * ((q_veh / q_rail) if a.mode == 2 else 1.0) for a in label.arc_sequence)
         
-        base_transport_cost = sum(a.unit_cost * q_veh for a in label.arc_sequence)
-        spread = self.config.fuzzy_cost_spread
-        alpha_c = self.config.alpha_c
-        
-        # E^M[c~] = (a + 2b + c)/4 for Triangular Fuzzy Variable
-        expected_multiplier = (spread[0] + 2.0 * spread[1] + spread[2]) / 4.0
-        transport_cost = base_transport_cost * expected_multiplier
-        
-        # Upper bound deterministic equivalent coefficient
-        if alpha_c > 0.5:
-            upper_coeff = (2.0 * alpha_c - 1.0) * spread[2] + 2.0 * (1.0 - alpha_c) * spread[1]
-        else:
-            upper_coeff = spread[1]
-        transport_cost_upper_bound = base_transport_cost * upper_coeff
+        transport_cost = 0.0
+        transport_cost_upper_bound = 0.0
+        for a in label.arc_sequence:
+            cost_a = a.unit_cost * q_veh
+            transport_cost += cost_a
+            transport_cost_upper_bound += cost_a
 
         transfer_nodes_list = []
         transfer_cost = 0.0
@@ -411,17 +390,23 @@ class BranchAndPriceController:
         # ---------------------------------------------------------------
         # COLUMN COST = transport + deploy + transfer (no delay penalty)
         # ---------------------------------------------------------------
+        # NOTE: z_*_dur already includes arc travel times AND rail timetable
+        # wait times (which are embedded in the timetable arrival times).
+        # The total_wait_time shifts the departure to match the first rail
+        # connection. Using shifted_departure_time + z_*_dur would double-count
+        # the wait.  Use od.E_od as the base so z_*_dur correctly measures
+        # the total elapsed time from the earliest possible start.
         trap_Z = TrapezoidalFuzzy(
-            a=shifted_departure_time + z_a_dur,
-            b=shifted_departure_time + z_b_dur,
-            c=shifted_departure_time + z_c_dur,
-            d=shifted_departure_time + z_d_dur,
+            a=od.E_od + z_a_dur,
+            b=od.E_od + z_b_dur,
+            c=od.E_od + z_c_dur,
+            d=od.E_od + z_d_dur,
         )
         actual_cost = actual_cost_without_risk
         
         # S2-4: Compute continuous time_R = M{Z~ <= L_od} in [0,1].
         time_R = trap_Z.uncertain_measure_leq(l_effective)
-        sys_R = min(label.risk_R, time_R)
+
         bottleneck_capacity = q_veh
 
         col = Column(
@@ -437,10 +422,8 @@ class BranchAndPriceController:
             deploy_cost=deploy_cost,
             transport_cost=transport_cost,
             transfer_cost=transfer_cost,
-            delay_penalty_cost=0.0,
             risk_R=label.risk_R,
             time_R=time_R,
-            sys_R=sys_R,
             bottleneck_capacity=bottleneck_capacity,
             transport_cost_upper_bound=transport_cost_upper_bound,
         )
@@ -467,13 +450,25 @@ class BranchAndPriceController:
                 fp = tuple((a.i, a.j, a.arc_id) for a in lab.arc_sequence)
                 if fp not in existing_fingerprints:
                     existing_fingerprints.add(fp)
-                    cols.append(self._label_to_column(lab, i))
+                    col = self._label_to_column(lab, i)
+                    if col is not None:
+                        cols.append(col)
         self.logger.info(f"  Generated {len(cols)} initial columns")
         return cols
 
     def _branch(self, node: BAPNode):
-        """Hierarchical branching: Prioritize fractional hub activation, then Ryan-Foster node pairs."""
+        """Hierarchical branching: Hub activation first, then OD-specific arc branching.
+
+        Phase 1: If a fractional hub activation variable exists, branch on hub open/close.
+        Phase 2: Find the OD with the most fractional columns, then branch on an OD-specific
+                 arc (i,j,mode) scoped to that OD only. This avoids the mathematical
+                 invalidity of Ryan-Foster node-pair branching (which incorrectly assumes
+                 that visiting a physical node is a binary decision, when paths can visit
+                 a node multiple times or partially).
+        """
         tol = self.config.tolerance
+
+        # Phase 1: Hub activation branching
         fractional_hub = None
         if hasattr(self.mp, "hub_values"):
             for h, val in self.mp.hub_values.items():
@@ -500,49 +495,38 @@ class BranchAndPriceController:
             heapq.heappush(self.open_nodes, child2)
             return
 
-        candidate = BranchingStrategy.get_ryan_foster_candidate(node.columns, self.node_counter)
-        if candidate:
-            i, j = candidate
-            self.logger.info(f"  Branching on Ryan-Foster pair ({i}, {j})")
+        # Phase 2: OD-specific arc branching
+        # Find the OD index with the most fractional column values
+        od_fractional_counts = {}
+        for col in node.columns:
+            if hasattr(col, "lp_value") and tol < abs(col.lp_value - round(col.lp_value)) < 1.0 - tol:
+                od_fractional_counts[col.od_idx] = od_fractional_counts.get(col.od_idx, 0) + 1
 
-            child1 = BAPNode(
-                lower_bound=node.lower_bound, depth=node.depth + 1, node_id=self.node_counter, parent_id=node.node_id,
-                branch_constraints=node.branch_constraints + [("rf_same", (i, j))],
-                columns=[c for c in node.columns if self._check_rf(c, i, j, True)],
-            )
-            self.node_counter += 1
-            heapq.heappush(self.open_nodes, child1)
+        # Pick the OD with the most fractional columns
+        target_od = max(od_fractional_counts, key=od_fractional_counts.get) if od_fractional_counts else None
 
-            child2 = BAPNode(
-                lower_bound=node.lower_bound, depth=node.depth + 1, node_id=self.node_counter, parent_id=node.node_id,
-                branch_constraints=node.branch_constraints + [("rf_diff", (i, j))],
-                columns=[c for c in node.columns if self._check_rf(c, i, j, False)],
-            )
-            self.node_counter += 1
-            heapq.heappush(self.open_nodes, child2)
-            return
-
-        # S1-3: Arc branching fallback if Ryan-Foster fails
-        arc_candidate = BranchingStrategy.get_arc_candidate(node.columns)
-        if arc_candidate:
-            u, v, m = arc_candidate
-            self.logger.info(f"  Branching on Arc ({u}, {v}, m={m})")
-            
-            child1 = BAPNode(
-                lower_bound=node.lower_bound, depth=node.depth + 1, node_id=self.node_counter, parent_id=node.node_id,
-                branch_constraints=node.branch_constraints + [("arc_forbid", (u, v, m))],
-                columns=[c for c in node.columns if not self._contains_arc(c, u, v, m)],
-            )
-            self.node_counter += 1
-            heapq.heappush(self.open_nodes, child1)
-            
-            child2 = BAPNode(
-                lower_bound=node.lower_bound, depth=node.depth + 1, node_id=self.node_counter, parent_id=node.node_id,
-                branch_constraints=node.branch_constraints + [("arc_enforce", (u, v, m))],
-                columns=[c for c in node.columns if self._contains_arc(c, u, v, m)],
-            )
-            self.node_counter += 1
-            heapq.heappush(self.open_nodes, child2)
+        if target_od is not None:
+            # Find the best arc within this OD's columns for branching
+            candidate = BranchingStrategy.get_arc_candidate_for_od(node.columns, target_od)
+            if candidate:
+                u, v, m = candidate
+                self.logger.info(f"  OD-specific Arc Branching: OD_{target_od} Arc ({u}, {v}, mode={m})")
+                
+                child1 = BAPNode(
+                    lower_bound=node.lower_bound, depth=node.depth + 1, node_id=self.node_counter, parent_id=node.node_id,
+                    branch_constraints=node.branch_constraints + [("arc_forbid", (target_od, u, v, m))],
+                    columns=[c for c in node.columns if not (c.od_idx == target_od and self._contains_arc(c, u, v, m))],
+                )
+                self.node_counter += 1
+                heapq.heappush(self.open_nodes, child1)
+                
+                child2 = BAPNode(
+                    lower_bound=node.lower_bound, depth=node.depth + 1, node_id=self.node_counter, parent_id=node.node_id,
+                    branch_constraints=node.branch_constraints + [("arc_enforce", (target_od, u, v, m))],
+                    columns=[c for c in node.columns if not (c.od_idx == target_od) or self._contains_arc(c, u, v, m)],
+                )
+                self.node_counter += 1
+                heapq.heappush(self.open_nodes, child2)
 
     def _contains_arc(self, col, u, v, m) -> bool:
         for arc in col.arcs:
@@ -550,19 +534,15 @@ class BranchAndPriceController:
                 return True
         return False
 
-    def _check_rf(self, col, i, j, same: bool):
-        nodes = {arc.i for arc in col.arcs} | {arc.j for arc in col.arcs}
-        has_i = i in nodes
-        has_j = j in nodes
-        if same:
-            return has_i == has_j
-        else:
-            return not (has_i and has_j)
+    # Note: _check_rf (Ryan-Foster node-pair branching) has been removed.
+    # It is mathematically invalid for this problem because paths can visit
+    # the same physical node multiple times or partially, making the binary
+    # node-visit decision meaningless. Replaced by OD-specific arc branching.
 
-    def _stitch_sub_fleet(self, sub_tasks: list, fleet_name: str, start_v_id: int, max_vehicles: int = None, fleet_type: str = "own") -> tuple[int, list[dict], float, list[dict]]:
+    def _stitch_sub_fleet(self, sub_tasks: list, fleet_name: str, start_v_id: int, max_vehicles: int = None, fleet_type: str = "own") -> tuple[int, list[dict], float, float, float, float, list[dict]]:
         """Solve vehicle stitching ILP for a local road sub-fleet (West or East)."""
         if not sub_tasks:
-            return 0, [], 0.0, []
+            return 0, [], 0.0, 0.0, 0.0, 0.0, []
 
         sub_tasks.sort(key=lambda t: t['departure_time'])
 
@@ -599,26 +579,28 @@ class BranchAndPriceController:
                     else:
                         dist = self.network.get_exact_road_distance(u['destination'], v['origin'])
                         alpha_T = self.config.alpha_T
-                        rep_fuzzy = self.engine.make_reposition_time(dist)
-                        req_gap = rep_fuzzy.deterministic_equivalent_upper(alpha_T)
+                        rep_fuzzy = self.engine.make_transport_time(dist, mode=1)
+                        drive_time = rep_fuzzy.deterministic_equivalent_upper(alpha_T)
+                        req_gap = drive_time + self.config.prep_time_hours + self.config.dispatch_buffer_hours
 
                     if u['arrival_time'] + req_gap <= v['departure_time']:
-                        empty_drive_fee = self.config.c_empty_reposition_per_km * dist
+                        empty_drive_fee = self.config.c_empty_reposition_per_km * dist + self.config.c_prep_reposition
                         reposition_arrival = u['arrival_time'] + req_gap
                         od_j_idx = v['od_idx']
                         od_E_j = self.network.od_pairs[od_j_idx].E_od
                         extra_wait = max(0.0, reposition_arrival - od_E_j)
-                        inv_rate = (self.config.c_holding + self.config.c_opp_base) / 24.0
+                        inv_rate = (self.config.c_vehicle_idle + self.config.c_opp_base) / 24.0
                         time_factor = 0.05
                         q_veh = self.config.q_road
-                        extra_inv_cost = q_veh * inv_rate * (extra_wait + 0.5 * time_factor * extra_wait**2)
+                        pure_idle_cost = q_veh * (self.config.c_vehicle_idle / 24.0) * (extra_wait + 0.5 * time_factor * extra_wait**2)
+                        extra_opp = q_veh * (self.config.c_opp_base / 24.0) * (extra_wait + 0.5 * time_factor * extra_wait**2)
+                        extra_inv_cost = pure_idle_cost + extra_opp  # unchanged ILP edge weight
                         
-                        rep_cost = empty_drive_fee + extra_inv_cost
-                        valid_edges.append((u_idx, v_idx, rep_cost, dist))
+                        valid_edges.append((u_idx, v_idx, empty_drive_fee, pure_idle_cost, extra_opp, dist))
 
         if use_gurobi:
             for edge in valid_edges:
-                u, v, rep_cost, dist = edge
+                u, v, empty_fee, pure_idle, extra_opp, dist = edge
                 x_vars[(u, v)] = stitch_prob.addVar(vtype=GRB.BINARY, name=f"x_{fleet_name}_{u}_{v}")
             stitch_prob.update()
             
@@ -627,7 +609,8 @@ class BranchAndPriceController:
             
             obj_expr = 0
             for edge in valid_edges:
-                u, v, rep_cost, dist = edge
+                u, v, empty_fee, pure_idle, extra_opp, dist = edge
+                rep_cost = empty_fee + pure_idle + extra_opp
                 if fleet_type == 'own':
                     # Maximize stitches (minimize vehicles) with a large M, then minimize rep_cost
                     val = rep_cost - 10000.0
@@ -653,19 +636,46 @@ class BranchAndPriceController:
                         gp.quicksum(x_vars[(edge[0], edge[1])] for edge in in_edges) <= 1,
                         name=f"in_{fleet_name}_{u_idx}"
                     )
+
+            # Fleet size hard constraint: vehicles_used = N - sum(edges) <= max_vehicles
+            #   => sum(edges) >= N - max_vehicles
+            N = len(sub_tasks)
+            if max_vehicles is not None and N > max_vehicles:
+                self.logger.warning(
+                    f"  [{fleet_name}] Fleet infeasible: {N} road tasks > {max_vehicles} available vehicles. "
+                    f"Adding minimum-stitch constraint: >= {N - max_vehicles} edges."
+                )
+            if max_vehicles is not None:
+                min_edges = max(0, N - max_vehicles)
+                stitch_prob.addConstr(
+                    gp.quicksum(x_vars[(u, v)] for (u, v) in x_vars) >= min_edges,
+                    name=f"fleet_limit_{fleet_name}"
+                )
             
             stitch_prob.optimize()
             
             # Check optimization status
             if stitch_prob.status == GRB.OPTIMAL or stitch_prob.status == GRB.SUBOPTIMAL:
                 solution_found = True
+            elif stitch_prob.status == GRB.INFEASIBLE:
+                solution_found = False
+                self.logger.warning(f"  [{fleet_name}] Stitching ILP INFEASIBLE: fleet limit ({max_vehicles}) cannot be met with {N} tasks. "
+                                   f"Falling back to unconstrained stitching.")
+                # Retry without fleet constraint
+                stitch_prob.remove(stitch_prob.getConstrByName(f"fleet_limit_{fleet_name}"))
+                stitch_prob.optimize()
+                if stitch_prob.status == GRB.OPTIMAL or stitch_prob.status == GRB.SUBOPTIMAL:
+                    solution_found = True
+                    self.logger.warning(f"  [{fleet_name}] Unconstrained fallback succeeded ({N} vehicles needed).")
+                else:
+                    self.logger.warning(f"  [{fleet_name}] Gurobi fallback also failed. Status: {stitch_prob.status}")
             else:
                 solution_found = False
                 self.logger.warning(f"Gurobi did not find an optimal solution for stitching problem. Status: {stitch_prob.status}")
 
         else: # Use Pulp
             for edge in valid_edges:
-                u, v, rep_cost, dist = edge
+                u, v, empty_fee, pure_idle, extra_opp, dist = edge
                 x_vars[(u, v)] = pulp.LpVariable(f"x_{fleet_name}_{u}_{v}", 0, 1, pulp.LpBinary)
 
             c_rent_hr = getattr(self.config, 'c_rent_per_hour', 100.0)
@@ -673,7 +683,8 @@ class BranchAndPriceController:
             
             obj_expr = []
             for edge in valid_edges:
-                u, v, rep_cost, dist = edge
+                u, v, empty_fee, pure_idle, extra_opp, dist = edge
+                rep_cost = empty_fee + pure_idle + extra_opp
                 if fleet_type == 'own':
                     val = rep_cost - 10000.0
                 else:
@@ -692,8 +703,19 @@ class BranchAndPriceController:
                 in_edges = [edge for edge in valid_edges if edge[1] == u_idx]
                 if in_edges:
                     stitch_prob += pulp.lpSum(x_vars[(edge[0], edge[1])] for edge in in_edges) <= 1, f"in_{fleet_name}_{u_idx}"
-            
-            
+
+            # Fleet size hard constraint: vehicles_used = N - sum(edges) <= max_vehicles
+            #   => sum(edges) >= N - max_vehicles
+            N = len(sub_tasks)
+            if max_vehicles is not None and N > max_vehicles:
+                self.logger.warning(
+                    f"  [{fleet_name}] Fleet infeasible: {N} road tasks > {max_vehicles} available vehicles. "
+                    f"Adding minimum-stitch constraint: >= {N - max_vehicles} edges."
+                )
+            if max_vehicles is not None:
+                min_edges = max(0, N - max_vehicles)
+                stitch_prob += pulp.lpSum(x_vars[(u, v)] for (u, v) in x_vars) >= min_edges, f"fleet_limit_{fleet_name}"
+
             # Existing solver selection logic for Pulp
             if "HiGHS" in pulp.listSolvers(onlyAvailable=True):
                 solver = pulp.HiGHS_CMD(msg=0)
@@ -704,17 +726,39 @@ class BranchAndPriceController:
             
             stitch_prob.solve(solver)
             
-            solution_found = stitch_prob.status == pulp.LpStatusOptimal
+            if stitch_prob.status == pulp.LpStatusOptimal:
+                solution_found = True
+            elif stitch_prob.status == pulp.LpStatusInfeasible:
+                solution_found = False
+                self.logger.warning(f"  [{fleet_name}] Stitching ILP INFEASIBLE: fleet limit ({max_vehicles}) cannot be met with {N} tasks. "
+                                   f"Falling back to unconstrained stitching.")
+                # Retry without fleet constraint
+                fleet_con = [c for c in stitch_prob.constraints.values() if c.name == f"fleet_limit_{fleet_name}"]
+                for c in fleet_con:
+                    del stitch_prob.constraints[c.name]
+                stitch_prob.solve(solver)
+                if stitch_prob.status == pulp.LpStatusOptimal:
+                    solution_found = True
+                    self.logger.warning(f"  [{fleet_name}] Unconstrained fallback succeeded ({N} vehicles needed).")
+                else:
+                    self.logger.warning(f"  [{fleet_name}] Pulp fallback also failed. Status: {stitch_prob.status}")
+            else:
+                solution_found = False
+                self.logger.warning(f"Pulp did not find an optimal solution for stitching problem. Status: {stitch_prob.status}")
 
         next_task = {}
-        rep_costs = {}
+        edge_fees = {}
+        edge_pure_idles = {}
+        edge_extra_opps = {}
         if solution_found:
             for edge in valid_edges:
-                u, v, rep_cost, dist = edge
+                u, v, empty_fee, pure_idle, extra_opp, dist = edge
                 if ((use_gurobi and x_vars[(u, v)].X > 0.5) or
                     (not use_gurobi and x_vars[(u, v)].varValue is not None and x_vars[(u, v)].varValue > 0.5)):
                     next_task[u] = v
-                    rep_costs[(u, v)] = rep_cost
+                    edge_fees[(u, v)] = empty_fee
+                    edge_pure_idles[(u, v)] = pure_idle
+                    edge_extra_opps[(u, v)] = extra_opp
 
         in_degree = {u: 0 for u in range(len(sub_tasks))}
         for u, v in next_task.items():
@@ -723,7 +767,10 @@ class BranchAndPriceController:
         v_counter = start_v_id
         num_vehicles_used = 0
         scheduled = []
-        total_reposition = 0.0
+        total_empty_fee = 0.0
+        total_pure_idle = 0.0
+        total_extra_opp = 0.0
+        total_prep_cost = 0.0
         reposition_events = []  # list of dicts for logging
 
         for start_task in range(len(sub_tasks)):
@@ -737,12 +784,15 @@ class BranchAndPriceController:
                     scheduled.append(t)
                     if curr in next_task:
                         nxt = next_task[curr]
-                        total_reposition += rep_costs[(curr, nxt)]
+                        total_empty_fee += edge_fees[(curr, nxt)]
+                        total_pure_idle += edge_pure_idles[(curr, nxt)]
+                        total_extra_opp += edge_extra_opps[(curr, nxt)]
+                        total_prep_cost += self.config.c_prep_reposition
                         # Log reposition event
                         dist = 0.0
                         for edge in valid_edges:
                             if edge[0] == curr and edge[1] == nxt:
-                                dist = edge[3]
+                                dist = edge[5]
                                 break
                         reposition_events.append({
                             "vehicle": v_counter,
@@ -753,7 +803,9 @@ class BranchAndPriceController:
                             "from_arrival": t['arrival_time'],
                             "to_departure": sub_tasks[nxt]['departure_time'],
                             "distance_km": round(dist, 2),
-                            "cost": round(rep_costs[(curr, nxt)], 2),
+                            "empty_fee": round(edge_fees[(curr, nxt)], 2),
+                            "pure_idle": round(edge_pure_idles[(curr, nxt)], 2),
+                            "extra_opp": round(edge_extra_opps[(curr, nxt)], 2),
                         })
                         prev_task = curr
                         curr = nxt
@@ -761,7 +813,7 @@ class BranchAndPriceController:
                         break
                 v_counter += 1
 
-        return num_vehicles_used, scheduled, total_reposition, reposition_events
+        return num_vehicles_used, scheduled, total_empty_fee, total_pure_idle, total_extra_opp, total_prep_cost, reposition_events
 
     def _split_route_segments(self, col: Column) -> tuple[list, list, list]:
         """
@@ -809,13 +861,10 @@ class BranchAndPriceController:
 
         S1-1: Uses _split_route_segments to dynamically identify west-road, rail, east-road
               segments rather than hardcoding col.arcs[0/1/2].
-        S2-1: Supply uncertainty uses TrapezoidalFuzzy model from SupplyUncertaintyModel.
-        S2-5b: R_net computed by calling self.reliability to evaluate the solution.
+        S2-5b: R_net_risk and R_net_time computed by calling self.reliability to evaluate the solution.
         """
         west_tasks_own = []
         east_tasks_own = []
-        west_tasks_rent = []
-        east_tasks_rent = []
         rail_tasks = []
         used_hubs = set()
 
@@ -825,13 +874,11 @@ class BranchAndPriceController:
 
         for col in node.columns:
             val_own = getattr(col, "lp_value_own", 0.0)
-            val_rent = getattr(col, "lp_value_rent", 0.0)
             tol = getattr(self.config, 'tolerance', 1e-6)
             
             dispatches_own = int(round(val_own)) if val_own > tol else 0
-            dispatches_rent = int(round(val_rent)) if val_rent > tol else 0
             
-            if dispatches_own > 0 or dispatches_rent > 0:
+            if dispatches_own > 0:
                 used_hubs.update(col.transfer_nodes)
 
                 # S1-1: Dynamically split route into road-rail-road segments
@@ -887,12 +934,10 @@ class BranchAndPriceController:
                         "departure_time": 0.0,
                         "arrival_time": 0.0,
                         "arcs": [],
-                        "sys_R": col.sys_R,
                         "cost": col.total_cost,
                         "deploy_cost": col.deploy_cost,
                         "transport_cost": col.transport_cost,
                         "transfer_cost": col.transfer_cost,
-                        "delay_penalty_cost": getattr(col, 'delay_penalty_cost', 0.0),
                         "bottleneck_capacity": col.bottleneck_capacity,
                     }
 
@@ -902,7 +947,7 @@ class BranchAndPriceController:
                     w["destination"] = west_road_arcs[-1].j
                     w["departure_time"] = t_west_dep
                     w["arrival_time"] = t_west_arr
-                    w["arcs"] = [{"i": a.i, "j": a.j, "mode": 1, "alpha": a.alpha, "consequence": a.C_consequence} for a in west_road_arcs]
+                    w["arcs"] = [{"i": a.i, "j": a.j, "mode": 1, "alpha": a.alpha} for a in west_road_arcs]
                     w["dispatch_id"] = dispatch_counter
                     west_tasks_own.append(w)
                     
@@ -911,7 +956,7 @@ class BranchAndPriceController:
                     e["destination"] = east_road_arcs[-1].j
                     e["departure_time"] = t_east_dep
                     e["arrival_time"] = t_east_arr
-                    e["arcs"] = [{"i": a.i, "j": a.j, "mode": 1, "alpha": a.alpha, "consequence": a.C_consequence} for a in east_road_arcs]
+                    e["arcs"] = [{"i": a.i, "j": a.j, "mode": 1, "alpha": a.alpha} for a in east_road_arcs]
                     e["dispatch_id"] = dispatch_counter
                     east_tasks_own.append(e)
 
@@ -921,93 +966,65 @@ class BranchAndPriceController:
                     r["destination"] = rail_arcs_seg[-1].j
                     r["departure_time"] = rail_dep
                     r["arrival_time"] = rail_arr
-                    r["arcs"] = [{"i": a.i, "j": a.j, "mode": 2, "alpha": a.alpha, "consequence": a.C_consequence} for a in rail_arcs_seg]
+                    r["arcs"] = [{"i": a.i, "j": a.j, "mode": 2, "alpha": a.alpha} for a in rail_arcs_seg]
                     r["dispatch_id"] = dispatch_counter
                     rail_tasks.append(r)
                     dispatch_counter += 1
-
-                for _ in range(dispatches_rent):
-                    w = create_task("rent")
-                    w["origin"] = west_road_arcs[0].i
-                    w["destination"] = west_road_arcs[-1].j
-                    w["departure_time"] = t_west_dep
-                    w["arrival_time"] = t_west_arr
-                    w["arcs"] = [{"i": a.i, "j": a.j, "mode": 1, "alpha": a.alpha, "consequence": a.C_consequence} for a in west_road_arcs]
-                    w["dispatch_id"] = dispatch_counter
-                    west_tasks_rent.append(w)
-                    
-                    e = create_task("rent")
-                    e["origin"] = east_road_arcs[0].i
-                    e["destination"] = east_road_arcs[-1].j
-                    e["departure_time"] = t_east_dep
-                    e["arrival_time"] = t_east_arr
-                    e["arcs"] = [{"i": a.i, "j": a.j, "mode": 1, "alpha": a.alpha, "consequence": a.C_consequence} for a in east_road_arcs]
-                    e["dispatch_id"] = dispatch_counter
-                    east_tasks_rent.append(e)
-
-                    r = create_task("rent")
-                    r["vehicle"] = 2000 + dispatch_counter
-                    r["origin"] = rail_arcs_seg[0].i
-                    r["destination"] = rail_arcs_seg[-1].j
-                    r["departure_time"] = rail_dep
-                    r["arrival_time"] = rail_arr
-                    r["arcs"] = [{"i": a.i, "j": a.j, "mode": 2, "alpha": a.alpha, "consequence": a.C_consequence} for a in rail_arcs_seg]
-                    r["dispatch_id"] = dispatch_counter
-                    rail_tasks.append(r)
-                    dispatch_counter += 1
-
-                for _ in range(dispatches_rent):
-                    w = create_task("rent")
-                    w["origin"] = west_road_arcs[0].i
-                    w["destination"] = west_road_arcs[-1].j
-                    w["departure_time"] = t_west_dep
-                    w["arrival_time"] = t_west_arr
-                    w["arcs"] = [{"i": a.i, "j": a.j, "mode": 1, "alpha": a.alpha, "consequence": a.C_consequence} for a in west_road_arcs]
-                    w["dispatch_id"] = dispatch_counter
-                    west_tasks_rent.append(w)
-                    
-                    e = create_task("rent")
-                    e["origin"] = east_road_arcs[0].i
-                    e["destination"] = east_road_arcs[-1].j
-                    e["departure_time"] = t_east_dep
-                    e["arrival_time"] = t_east_arr
-                    e["arcs"] = [{"i": a.i, "j": a.j, "mode": 1, "alpha": a.alpha, "consequence": a.C_consequence} for a in east_road_arcs]
-                    e["dispatch_id"] = dispatch_counter
-                    east_tasks_rent.append(e)
-
-                    r = create_task("rent")
-                    r["vehicle"] = 2000 + dispatch_counter
-                    r["origin"] = rail_arcs_seg[0].i
-                    r["destination"] = rail_arcs_seg[-1].j
-                    r["departure_time"] = rail_dep
-                    r["arrival_time"] = rail_arr
-                    r["arcs"] = [{"i": a.i, "j": a.j, "mode": 2, "alpha": a.alpha, "consequence": a.C_consequence} for a in rail_arcs_seg]
-                    r["dispatch_id"] = dispatch_counter
-                    rail_tasks.append(r)
-                    dispatch_counter += 1
-                
-                # prevent execution of old dispatch block
 
         # S1-2: Global Vehicle Stitching (Rigorous Optimality)
         for t in west_tasks_own: t['region'] = 'West'
         for t in east_tasks_own: t['region'] = 'East'
-        for t in west_tasks_rent: t['region'] = 'West'
-        for t in east_tasks_rent: t['region'] = 'East'
             
         own_road_tasks = west_tasks_own + east_tasks_own
-        num_veh_own, sched_own, repo_own, repo_ev_own = self._stitch_sub_fleet(
+        num_veh_own, sched_own, repo_empty_fee, repo_pure_idle, repo_extra_opp, repo_prep_cost, repo_ev_own = self._stitch_sub_fleet(
             own_road_tasks, "GlobalRoadOwn", start_v_id=1, max_vehicles=self.instance["num_vehicles"], fleet_type="own"
         )
         
-        rent_road_tasks = west_tasks_rent + east_tasks_rent
-        num_veh_rent, sched_rent, repo_rent, repo_ev_rent = self._stitch_sub_fleet(
-            rent_road_tasks, "GlobalRoadRent", start_v_id=1001, max_vehicles=None, fleet_type="rent"
-        )
-        
-        num_vehicles_used = num_veh_own + num_veh_rent
-        scheduled_road = sched_own + sched_rent
-        total_reposition = repo_own + repo_rent
-        reposition_events = repo_ev_own + repo_ev_rent
+        max_available = self.instance["num_vehicles"]
+        if num_veh_own > max_available:
+            self.logger.warning(
+                f"  Fleet constraint violated: {num_veh_own} vehicles used > {max_available} available. "
+                f"Reducing dispatches to meet fleet limit."
+            )
+            # Reduce dispatches: remove road tasks from ODs with most tasks until feasible
+            excess = num_veh_own - max_available
+            # Group tasks by OD and dispatch_id
+            od_dispatch_map = {}  # od_idx -> list of dispatch_ids
+            for t in west_tasks_own:
+                od_idx = t['od_idx']
+                did = t['dispatch_id']
+                od_dispatch_map.setdefault(od_idx, set()).add(did)
+            # Sort ODs by number of dispatches (descending) — drop from largest first
+            od_sorted = sorted(od_dispatch_map.items(), key=lambda x: len(x[1]), reverse=True)
+            dropped_dispatches = set()
+            shortfall_by_od = {}
+            for od_idx, dispatch_ids in od_sorted:
+                if excess <= 0:
+                    break
+                # Drop one dispatch at a time from this OD
+                for did in sorted(dispatch_ids):
+                    if excess <= 0:
+                        break
+                    dropped_dispatches.add(did)
+                    excess -= 1
+                    shortfall_by_od[od_idx] = shortfall_by_od.get(od_idx, 0) + q_veh
+            if dropped_dispatches:
+                self.logger.warning(
+                    f"  Dropped {len(dropped_dispatches)} dispatches to meet fleet limit. "
+                    f"Shortfall: {shortfall_by_od}"
+                )
+                # Remove dropped tasks from west/east/rail lists
+                west_tasks_own = [t for t in west_tasks_own if t['dispatch_id'] not in dropped_dispatches]
+                east_tasks_own = [t for t in east_tasks_own if t['dispatch_id'] not in dropped_dispatches]
+                rail_tasks = [t for t in rail_tasks if t['dispatch_id'] not in dropped_dispatches]
+                # Re-run stitching with reduced tasks
+                own_road_tasks = west_tasks_own + east_tasks_own
+                num_veh_own, sched_own, repo_empty_fee, repo_pure_idle, repo_extra_opp, repo_prep_cost, repo_ev_own = self._stitch_sub_fleet(
+                    own_road_tasks, "GlobalRoadOwn", start_v_id=1, max_vehicles=max_available, fleet_type="own"
+                )
+        num_vehicles_used = num_veh_own
+        scheduled_road = sched_own
+        reposition_events = repo_ev_own
         
         scheduled_west = [t for t in scheduled_road if t.get('region') == 'West']
         scheduled_east = [t for t in scheduled_road if t.get('region') == 'East']
@@ -1057,44 +1074,25 @@ class BranchAndPriceController:
             })
 
         
-        c_rent_hr = getattr(self.config, 'c_rent_per_hour', 100.0)
-        c_dep_rent = getattr(self.config, 'c_deploy_rent', 1000.0)
-        
-        rent_deploy_cost = num_veh_rent * c_dep_rent
-        rent_time_cost = 0.0
-        for t in rent_road_tasks:
-            rent_time_cost += c_rent_hr * (t['arrival_time'] - t['departure_time'])
-        for r in repo_ev_rent:
-            rent_time_cost += c_rent_hr * r.get('gap_hours', (r['to_departure'] - r['from_arrival']))
-
-        total_deploy = road_deploy_cost + exact_rail_deploy_cost + rent_deploy_cost
-        
-        total_transport = sum(t['transport_cost'] for t in rail_tasks) + rent_time_cost
+        total_deploy = road_deploy_cost + exact_rail_deploy_cost
 
         total_transport = sum(t['transport_cost'] for t in rail_tasks)
         total_transfer = sum(t['transfer_cost'] for t in rail_tasks)
-        total_delay_penalty = 0.0  # delay penalty removed
 
         s2_allocation_details = []
         actual_total_opp_cost = 0.0
-        actual_total_holding_cost = 0.0
-        c_holding = self.config.c_holding
-
-        from ..core.uncertainty import SupplyUncertaintyModel, DemandUncertaintyModel
-        supply_model = SupplyUncertaintyModel(self.config)
-        demand_model = DemandUncertaintyModel(self.config)
+        actual_total_idle_cost = 0.0
+        c_idle = self.config.c_vehicle_idle
 
         for i, od in enumerate(self.network.od_pairs):
             od_tasks = [t for t in rail_tasks if t['od_idx'] == i]
             total_capacity_available = sum(t['bottleneck_capacity'] for t in od_tasks)
 
-            # Demand satisfaction
-            xi_max = 2.0 * 0.95308992 - 1.0
-            d_max = od.demand * (1.0 + self.config.delta_D * xi_max)
-            delivered = min(total_capacity_available, d_max)
+            # Demand satisfaction: delivered cannot exceed actual demand
+            delivered = min(total_capacity_available, od.demand)
             shortfall = max(0.0, od.demand - delivered)
 
-            # Opportunity cost penalty (now strictly deterministic based on shortfall)
+            # Opportunity cost penalty (deterministic shortfall + reposition delay)
             opp_cost_i = self.config.c_opp_base * shortfall
             actual_total_opp_cost += opp_cost_i
 
@@ -1112,9 +1110,11 @@ class BranchAndPriceController:
                 "opp_cost": round(opp_cost_i, 2),
             })
 
-        # The time-dependent holding cost for repositioning is already included in repo_events cost
-        # We zero out the old per-OD holding cost since it's now integrated directly into repo links
-        actual_total_holding_cost = 0.0
+        # Add reposition delay opportunity cost from stitching edges
+        actual_total_opp_cost += repo_extra_opp
+
+        # Vehicle idle cost from reposition edges (time-dependent waiting cost)
+        actual_total_idle_cost = repo_pure_idle
 
         # Aggregate identical vehicle paths into transport_routes
         aggregated_routes = {}
@@ -1139,37 +1139,46 @@ class BranchAndPriceController:
             for e in reposition_events:
                 key = (e['from_od'], e['to_od'], e['from_node'], e['to_node'])
                 by_route.setdefault(key, []).append(e)
-            self.logger.info(f"  Reposition events: {len(reposition_events)} total, ¥{total_reposition:.2f}")
+            self.logger.info(
+                f"  Reposition events: {len(reposition_events)} total | "
+                f"empty_fee=¥{repo_empty_fee:.2f} | idle=¥{repo_pure_idle:.2f} | prep=¥{repo_prep_cost:.2f} | extra_opp=¥{repo_extra_opp:.2f}"
+            )
             for key, events in by_route.items():
-                avg_cost = sum(e['cost'] for e in events) / len(events)
-                self.logger.info(f"    {key[0]} → {key[1]} (node {key[2]}→{key[3]}): "
-                                 f"{len(events)} times, avg ¥{avg_cost:.2f}/ea")
+                avg_fee = sum(e['empty_fee'] for e in events) / len(events)
+                avg_idle = sum(e['pure_idle'] for e in events) / len(events)
+                avg_opp = sum(e['extra_opp'] for e in events) / len(events)
+                self.logger.info(
+                    f"    {key[0]} → {key[1]} (node {key[2]}→{key[3]}): "
+                    f"{len(events)} times | avg empty=¥{avg_fee:.2f}, idle=¥{avg_idle:.2f}, opp=¥{avg_opp:.2f}/ea"
+                )
 
-        penalty_cost = actual_total_opp_cost + total_delay_penalty
+        penalty_cost = actual_total_opp_cost
 
         total_cost = (
             total_deploy + total_transport + total_transfer + total_hub
-            + total_reposition + actual_total_opp_cost + actual_total_holding_cost
-            + total_delay_penalty
+            + repo_empty_fee + actual_total_opp_cost + actual_total_idle_cost + repo_prep_cost
         )
 
-        # S2-5b: Compute true network reliability R_net using ReliabilityAnalyzer.
+        # S2-5b: Compute true network reliability R_net_risk and R_net_time using ReliabilityAnalyzer.
         # Build vehicle_assignments dict expected by analyze_solution.
         try:
-            R_net_computed = self._compute_solution_R_net(node)
+            R_net_result = self._compute_solution_R_net(node)
         except Exception:
-            R_net_computed = -1.0
+            R_net_result = -1.0
 
         # Unpack detailed reliability results if available
         od_reliability_details = {}
-        if isinstance(R_net_computed, dict):
-            od_reliability_details = R_net_computed.get('od_results', {})
-            R_net_risk = R_net_computed.get('R_net_risk', -1.0)
-            R_net_time = R_net_computed.get('R_net_time', -1.0)
-            R_net_computed = R_net_computed.get('R_net', -1.0)
+        if isinstance(R_net_result, dict):
+            od_reliability_details = R_net_result.get('od_results', {})
+            R_net_risk = R_net_result.get('R_net_risk', -1.0)
+            R_net_time = R_net_result.get('R_net_time', -1.0)
         else:
-            R_net_risk = R_net_computed
-            R_net_time = R_net_computed
+            R_net_risk = R_net_result
+            R_net_time = R_net_result
+
+        _lb = getattr(node, 'lower_bound', 0.0)
+        _ub = getattr(self, 'best_ub', total_cost)
+        gap_pct = max(0.0, (_ub - _lb) / _ub * 100.0) if _ub > 0 else 0.0
 
         return {
             "status": "optimal",
@@ -1178,14 +1187,16 @@ class BranchAndPriceController:
             "hub_cost": total_hub,
             "transport_cost": total_transport,
             "transfer_cost": total_transfer,
-            "reposition_cost": total_reposition,
+            "reposition_cost": repo_empty_fee,
             "reposition_events": reposition_events,
             "num_repositions": len(reposition_events),
-            "holding_cost": actual_total_holding_cost,
+            "idle_cost": actual_total_idle_cost,
+            "prep_cost": repo_prep_cost,
             "opportunity_cost": actual_total_opp_cost,
+            "repo_pure_idle": repo_pure_idle,
+            "repo_extra_opp": repo_extra_opp,
             "penalty_cost": penalty_cost,
             "active_hubs": sorted(list(used_hubs)),
-            "R_net": R_net_computed,
             "R_net_risk": R_net_risk,
             "R_net_time": R_net_time,
             "od_reliability_details": od_reliability_details,
@@ -1196,7 +1207,9 @@ class BranchAndPriceController:
             "s2_allocation_details": s2_allocation_details,
             "rail_consolidation_summary": consolidated_summary,
             "iterations": getattr(self, 'col_gen_iterations', 1),
+            "cg_history": list(self.cg_history),
             "total_columns": len(node.columns),
+            "gap_pct": round(gap_pct, 4),
         }
 
     def _compute_solution_R_net(self, node: BAPNode) -> float:
@@ -1204,7 +1217,7 @@ class BranchAndPriceController:
         S2-5b: Compute true network reliability R_net by evaluating each active column.
 
         Uses ReliabilityAnalyzer.analyze_path for each dispatched column to get
-        per-path comprehensive reliability, then aggregates via min over OD pairs.
+        per-path risk and time reliability, then aggregates via min over OD pairs.
         """
         # Compute per-path and per-OD reliability details and aggregate to R_net
         od_batches: dict[int, list[PathReliabilityResult]] = {}
@@ -1223,8 +1236,10 @@ class BranchAndPriceController:
                 if tn:
                     transfer_objs.append(tn)
 
+            # Use od.E_od (not col.departure_time which includes origin wait time)
+            # to avoid double-counting the wait-shift in the fuzzy time duration.
             result = self.reliability.analyze_path(
-                col.arcs, col.arc_modes, transfer_objs, od_req, col.departure_time
+                col.arcs, col.arc_modes, transfer_objs, od_req, od_req.E_od
             )
 
             od_batches.setdefault(od_idx, []).append(result)
@@ -1237,35 +1252,28 @@ class BranchAndPriceController:
         od_risks = []
         od_times = []
         for od_idx, batches in od_batches.items():
-            batch_comps = [b.comprehensive for b in batches]
             batch_risks = [b.risk_reliability for b in batches]
             batch_times = [b.time_reliability for b in batches]
-            R_od = min(batch_comps) if batch_comps else 1.0
             R_od_risk = min(batch_risks) if batch_risks else 1.0
             R_od_time = min(batch_times) if batch_times else 1.0
-            # Determine which component binds (risk or time) for the worst batch
-            worst_idx = int(batch_comps.index(R_od)) if batch_comps else 0
-            binding = "risk" if batch_risks[worst_idx] <= batch_times[worst_idx] else "time"
+            # Determine which component binds (risk or time) for the worst OD
+            binding = "risk" if R_od_risk <= R_od_time else "time"
 
             od_results[od_idx] = {
-                "R_od": R_od,
+                "R_od": min(R_od_risk, R_od_time),
                 "R_od_risk": R_od_risk,
                 "R_od_time": R_od_time,
                 "num_batches": len(batches),
-                "batch_comprehensive": batch_comps,
-                "batch_risk": batch_risks,
-                "batch_time": batch_times,
+                "batch_risks": batch_risks,
+                "batch_times": batch_times,
                 "binding": binding,
             }
-            od_reliabilities.append(R_od)
             od_risks.append(R_od_risk)
             od_times.append(R_od_time)
 
-        R_net = min(od_reliabilities) if od_reliabilities else 1.0
         R_net_risk = min(od_risks) if od_risks else 1.0
         R_net_time = min(od_times) if od_times else 1.0
         return {
-            "R_net": R_net,
             "R_net_risk": R_net_risk,
             "R_net_time": R_net_time,
             "od_results": od_results

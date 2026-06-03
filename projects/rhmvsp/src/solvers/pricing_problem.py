@@ -74,7 +74,6 @@ class PricingProblem:
                 arc.alpha, start_time=time_bin,
                 fuzzy_duration=(tri.a, tri.b, tri.c, tri.d),
                 time_dependent=True,
-                C_consequence=arc.C_consequence,
             )
         return self._arc_R_cache[cache_key]
 
@@ -111,10 +110,8 @@ class PricingProblem:
 
         # 3. Join Step (S3-1 fix applied inside _join_labels)
         all_columns = self._join_labels(forward_labels, backward_labels, od_L, alpha_T, duals)
-        if od_idx == 3:
-            self.logger.warning(f"DEBUG OD 4: F labels: {sum(len(v) for v in forward_labels.values())}, B labels: {sum(len(v) for v in backward_labels.values())}, Joined: {len(all_columns)}")
         all_columns.sort(key=lambda x: x.reduced_cost)
-        if len(all_columns) > 10:
+        if len(all_columns) > self.config.bap_pricing_columns_limit:
             all_columns = all_columns[:self.config.bap_pricing_columns_limit]
 
         self.logger.debug(f"  Pricing OD {od_idx} (exact={exact}): F={num_f}, B={num_b}, Joined={len(all_columns)}")
@@ -162,12 +159,14 @@ class PricingProblem:
         queue = []
         heapq.heappush(queue, (init.reduced_cost, next(counter), init))
 
-        # S3-2: Resource-balanced midpoint — use 40% of time horizon for each
-        # direction with 20% overlap buffer, rather than a fixed 4h constant.
+        # S3-2: Resource-balanced midpoint — tighter overlap for better pruning
         span = max_L - od_E
         half_ratio = getattr(self.config, 'pricing_overlap_ratio', 0.75)  # from config
         max_time_f = od_E + half_ratio * span
         min_time_b = max(od_E, max_L - half_ratio * span)
+
+        # Global label cap to prevent join explosion
+        total_labels_limit = 300
 
         while queue:
             _, _, curr = heapq.heappop(queue)
@@ -181,11 +180,6 @@ class PricingProblem:
             for arc in adj_arcs:
                 next_node = arc.j if forward else arc.i
                 
-                # Prevent containers from using the inter-hub highway network (Mode 1 between two hubs)
-                # This ensures the new fully-connected road topology is strictly used for empty truck repositioning,
-                # avoiding a massive combinatorial explosion in ESPPRC.
-                if arc.mode == 1 and self.network.is_transfer_node(arc.i) and self.network.is_transfer_node(arc.j):
-                    continue
                 
                 # Elementarity check using ng-route memory
                 if next_node in curr.ng_memory and next_node != end_node:
@@ -216,6 +210,10 @@ class PricingProblem:
                             labels_at[new_label.node].sort(key=lambda x: x.reduced_cost)
                             labels_at[new_label.node] = labels_at[new_label.node][:max_keep]
 
+                        # Global label cap: stop expanding if total labels exceed limit
+                        total_labels = sum(len(v) for v in labels_at.values())
+                        if total_labels > total_labels_limit:
+                            break
                         heapq.heappush(queue, (new_label.reduced_cost, next(counter), new_label))
 
         return labels_at
@@ -261,22 +259,12 @@ class PricingProblem:
 
         ratio = (q_veh / q_rail) if arc.mode == 2 else 1.0
         arc_deploy_cost = arc.deploy_cost * arc.min_units * ratio
-        base_transport_cost_run = actual_unit_cost * q_veh
+        transport_cost_run = actual_unit_cost * q_veh
 
-        spread = self.config.fuzzy_cost_spread
-        alpha_c = self.config.alpha_c
-        # Expected fuzzy cost multiplier: E^M[c~] = (a + 2b + c) / 4 for triangular
-        expected_multiplier = (spread[0] + 2.0 * spread[1] + spread[2]) / 4.0
-        transport_cost_run_expected = base_transport_cost_run * expected_multiplier
-        # Upper bound deterministic equivalent coefficient
-        if alpha_c > 0.5:
-            upper_coeff = (2.0 * alpha_c - 1.0) * spread[2] + 2.0 * (1.0 - alpha_c) * spread[1]
-        else:
-            upper_coeff = spread[1]
+        actual_cost_run = arc_deploy_cost + transport_cost_run + transfer_cost
 
-        transport_cost_run_upper = base_transport_cost_run * upper_coeff
-        # #7: Use expected cost (matches master problem's col.total_cost)
-        actual_cost_run = arc_deploy_cost + transport_cost_run_expected + transfer_cost
+        # S4-1: Risk penalty removed — no C_consequence parameter
+        risk_penalty_ext = 0.0
 
         next_node = arc.j if forward else arc.i
 
@@ -333,7 +321,7 @@ class PricingProblem:
                     # S2-6: use time-keyed cache
                     arc_R = self._get_arc_R(arc, t_start, alpha_T)
                     
-                    actual_cost_total = actual_cost_run
+                    actual_cost_total = actual_cost_run + risk_penalty_ext
                     
                     new_cost_base = parent.cost + actual_cost_total
                     new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
@@ -352,7 +340,7 @@ class PricingProblem:
                 new_time = t_start + dt
                 arc_R = self._get_arc_R(arc, t_start, alpha_T)
                 
-                actual_cost_total = actual_cost_run
+                actual_cost_total = actual_cost_run + risk_penalty_ext
                 new_cost_base = parent.cost + actual_cost_total
                 new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
                 
@@ -381,7 +369,7 @@ class PricingProblem:
                     arc_R = self._get_arc_R(arc, new_time, alpha_T)
                     
                     t_end = r["arrival_time"]
-                    actual_cost_total = actual_cost_run
+                    actual_cost_total = actual_cost_run + risk_penalty_ext
                     new_cost_base = parent.cost + actual_cost_total
                     new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
                     new_risk = min(parent.risk_R, arc_R, node_R)
@@ -398,7 +386,7 @@ class PricingProblem:
                 arc_R = self._get_arc_R(arc, new_time, alpha_T)
                 
                 t_end = t_dep_latest
-                actual_cost_total = actual_cost_run
+                actual_cost_total = actual_cost_run + risk_penalty_ext
                 new_cost_base = parent.cost + actual_cost_total
                 new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
                 new_risk = min(parent.risk_R, arc_R, node_R)
@@ -538,25 +526,25 @@ class PricingProblem:
                         if self.branch_constraints:
                             valid_bc = True
                             for bc_type, bc_data in self.branch_constraints:
-                                if bc_type in ["rf_same", "rf_diff"]:
-                                    i_bc, j_bc = bc_data
-                                    has_i = i_bc in full_visited
-                                    has_j = j_bc in full_visited
-                                    if bc_type == "rf_same" and has_i != has_j:
-                                        valid_bc = False
-                                        break
-                                    elif bc_type == "rf_diff" and (has_i and has_j):
-                                        valid_bc = False
-                                        break
-                                elif bc_type == "hub_close":
+                                if bc_type == "hub_close":
                                     hub_id = bc_data
                                     if hub_id in trans_hubs:
                                         valid_bc = False
                                         break
-                                elif bc_type == "hub_open":
-                                    pass
+                                elif bc_type in ("arc_forbid", "arc_enforce"):
+                                    od_bc, u_bc, v_bc, m_bc = bc_data
+                                    if od_bc == self.od_idx:
+                                        has_arc = any(a.i == u_bc and a.j == v_bc and a.arc_id == m_bc for a in full_arcs)
+                                        if bc_type == "arc_forbid" and has_arc:
+                                            valid_bc = False
+                                            break
+                                        elif bc_type == "arc_enforce" and not has_arc:
+                                            valid_bc = False
+                                            break
                             if not valid_bc:
                                 continue
+
+                        max_L = max(self.config.T_max, od_L)
 
                         # S3-1 FIX: Compute exact midpoint arc cost and combine with labels
                         if arc.mode == 2:
@@ -571,17 +559,11 @@ class PricingProblem:
                         r_a = (q_veh / q_rail) if arc.mode == 2 else 1.0
                         arc_deploy_cost = arc.deploy_cost * arc.min_units * r_a
                         transport_cost_run = a_unit * q_veh
-                        # #7: Use expected cost (matches pricing _extend and master problem)
-                        spread_j = self.config.fuzzy_cost_spread
-                        expected_mult_j = (spread_j[0] + 2.0 * spread_j[1] + spread_j[2]) / 4.0
-                        actual_cost_arc = arc_deploy_cost + transport_cost_run * expected_mult_j + transfer_cost + transfer_cost_j
+                        actual_cost_arc = arc_deploy_cost + transport_cost_run + transfer_cost + transfer_cost_j
 
-                        # Delay penalty is assessed on completed routes only.
-                        dual_hub_i = duals.get("hub", {}).get(i, 0.0) if transfer_cost > 0 else 0.0
-                        dual_hub_j = duals.get("hub", {}).get(j, 0.0) if transfer_cost_j > 0 else 0.0
-                        midpoint_rc = actual_cost_arc - dual_hub_i - dual_hub_j
+                        # Risk penalty removed — no C_consequence parameter
+                        midpoint_rc = actual_cost_arc
 
-                        max_L = max(self.config.T_max, od_L)
                         total_time = f_lab.time_upper + (max_L - b_lab.time_upper)
                         total_cost = f_lab.cost + b_lab.cost + actual_cost_arc
                         reduced_cost = f_lab.reduced_cost + b_lab.reduced_cost + duals_base + midpoint_rc
@@ -606,17 +588,8 @@ class PricingProblem:
             (l1 has fewer forced non-revisit obligations, so it can be extended
              to at least all paths that l2 can reach without cycling).
         """
-        # Branch constraint checks
-        if self.branch_constraints:
-            for bc_type, bc_data in self.branch_constraints:
-                if bc_type in ["rf_same", "rf_diff"]:
-                    i_bc, j_bc = bc_data
-                    has_i1 = i_bc in l1.visited
-                    has_j1 = j_bc in l1.visited
-                    has_i2 = i_bc in l2.visited
-                    has_j2 = j_bc in l2.visited
-                    if (has_i1 != has_i2) or (has_j1 != has_j2):
-                        return False
+        # Branch constraint checks (OD-specific arc branching only)
+        # No rf_same/rf_diff constraints — removed with Ryan-Foster branching.
 
         # #15: visited subset check for ng-route correctness
         # l1 can only dominate l2 if l1 has visited a subset of l2's non-ng nodes
