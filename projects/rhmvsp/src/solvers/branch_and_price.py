@@ -578,10 +578,9 @@ class BranchAndPriceController:
                         dist = 0.0
                     else:
                         dist = self.network.get_exact_road_distance(u['destination'], v['origin'])
-                        alpha_T = self.config.alpha_T
-                        rep_fuzzy = self.engine.make_transport_time(dist, mode=1)
-                        drive_time = rep_fuzzy.deterministic_equivalent_upper(alpha_T)
-                        req_gap = drive_time + self.config.prep_time_hours + self.config.dispatch_buffer_hours
+                        # Use nominal travel time (not fuzzy upper bound) for stitching.
+                        # Fuzzy uncertainty is already handled by path reliability constraints.
+                        req_gap = max(0.1, dist / self.config.road_speed) + self.config.prep_time_hours + self.config.dispatch_buffer_hours
 
                     if u['arrival_time'] + req_gap <= v['departure_time']:
                         empty_drive_fee = self.config.c_empty_reposition_per_km * dist + self.config.c_prep_reposition

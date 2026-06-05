@@ -28,7 +28,7 @@ C_BAP   = COLOURS["C1"]  # Warm Terracotta — BAP (reliable model)
 C_BENCH = COLOURS["C2"]  # Celadon Green   — LP-only (benchmark)
 
 # ── Experiment parameters ─────────────────────────────────────────────────────
-N_SCENARIOS = 200          # Dry-run: 20 → final: 50
+N_SCENARIOS = 200          # Dry-run: 50 → final: 100~200 per group
 INSTANCE_PATH = "data/small/instance.json"
 
 # 6 parameter combinations: (delta_T, alpha_max)

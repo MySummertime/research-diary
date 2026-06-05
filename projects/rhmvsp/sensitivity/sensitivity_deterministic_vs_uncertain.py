@@ -43,7 +43,7 @@ C_UNC = COLOURS["C1"]  # Warm Terracotta — Uncertainty-aware (our model)
 C_DET = COLOURS["C2"]  # Celadon Green   — Deterministic model
 
 # ── Experiment parameters ─────────────────────────────────────────────────────
-N_SCENARIOS = 50          # Per group.  Dry-run: 10 → final: 50
+N_SCENARIOS = 200          # Dry-run: 50 → final: 100~200 per group
 INSTANCE_PATH = "data/small/instance.json"
 
 # Deterministic model: no uncertainty at all
@@ -92,7 +92,7 @@ def _update_od_deadlines(instance, config):
 
 
 def _run_single(config, inst, logger):
-    """Run one BAP solve → dict with cost and sub-components."""
+    """Run one BAP solve → dict with cost, reliability, and sub-components."""
     solver = BAPSolver(config, json.loads(json.dumps(inst)), logger)
     t0 = time.time()
     sol = solver.solve()
@@ -102,6 +102,8 @@ def _run_single(config, inst, logger):
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
                  "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
     result = {"cost": sol.get("total_cost") if ok else None,
+              "R_risk": sol.get("R_net_risk", 0) if ok else None,
+              "R_time": sol.get("R_net_time", 0) if ok else None,
               "status": status, "elapsed": round(elapsed, 2)}
     for col in cost_cols:
         result[col] = sol.get(col, 0) if ok else None
@@ -152,7 +154,7 @@ def run_deterministic_vs_uncertain():
                  "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
     with open(csv_path, "w", newline="") as f:
         csv.writer(f).writerow(["model", "delta_T_group", "scenario_id",
-            "cost"] + cost_cols + ["status", "elapsed_s"])
+            "cost", "R_risk", "R_time"] + cost_cols + ["status", "elapsed_s"])
 
     # ── Pre-generate scenarios (shared across all groups for fairness) ────────
     # Same physical realizations; only the solver config differs per group.
@@ -188,7 +190,7 @@ def run_deterministic_vs_uncertain():
             done += 1
 
             with open(csv_path, "a", newline="") as f:
-                row = ["DET", dT, s_id, r_det["cost"]]
+                row = ["DET", dT, s_id, r_det["cost"], r_det.get("R_risk", ""), r_det.get("R_time", "")]
                 for col in cost_cols:
                     row.append(r_det.get(col) if r_det["cost"] is not None else None)
                 row += [r_det["status"], r_det["elapsed"]]
@@ -210,7 +212,7 @@ def run_deterministic_vs_uncertain():
             done += 1
 
             with open(csv_path, "a", newline="") as f:
-                row = ["UNC", dT, s_id, r_unc["cost"]]
+                row = ["UNC", dT, s_id, r_unc["cost"], r_unc.get("R_risk", ""), r_unc.get("R_time", "")]
                 for col in cost_cols:
                     row.append(r_unc.get(col) if r_unc["cost"] is not None else None)
                 row += [r_unc["status"], r_unc["elapsed"]]
@@ -220,10 +222,15 @@ def run_deterministic_vs_uncertain():
             det_costs[label].append(r_det["cost"] if r_det["cost"] is not None else float("nan"))
             unc_costs[label].append(r_unc["cost"] if r_unc["cost"] is not None else float("nan"))
 
-            d_str = f"CNY {cost_det:,.0f}" if cost_det is not None else status_det
-            u_str = f"CNY {cost_unc:,.0f}" if cost_unc is not None else status_unc
+            d_str = f"CNY {r_det['cost']:,.0f}" if r_det["cost"] is not None else r_det["status"]
+            u_str = f"CNY {r_unc['cost']:,.0f}" if r_unc["cost"] is not None else r_unc["status"]
             print(f"  [{done:3d}/{total}]  s={s_id:2d}  DET={d_str:>14s}  UNC={u_str:>14s}"
-                  f"  ({elapsed_det:.1f}s / {elapsed_unc:.1f}s)")
+                  f"  ({r_det['elapsed']:.1f}s / {r_unc['elapsed']:.1f}s)")
+            # Log cost components
+            if r_det["cost"] is not None:
+                print(f"    DET components: deploy={r_det.get('deploy_cost',0):,.0f}  transport={r_det.get('transport_cost',0):,.0f}  transfer={r_det.get('transfer_cost',0):,.0f}  reposition={r_det.get('reposition_cost',0):,.0f}  idle={r_det.get('idle_cost',0):,.0f}  opp={r_det.get('opportunity_cost',0):,.0f}  R_risk={r_det.get('R_risk',0):.4f}  R_time={r_det.get('R_time',0):.4f}")
+            if r_unc["cost"] is not None:
+                print(f"    UNC components: deploy={r_unc.get('deploy_cost',0):,.0f}  transport={r_unc.get('transport_cost',0):,.0f}  transfer={r_unc.get('transfer_cost',0):,.0f}  reposition={r_unc.get('reposition_cost',0):,.0f}  idle={r_unc.get('idle_cost',0):,.0f}  opp={r_unc.get('opportunity_cost',0):,.0f}  R_risk={r_unc.get('R_risk',0):.4f}  R_time={r_unc.get('R_time',0):.4f}")
 
     # ── Plot enhanced box-plots ───────────────────────────────────────────────
     det_list = [det_costs[l] for l in group_labels]
@@ -263,13 +270,14 @@ def run_deterministic_vs_uncertain():
             gap_pct = (d_med - u_med) / u_med * 100
             gap_str = f"{gap_pct:+.1f}%"
             if n >= 3 and not np.all(dp == up):
-                _stat, _p = _wilcoxon(dp, up, alternative='two-sided')
-                if   _p < 0.001: sig = "***"
-                elif _p < 0.01:  sig = "**"
-                elif _p < 0.05:  sig = "*"
-                else:            sig = "ns"
+                _result = _wilcoxon(dp, up, alternative='two-sided')
+                _p_val = float(_result[1])
+                if   _p_val < 0.001: sig = "***"
+                elif _p_val < 0.01:  sig = "**"
+                elif _p_val < 0.05:  sig = "*"
+                else:               sig = "ns"
                 print(f"  {lbl:>6s}  {d_med:>14,.0f}  {u_med:>14,.0f}"
-                      f"  {gap_str:>10s}  {n:2d}  {_p:>10.4f}  {sig}")
+                      f"  {gap_str:>10s}  {n:2d}  {_p_val:>10.4f}  {sig}")
             else:
                 print(f"  {lbl:>6s}  {d_med:>14,.0f}  {u_med:>14,.0f}"
                       f"  {gap_str:>10s}  {n:2d}  (insufficient)")
