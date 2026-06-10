@@ -27,7 +27,9 @@ from sensitivity.plot_helpers import dual_y_axis, three_subplots, COLOURS
 COLOR_RISK = COLOURS["C1"]   # Warm Terracotta
 COLOR_TIME = COLOURS["C2"]   # Celadon Green
 
-def _plot_dual_y_axis(param_name, label, x_values, r_risk_vals, r_time_vals, cost_vals, save_path):
+def _plot_dual_y_axis(param_name, label, x_values, r_risk_vals, r_time_vals, cost_vals, save_path,
+                      y1_label=r'Network Risk Reliability ($R_{risk}$)',
+                      y2_label=r'Network Time Reliability ($R_{time}$)'):
     """Generate a dual y-axis line chart (R_risk left, R_time right) and save as png + tiff."""
     from sensitivity.plot_helpers import set_style
     set_style()
@@ -48,9 +50,9 @@ def _plot_dual_y_axis(param_name, label, x_values, r_risk_vals, r_time_vals, cos
 
     # Left y-axis: R_risk
     ax1.set_xlabel(latex_label, fontsize=14)
-    ax1.set_ylabel(r'Network Risk Reliability ($R_{risk}$)', fontsize=14, color=COLOR_RISK)
+    ax1.set_ylabel(y1_label, fontsize=14, color=COLOR_RISK)
     line1, = ax1.plot(x_pos, r_risk_vals, color=COLOR_RISK, marker='o', markersize=5,
-                       linewidth=1.8, label=r'Risk Reliability ($R_{risk}$)', zorder=5)
+                       linewidth=1.8, label=y1_label, zorder=5)
     ax1.set_xticks(x_pos)
     ax1.set_xticklabels(x_labels, fontsize=11, rotation=45, ha='right')
     ax1.tick_params(axis='x', direction='in', labelsize=11)
@@ -67,9 +69,9 @@ def _plot_dual_y_axis(param_name, label, x_values, r_risk_vals, r_time_vals, cos
 
     # Right y-axis: R_time
     ax2 = ax1.twinx()
-    ax2.set_ylabel(r'Network Time Reliability ($R_{time}$)', fontsize=14, color=COLOR_TIME)
+    ax2.set_ylabel(y2_label, fontsize=14, color=COLOR_TIME)
     line2, = ax2.plot(x_pos, r_time_vals, color=COLOR_TIME, marker='s', markersize=5,
-                       linewidth=1.8, linestyle='--', label=r'Time Reliability ($R_{time}$)', zorder=4)
+                       linewidth=1.8, linestyle='--', label=y2_label, zorder=4)
     ax2.tick_params(axis='y', direction='in', labelcolor=COLOR_TIME, labelsize=11)
     r_time_min = min(r_time_vals) if r_time_vals else 0
     r_time_max = max(r_time_vals) if r_time_vals else 1
@@ -142,8 +144,11 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
         val_dir = os.path.join(exp_dir, f"{param_name}={val_str}")
         os.makedirs(val_dir, exist_ok=True)
 
+        # Deep copy instance to avoid mutation leaking across iterations
+        inst = json.loads(json.dumps(instance))
+
         # Ensure instance uses the updated config.alpha_T
-        for od_data in instance.get("od_pairs", []):
+        for od_data in inst.get("od_pairs", []):
             od_data["alpha_T_od"] = config.alpha_T
 
         # Recompute L_od for each OD pair based on current alpha_T.
@@ -151,9 +156,9 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
         # only sensitive to alpha_T if L_od itself changes with alpha_T.
         from src.core.uncertainty import UncertaintyEngine as UE2, TrapezoidalFuzzy as TrapFz
         _temp_engine = UE2(config)
-        _arcs = instance["network"]["arcs"]
-        _hub_ids = {tn["node_id"] for tn in instance["network"].get("transfer_nodes", [])}
-        for od in instance["od_pairs"]:
+        _arcs = inst["network"]["arcs"]
+        _hub_ids = {tn["node_id"] for tn in inst["network"].get("transfer_nodes", [])}
+        for od in inst["od_pairs"]:
             od_o, od_d = od["origin"], od["destination"]
             # Filter for actual hub nodes only (transfer_nodes define hubs)
             roads_out = [a for a in _arcs if a["i"] == od_o and a["mode"] == 1 and a["j"] in _hub_ids]
@@ -183,7 +188,7 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
         logger.info(f"  Derived: beta_od={config.beta_od:.4f}, beta_net={config.beta_net:.4f}")
 
         try:
-            solver = BAPSolver(config, instance, logger)
+            solver = BAPSolver(config, inst, logger)
             sol = solver.solve()
 
             # Save solution.json
@@ -272,6 +277,14 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                 for od_idx in range(5):
                     od_r = od_details.get(od_idx, {})
                     f.write(f",{od_r.get('R_od_risk', 0):.4f},{od_r.get('R_od_time', 0):.4f},{od_r.get('raw_risk', 0):.4f},{od_r.get('raw_time', 0):.4f}")
+            else:
+                f.write(",")  # empty cost
+                for col in cost_cols:
+                    f.write(",")
+                f.write(",,,,")  # R_risk, R_time, Raw_Risk, Raw_Time
+                f.write(",")  # Gap_pct
+                for od_idx in range(5):
+                    f.write(",,,,")  # 4 per-OD columns
             f.write("\n")
     print(f"Summary CSV saved to: {csv_path}")
 
@@ -281,6 +294,9 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
     r_time_vals = [r['R_time'] for r in results if r.get('status') == 'optimal']
     cost_vals = [r['cost'] for r in results if r.get('status') == 'optimal']
 
+    raw_risk_vals = [r.get('raw_risk', 0) for r in results if r.get('status') == 'optimal']
+    raw_time_vals = [r.get('raw_time', 0) for r in results if r.get('status') == 'optimal']
+
     if x_vals:
         chart_path = os.path.join(exp_dir, f"sensitivity_{param_name}")
         try:
@@ -288,6 +304,13 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
             print(f"Dual Y-axis chart saved to: {chart_path}.png/.tiff")
         except Exception as e:
             print(f"Chart generation failed: {e}")
+        try:
+            _plot_dual_y_axis(param_name, label, x_vals, raw_risk_vals, raw_time_vals, cost_vals,
+                              os.path.join(exp_dir, f"sensitivity_{param_name}_raw"),
+                              y1_label=r'Raw Network Risk', y2_label=r'Raw Network Time (h)')
+            print(f"Raw dual Y-axis chart saved to: sensitivity_{param_name}_raw.png/.tiff")
+        except Exception as e:
+            print(f"Raw chart generation failed: {e}")
 
     tee.close()
     return results

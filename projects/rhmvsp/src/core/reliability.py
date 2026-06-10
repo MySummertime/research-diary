@@ -160,6 +160,8 @@ class ReliabilityAnalyzer:
                     z_b += trap_transfer.b
                     z_c += trap_transfer.c
                     z_d += trap_transfer.d
+                    arrival_upper += trap_transfer.d
+                    arrival_lower += trap_transfer.a
                     transfer_idx += 1
             # Rail waiting window
             if mode == 2:

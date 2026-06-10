@@ -90,6 +90,10 @@ def _run_single(config, inst, exp_dir, model_tag, dT, a_max, seed):
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
                  "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
     result = {"cost": sol.get("total_cost") if ok else None,
+              "R_risk": sol.get("R_net_risk", 0) if ok else None,
+              "R_time": sol.get("R_net_time", 0) if ok else None,
+              "raw_risk": sol.get("raw_net_risk", 0.0) if ok else None,
+              "raw_time": sol.get("raw_net_time", 0.0) if ok else None,
               "status": status, "elapsed": round(elapsed, 2)}
     for col in cost_cols:
         result[col] = sol.get(col, 0) if ok else None
@@ -135,7 +139,8 @@ def run_out_of_sample():
     with open(csv_path, "w", newline="") as f:
         csv.writer(f).writerow(
             ["group_label", "delta_T", "alpha_max", "scenario_id",
-             "model", "cost"] + cost_cols + ["status", "elapsed_s"]
+             "model", "cost"] + cost_cols +
+            ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "status", "elapsed_s"]
         )
 
     for dT, a_max in PARAM_GRID:
@@ -168,7 +173,9 @@ def run_out_of_sample():
                 row = [label, dT, a_max, s_id, "BAP", r_bap["cost"]]
                 for col in cost_cols:
                     row.append(r_bap.get(col) if r_bap["cost"] is not None else None)
-                row += [r_bap["status"], r_bap["elapsed"]]
+                row += [r_bap.get("R_risk"), r_bap.get("R_time"),
+                        r_bap.get("raw_risk"), r_bap.get("raw_time"),
+                        r_bap["status"], r_bap["elapsed"]]
                 csv.writer(f).writerow(row)
 
             # ── LP-only (benchmark) — same scenario, different config ─────────
@@ -195,13 +202,19 @@ def run_out_of_sample():
                 row = [label, dT, a_max, s_id, "LP", r_lp["cost"]]
                 for col in cost_cols:
                     row.append(r_lp.get(col) if r_lp["cost"] is not None else None)
-                row += [r_lp["status"], r_lp["elapsed"]]
+                row += [r_lp.get("R_risk"), r_lp.get("R_time"),
+                        r_lp.get("raw_risk"), r_lp.get("raw_time"),
+                        r_lp["status"], r_lp["elapsed"]]
                 csv.writer(f).writerow(row)
 
             # Progress
             b_str = f"CNY {r_bap['cost']:,.0f}" if r_bap["cost"] is not None else r_bap["status"]
             l_str = f"CNY {r_lp['cost']:,.0f}" if r_lp["cost"] is not None else r_lp["status"]
             print(f"  [{done:3d}/{total}]  s={s_id:2d}  BAP={b_str:>14s}  LP={l_str:>14s}  "
+                  f"R_risk={r_bap.get('R_risk',0):.4f}/{r_lp.get('R_risk',0):.4f}  "
+                  f"R_time={r_bap.get('R_time',0):.4f}/{r_lp.get('R_time',0):.4f}  "
+                  f"RawRisk={r_bap.get('raw_risk',0):.2f}/{r_lp.get('raw_risk',0):.2f}  "
+                  f"RawTime={r_bap.get('raw_time',0):.2f}/{r_lp.get('raw_time',0):.2f}h  "
                   f"({r_bap['elapsed']:.1f}s / {r_lp['elapsed']:.1f}s)")
 
     # ── Plot enhanced box-plots ───────────────────────────────────────────────

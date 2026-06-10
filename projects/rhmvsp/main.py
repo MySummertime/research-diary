@@ -299,6 +299,26 @@ def main():
 			json.dump(solution, f, indent=2, default=str)
 		logger.info(f"\nSolution saved to: {result_path}")
 
+		# Write summary CSV with cost, sub-costs, reliability and raw values
+		csv_path = os.path.join(args.output, "summary.csv")
+		sol = solution
+		cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "transfer_cost",
+					 "reposition_cost", "prep_cost", "idle_cost", "opportunity_cost"]
+		with open(csv_path, "w", newline="") as csv_f:
+			w = csv.writer(csv_f)
+			w.writerow(["Status", "Cost"] + cost_cols +
+					   ["R_risk", "R_time", "Raw_Risk", "Raw_Time"])
+			w.writerow([
+				sol.get("status", "unknown"),
+				f"{sol.get('total_cost', 0):.2f}",
+			] + [f"{sol.get(c, 0):.2f}" for c in cost_cols] + [
+				f"{sol.get('R_net_risk', 0):.6f}",
+				f"{sol.get('R_net_time', 0):.6f}",
+				f"{sol.get('raw_net_risk', 0):.2f}",
+				f"{sol.get('raw_net_time', 0):.2f}",
+			])
+		logger.info(f"Summary CSV saved to: {csv_path}")
+
 		# --- Generate Publication-Quality Plots ---
 		try:
 			viz = Visualizer(config)

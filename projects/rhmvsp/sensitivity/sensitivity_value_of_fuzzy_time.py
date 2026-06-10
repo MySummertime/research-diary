@@ -115,12 +115,15 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
                     "opportunity_cost": sol.get("opportunity_cost", 0),
                     "R_risk": sol.get("R_net_risk", 0),
                     "R_time": sol.get("R_net_time", 0),
+                    "raw_risk": sol.get("raw_net_risk", 0.0),
+                    "raw_time": sol.get("raw_net_time", 0.0),
                     "gap_pct": sol.get("gap_pct", 0.0),
                     "iterations": sol.get("iterations", 0),
                 }
                 results.append(r)
                 logger.info(f"  Cost={sol['total_cost']:,.0f}, R_risk={sol['R_net_risk']:.4f}, "
-                             f"R_time={sol['R_net_time']:.4f}, Gap={sol.get('gap_pct',0):.4f}%")
+                             f"R_time={sol['R_net_time']:.4f}, RawRisk={sol.get('raw_net_risk',0):.2f}, "
+                             f"RawTime={sol.get('raw_net_time',0):.2f}h, Gap={sol.get('gap_pct',0):.4f}%")
                 with open(os.path.join(val_dir, "solution.json"), "w") as f:
                     json.dump(sol, f, indent=2, default=str)
             else:
@@ -140,8 +143,9 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
                      "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
         hdr = (["delta_T", "alpha_T", "alpha_max", "status", "iterations",
                "cost"] + cost_cols +
-              ["R_risk", "R_time",
+              ["R_risk", "R_time", "Raw_Risk", "Raw_Time",
                "cost_bench", "R_risk_bench", "R_time_bench",
+               "Raw_Risk_bench", "Raw_Time_bench",
                "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%"])
         w.writerow(hdr)
 
@@ -173,8 +177,8 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
 
             row = [
                 f"{r['param']:.2f}",
-                f"{cfg.alpha_T:.2f}",
-                f"{cfg.alpha_max:.2f}",
+                f"{0.8:.2f}",     # alpha_T is fixed at 0.8 in this experiment
+                f"{0.05:.2f}",    # alpha_max is fixed at 0.05 in this experiment
                 "optimal",
                 r.get("iterations", ""),
                 f"{r['cost']:.0f}",
@@ -184,9 +188,13 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
             row += [
                 f"{r['R_risk']:.4f}",
                 f"{r['R_time']:.4f}",
+                f"{r.get('raw_risk', 0):.4f}",
+                f"{r.get('raw_time', 0):.4f}",
                 f"{bc:.0f}",
                 f"{br_risk:.4f}",
                 f"{br_time:.4f}",
+                f"{bench.get('raw_risk', 0):.4f}" if bench else "",
+                f"{bench.get('raw_time', 0):.4f}" if bench else "",
                 cost_g, rr_g, rt_g,
             ]
             w.writerow(row)
@@ -204,6 +212,14 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
                                  x_vals=x, r_risk_vals=r_risk_vals,
                                  r_time_vals=r_time_vals, cost_vals=cost_vals,
                                  save_path=os.path.join(exp_dir, "value_fuzzy_time_dual"))
+
+        raw_risk_vals = [r.get("raw_risk", 0) for r in results if r.get("status") == "optimal"]
+        raw_time_vals = [r.get("raw_time", 0) for r in results if r.get("status") == "optimal"]
+        dual_y_axis_with_cost_bar(x_label=r'$\delta_T$ (Time Fluctuation Factor)',
+                                 x_vals=x, r_risk_vals=raw_risk_vals,
+                                 r_time_vals=raw_time_vals, cost_vals=cost_vals,
+                                 save_path=os.path.join(exp_dir, "value_fuzzy_time_raw"),
+                                 y1_label='Raw Risk', y2_label='Raw Time (h)')
 
         print(f"Charts saved to: {exp_dir}")
 

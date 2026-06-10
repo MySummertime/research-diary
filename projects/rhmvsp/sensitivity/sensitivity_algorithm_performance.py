@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import RHMVSPConfig
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
 from src.utils.logging import Logger
+from src.utils.reporting import format_solution_report
 from sensitivity.plot_helpers import set_style, COLOURS
 
 COLOR_TIME = COLOURS["C1"]
@@ -50,8 +51,9 @@ def _plot_algorithm_performance(x_labels, time_vals, iter_vals, save_path):
 
     ax1.set_xlabel("Instance Scale", fontsize=14)
     ax1.set_ylabel('Run time (s)', fontsize=14, color=COLOR_TIME)
-    # Use bar chart for run time and line for iterations to show scale progression
-    line1 = ax1.bar(x_idx, time_vals, color=COLOR_TIME, width=0.4, label='Run time', zorder=3, alpha=0.8)
+    # Use dual line chart
+    line1, = ax1.plot(x_idx, time_vals, color=COLOR_TIME, marker='o', markersize=6,
+                       linewidth=1.8, label='Run time', zorder=5)
     
     ax2 = ax1.twinx()
     ax2.set_ylabel('Iteration', fontsize=14, color=COLOR_ITER)
@@ -104,7 +106,7 @@ def run_algorithm_performance():
         
     for scale in scales:
         for inst_idx in instances_per_scale:
-            instance_path = f"data/{scale}/instance_{inst_idx}.json"
+            instance_path = f"data_performance/{scale}/instance_{inst_idx}.json"
             if not os.path.exists(instance_path):
                 print(f"Skipping {instance_path} (File not found. Please generate this data.)")
                 continue
@@ -132,6 +134,20 @@ def run_algorithm_performance():
 
             row = [scale, str(inst_idx)]
             if bap_ok:
+                # 记录完整 solution json (仿照 main_experiment)
+                sol_path = f"data_performance/{scale}/solution_{inst_idx}.json"
+                with open(sol_path, "w") as f:
+                    json.dump(sol, f, indent=2, default=str)
+                print(f"Saved solution instance to {sol_path}")
+
+                # 打印完整格式化报告 (和 main_experiment 相同)
+                report = format_solution_report(sol, instance, total_wall=elapsed_bap, total_cpu=0.0)
+                print("\n" + "="*60)
+                print(f"SOLUTION REPORT for {scale} Instance {inst_idx}")
+                print("="*60)
+                print(report)
+                print("="*60 + "\n")
+
                 cost_bap = sol["total_cost"]
                 r_risk_bap = sol.get("R_net_risk", 0)
                 r_time_bap = sol.get("R_net_time", 0)
@@ -143,7 +159,10 @@ def run_algorithm_performance():
                     row.append(f"{sol.get(col, 0):.0f}")
                 row += [f"{r_risk_bap:.4f}", f"{r_time_bap:.4f}", f"{raw_risk:.2f}", f"{raw_time:.2f}"]
                 
-                print(f"Scale={scale}, Inst={inst_idx} | Time: {elapsed_bap:.2f}s, Iter: {iter_bap}, Cost: {cost_bap:,.0f}")
+                print(f"Scale={scale}, Inst={inst_idx} | Time: {elapsed_bap:.2f}s, Iter: {iter_bap}, Cost: ¥{cost_bap:,.0f}")
+                print(f"  Reliability: R_risk={r_risk_bap:.4f}, R_time={r_time_bap:.4f}")
+                print(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('opportunity_cost',0):,.0f}")
+                print(f"  Raw Metrics: RawRisk={raw_risk:.2f}, RawTime={raw_time:.2f}h\n")
                 
                 results.append({
                     "label": f"{scale}-{inst_idx}",
@@ -174,6 +193,4 @@ def run_algorithm_performance():
     tee.close()
 
 if __name__ == "__main__":
-    print("Algorithm performance experiment disabled for automatic execution to save time.")
-    print("To run, edit this script and uncomment the line below, or import and call run_algorithm_performance().")
     run_algorithm_performance()

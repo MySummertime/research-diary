@@ -150,6 +150,7 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
     bench_logger.info("Benchmark: constant model (no time-varying risk)")
 
     bench_cost = bench_rrisk = bench_rtime = None
+    bench_raw_risk = bench_raw_time = None
     try:
         solver_bench = BAPSolver(cfg_bench, inst_bench, bench_logger)
         sol_bench = solver_bench.solve()
@@ -157,8 +158,11 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
             bench_cost  = sol_bench.get("total_cost", 0)
             bench_rrisk = sol_bench.get("R_net_risk", 0)
             bench_rtime = sol_bench.get("R_net_time", 0)
+            bench_raw_risk = sol_bench.get("raw_net_risk", 0.0)
+            bench_raw_time = sol_bench.get("raw_net_time", 0.0)
             bench_logger.info(f"  Benchmark Cost={bench_cost:,.0f}  R_risk={bench_rrisk:.4f}"
-                              f"  R_time={bench_rtime:.4f}")
+                              f"  R_time={bench_rtime:.4f}  RawRisk={bench_raw_risk:.2f}"
+                              f"  RawTime={bench_raw_time:.2f}h")
             with open(os.path.join(bench_sub, "solution.json"), "w") as sf:
                 json.dump(sol_bench, sf, indent=2, default=str)
         else:
@@ -168,7 +172,9 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
         import traceback
         bench_logger.error(traceback.format_exc())
 
-    print(f"Benchmark: Cost={bench_cost}  R_risk={bench_rrisk}  R_time={bench_rtime}")
+    print(f"Benchmark: Cost={bench_cost}  R_risk={bench_rrisk}  R_time={bench_rtime}"
+          f"  RawRisk={bench_raw_risk if bench_raw_risk is not None else 'N/A'}"
+          f"  RawTime={bench_raw_time if bench_raw_time is not None else 'N/A'}")
 
     csv_path = os.path.join(exp_dir, "summary_coupled.csv")
     with open(csv_path, "w", newline="") as f:
@@ -177,8 +183,9 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
                      "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
         w.writerow(["alpha_max", "delta_T", "status",
                      "cost"] + cost_cols +
-                    ["R_risk", "R_time", "Gap_pct", "iterations",
+                    ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "Gap_pct", "iterations",
                      "cost_bench", "R_risk_bench", "R_time_bench",
+                     "Raw_Risk_bench", "Raw_Time_bench",
                      "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%"])
 
     results = []
@@ -225,13 +232,16 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
                         "opportunity_cost": sol.get("opportunity_cost", 0),
                         "R_risk": sol.get("R_net_risk", 0),
                         "R_time": sol.get("R_net_time", 0),
+                        "raw_risk": sol.get("raw_net_risk", 0.0),
+                        "raw_time": sol.get("raw_net_time", 0.0),
                         "gap_pct": sol.get("gap_pct", 0.0),
                         "iterations": sol.get("iterations", 0),
                     })
                     with open(os.path.join(sub, "solution.json"), "w") as sf:
                         json.dump(sol, sf, indent=2, default=str)
                     print(f"Cost={rec['cost']:,.0f}  R_risk={rec['R_risk']:.4f}"
-                          f"  R_time={rec['R_time']:.4f}  Gap={rec['gap_pct']:.4f}%")  # noqa: E501
+                          f"  R_time={rec['R_time']:.4f}  RawRisk={rec['raw_risk']:.2f}"
+                          f"  RawTime={rec['raw_time']:.2f}h  Gap={rec['gap_pct']:.4f}%")  # noqa: E501
                 else:
                     rec["status"] = "infeasible"
                     print("INFEASIBLE")
@@ -262,14 +272,20 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
                     f"{rc:.0f}"  if ok else ""]
                 for col in cost_cols:
                     row.append(f"{rec.get(col, 0):.0f}" if ok else "")
+                raw_r = rec.get("raw_risk", 0) if ok else 0.0
+                raw_t = rec.get("raw_time", 0) if ok else 0.0
                 row += [
                     f"{rr:.4f}"  if ok else "",
                     f"{rt:.4f}"  if ok else "",
+                    f"{raw_r:.4f}"  if ok else "",
+                    f"{raw_t:.4f}"  if ok else "",
                     f"{rec.get('gap_pct', 0):.4f}" if ok else "",
                     rec.get("iterations", "") if ok else "",
                     f"{bench_cost:.0f}"  if bench_cost  else "",
                     f"{bench_rrisk:.4f}" if bench_rrisk else "",
                     f"{bench_rtime:.4f}" if bench_rtime else "",
+                    f"{bench_raw_risk:.4f}" if bench_raw_risk else "",
+                    f"{bench_raw_time:.4f}" if bench_raw_time else "",
                     cost_g, rr_g, rt_g,
                 ]
                 w.writerow(row)
@@ -280,6 +296,8 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
     cost_matrix  = np.full((len(DELTA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
     r_risk_matrix = np.full((len(DELTA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
     r_time_matrix = np.full((len(DELTA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
+    raw_risk_matrix = np.full((len(DELTA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
+    raw_time_matrix = np.full((len(DELTA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
 
     for r in results:
         if r.get("status") not in ("infeasible", "error"):
@@ -288,6 +306,8 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
             cost_matrix[i, j] = r.get("cost", 0)
             r_risk_matrix[i, j] = r.get("R_risk", 0)
             r_time_matrix[i, j] = r.get("R_time", 0)
+            raw_risk_matrix[i, j] = r.get("raw_risk", 0)
+            raw_time_matrix[i, j] = r.get("raw_time", 0)
 
     _plot_heatmap(DELTA_T_VALS, ALPHA_MAX_VALS, cost_matrix,
                   "Total Cost (CNY)",
@@ -303,6 +323,16 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
                   r"Network Time Reliability ($R_{time}$)",
                   fmt_func=lambda v: f'{v:.3f}',
                   save_path=os.path.join(exp_dir, "heatmap_R_time"))
+
+    _plot_heatmap(DELTA_T_VALS, ALPHA_MAX_VALS, raw_risk_matrix,
+                  "Raw Network Risk",
+                  fmt_func=lambda v: f'{v:.1f}',
+                  save_path=os.path.join(exp_dir, "heatmap_raw_risk"))
+
+    _plot_heatmap(DELTA_T_VALS, ALPHA_MAX_VALS, raw_time_matrix,
+                  "Raw Network Time (h)",
+                  fmt_func=lambda v: f'{v:.1f}',
+                  save_path=os.path.join(exp_dir, "heatmap_raw_time"))
 
     print(f"\nAll outputs saved in: {exp_dir}")
     tee.close()

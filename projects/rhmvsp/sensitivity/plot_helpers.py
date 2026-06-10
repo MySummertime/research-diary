@@ -202,7 +202,9 @@ def discrete_cmap_5(values_arr=None):
 def dual_y_axis_with_cost_bar(x_label: str, x_vals, r_risk_vals, r_time_vals,
                                cost_vals, save_path: str,
                                c1: str = COLOURS["C1"], c2: str = COLOURS["C2"],
-                               c_cost: str = COLOURS["C3"]):
+                               c_cost: str = COLOURS["C3"],
+                               y1_label: str = r'$R_{risk}$',
+                               y2_label: str = r'$R_{time}$'):
     """
     Dual Y-axis chart:
       Left axis  – R_risk (solid circle) and R_time (dashed square), line plots.
@@ -235,10 +237,10 @@ def dual_y_axis_with_cost_bar(x_label: str, x_vals, r_risk_vals, r_time_vals,
 
     line1, = ax1.plot(x_pos, r_risk_vals, color=c1, marker='o',
                       markersize=5, linewidth=1.8,
-                      label=r'$R_{risk}$', zorder=5)
+                      label=y1_label, zorder=5)
     line2, = ax1.plot(x_pos, r_time_vals, color=c2, marker='s',
                       markersize=5, linewidth=1.8, linestyle='--',
-                      label=r'$R_{time}$', zorder=4)
+                      label=y2_label, zorder=4)
 
     ax1.tick_params(axis='x', direction='in', labelsize=11)
     ax1.tick_params(axis='y', direction='in', labelsize=11)
