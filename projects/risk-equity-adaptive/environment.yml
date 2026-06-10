@@ -1,6 +1,6 @@
 # projects/risk-equity-adaptive/environment.yml
 
-name: risk_equity_adaptive_env
+name: paper1_risk_equity
 channels:
   - defaults
   - conda-forge
