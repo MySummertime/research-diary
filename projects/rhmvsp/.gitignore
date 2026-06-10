@@ -42,3 +42,4 @@ data/instance_*.json
 **/*.docx
 **/*.png
 **/*.tiff
+**/.agents
