@@ -64,6 +64,10 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
         lines.append(f"  Network R_risk:      {solution.get('R_net_risk', 0):.6f}")
     if 'R_net_time' in solution:
         lines.append(f"  Network R_time:      {solution.get('R_net_time', 0):.6f}")
+    if 'raw_net_risk' in solution:
+        lines.append(f"  Network Raw Risk:    {solution.get('raw_net_risk', 0):.2f}")
+    if 'raw_net_time' in solution:
+        lines.append(f"  Network Raw Time:    {solution.get('raw_net_time', 0):.2f}h")
     lines.append(f"  Max available vehicles: {solution.get('max_vehicles', 0)}")
     lines.append(f"  Actual used vehicles: {solution.get('num_vehicles_used', 0)}")
     lines.append(f"  Dispatched road trips: {solution.get('total_dispatches', 0)}")
@@ -79,6 +83,8 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
             r_str = f"R_od={od_r.get('R_od', 1.0):.4f}"
             if 'R_od_risk' in od_r and 'R_od_time' in od_r:
                 r_str += f" (Risk: {od_r['R_od_risk']:.4f}, Time: {od_r['R_od_time']:.4f})"
+                if 'raw_risk' in od_r and 'raw_time' in od_r:
+                    r_str += f" [Raw Risk: {od_r['raw_risk']:.2f}, Raw Time: {od_r['raw_time']:.2f}h]"
             lines.append(
                 f"  {od_name:<8s} | {r_str} | Batches={od_r.get('num_batches', 0)} | Binding={od_r.get('binding','N/A')}"
             )

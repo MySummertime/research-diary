@@ -1171,9 +1171,13 @@ class BranchAndPriceController:
             od_reliability_details = R_net_result.get('od_results', {})
             R_net_risk = R_net_result.get('R_net_risk', -1.0)
             R_net_time = R_net_result.get('R_net_time', -1.0)
+            raw_net_risk = R_net_result.get('raw_net_risk', 0.0)
+            raw_net_time = R_net_result.get('raw_net_time', 0.0)
         else:
             R_net_risk = R_net_result
             R_net_time = R_net_result
+            raw_net_risk = 0.0
+            raw_net_time = 0.0
 
         _lb = getattr(node, 'lower_bound', 0.0)
         _ub = getattr(self, 'best_ub', total_cost)
@@ -1198,6 +1202,8 @@ class BranchAndPriceController:
             "active_hubs": sorted(list(used_hubs)),
             "R_net_risk": R_net_risk,
             "R_net_time": R_net_time,
+            "raw_net_risk": raw_net_risk,
+            "raw_net_time": raw_net_time,
             "od_reliability_details": od_reliability_details,
             "max_vehicles": self.instance["num_vehicles"],
             "num_vehicles_used": num_vehicles_used,
@@ -1253,6 +1259,9 @@ class BranchAndPriceController:
         for od_idx, batches in od_batches.items():
             batch_risks = [b.risk_reliability for b in batches]
             batch_times = [b.time_reliability for b in batches]
+            batch_raw_risks = [b.raw_risk_value for b in batches]
+            batch_raw_times = [b.raw_time_spent for b in batches]
+            
             R_od_risk = min(batch_risks) if batch_risks else 1.0
             R_od_time = min(batch_times) if batch_times else 1.0
             # Determine which component binds (risk or time) for the worst OD
@@ -1266,14 +1275,22 @@ class BranchAndPriceController:
                 "batch_risks": batch_risks,
                 "batch_times": batch_times,
                 "binding": binding,
+                "raw_risk": sum(batch_raw_risks),
+                "raw_time": max(batch_raw_times) if batch_raw_times else 0.0,
             }
             od_risks.append(R_od_risk)
             od_times.append(R_od_time)
 
         R_net_risk = min(od_risks) if od_risks else 1.0
         R_net_time = min(od_times) if od_times else 1.0
+        
+        raw_net_risk = sum(od_r["raw_risk"] for od_r in od_results.values())
+        raw_net_time = max((od_r["raw_time"] for od_r in od_results.values()), default=0.0)
+
         return {
             "R_net_risk": R_net_risk,
             "R_net_time": R_net_time,
+            "raw_net_risk": raw_net_risk,
+            "raw_net_time": raw_net_time,
             "od_results": od_results
         }

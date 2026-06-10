@@ -39,6 +39,10 @@ class PathReliabilityResult:
     arrival_time_upper: float = 0.0  # Upper bound arrival time
     arrival_time_lower: float = 0.0  # Lower bound arrival time
 
+    # Raw metrics
+    raw_time_spent: float = 0.0
+    raw_risk_value: float = 0.0
+
 
 class ReliabilityAnalyzer:
     """
@@ -289,6 +293,7 @@ class ReliabilityAnalyzer:
         result.time_window_feasible = time_ok
 
         # 1. Arc-level risk reliability (Eq.1, Eq.9) with time-dependent risk (S2-2)
+        total_raw_risk = 0.0
         for k, (arc, mode) in enumerate(zip(arcs, arc_modes)):
             start_t = arr_times[k - 1] if k > 0 else departure_time
             # Use engine-computed fuzzy duration for consistency with time reliability
@@ -296,6 +301,7 @@ class ReliabilityAnalyzer:
             f_dur = (trap_dur.a, trap_dur.b, trap_dur.c, trap_dur.d)
             feasible, R = self.check_arc_risk(arc, start_t, time_dependent=True, fuzzy_duration=f_dur)
             result.arc_reliabilities[(arc.i, arc.j)] = R
+            total_raw_risk += (1.0 - R) * arc.C_consequence
             if not feasible:
                 result.arc_risk_feasible = False
 
@@ -303,8 +309,12 @@ class ReliabilityAnalyzer:
         for tn in transfer_nodes:
             feasible, R = self.check_node_risk(tn)
             result.node_reliabilities[tn.node_id] = R
+            total_raw_risk += (1.0 - R) * getattr(tn, 'C_consequence', 100.0)
             if not feasible:
                 result.arc_risk_feasible = False
+
+        result.raw_risk_value = total_raw_risk
+        result.raw_time_spent = t_upper - departure_time
 
         # 3. Path-level risk reliability (Eq.4)
         result.risk_reliability = self.engine.path_reliability(
@@ -392,6 +402,8 @@ class ReliabilityAnalyzer:
             assignments = vehicle_assignments[od_idx]
             batch_risks = []
             batch_times = []
+            batch_raw_risks = []
+            batch_raw_times = []
 
             for assignment in assignments:
                 arcs = assignment.get("arcs", [])
@@ -402,6 +414,8 @@ class ReliabilityAnalyzer:
                 result = self.analyze_path(arcs, modes, transfers, od, dep_time)
                 batch_risks.append(result.risk_reliability)
                 batch_times.append(result.time_reliability)
+                batch_raw_risks.append(result.raw_risk_value)
+                batch_raw_times.append(result.raw_time_spent)
 
             # O-D risk = min over batches (serial, Eq.5a)
             R_od_risk = min(batch_risks) if batch_risks else 1.0
@@ -414,6 +428,8 @@ class ReliabilityAnalyzer:
                 "num_batches": len(batch_risks),
                 "batch_risks": batch_risks,
                 "batch_times": batch_times,
+                "raw_risk": sum(batch_raw_risks),
+                "raw_time": max(batch_raw_times) if batch_raw_times else 0.0,
             }
             od_risks.append(R_od_risk)
             od_times.append(R_od_time)
@@ -421,8 +437,13 @@ class ReliabilityAnalyzer:
         R_net_risk = min(od_risks) if od_risks else 1.0
         R_net_time = min(od_times) if od_times else 1.0
 
+        raw_net_risk = sum(od_r["raw_risk"] for od_r in od_results.values())
+        raw_net_time = max((od_r["raw_time"] for od_r in od_results.values()), default=0.0)
+
         return {
             "od_results": od_results,
             "R_net_risk": R_net_risk,
             "R_net_time": R_net_time,
+            "raw_net_risk": raw_net_risk,
+            "raw_net_time": raw_net_time,
         }
