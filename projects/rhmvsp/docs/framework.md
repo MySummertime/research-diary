@@ -63,6 +63,20 @@ $$
 \end{cases}
 $$
 
+**模糊变量的期望值**（Liu 2007, Theorem 1.23）：
+
+- 三角形模糊变量 $\tilde{t} = (a, b, c)$：
+
+$$
+\mathbb{E}^{\mathcal{M}}[\tilde{t}] = \frac{a + 2b + c}{4}
+$$
+
+- 梯形模糊变量 $\tilde{\tau} = (a, b, c, d)$：
+
+$$
+\mathbb{E}^{\mathcal{M}}[\tilde{\tau}] = \frac{a + b + c + d}{4}
+$$
+
 不确定时间生成逻辑：
 
 - 道路基准时间 $base = distance / road_{speed}$，生成 $a=base \times a_{ratio}$，$b=c=base$，$d=base \times c_{ratio}$；
@@ -71,15 +85,37 @@ $$
   - $\delta_T = 0$ 表示确定性时间（无不确定性）
   - $\delta_T$ 越大则时间波动范围越宽。
 
+### 2.3 不确定测度与概率的区别
+
+项目严格遵循 Liu (2007) 的**不确定理论**框架，而非概率论。核心区别如下：
+
+- 不确定测度 $\mathcal{M}$ 具有**自对偶性**（self-duality）：$\mathcal{M}\{A\} + \mathcal{M}\{A^c\} = 1$；
+- 对于 $\alpha > 0.5$，不确定测度等价于**可信性测度**（credibility measure）$\text{Cr}\{\cdot\}$；
+- 布尔变量的不确定测度 $\mathcal{M}\{\xi = 1\} = \alpha$ 表示**信任度**（belief degree），而非频率概率。
+
+项目的**核心约束机制**是不确定测度下的**机会约束**（chance constraint）$\mathcal{M}\{f(x, \xi) \leqslant 0\} \geqslant \alpha$，而非概率论中的 $P\{f(x, \xi) \leqslant 0\} \geqslant \alpha$。期望值在成本计算中使用，但不作为主要约束。
+
 ## 3. 可靠性定义
+
+本项目的可靠性约束均采用**不确定测度机会约束**形式 $\mathcal{M}\{f(x, \xi) \leqslant 0\} \geqslant \alpha$。
 
 ### 3.1 风险可靠性层次
 
-风险可靠性采用**串联系统最弱链**原则：
+风险可靠性采用**串联系统最弱链**原则。路径级风险机会约束为：
 
-- 组件可靠性：
-  - 弧可靠性 $R_{ij} = 1 - \alpha_{ij}$；
-  - 节点可靠性 $R_i = 1 - \gamma_i$；
+$$
+R(P) = \min\{R_{arc}, R_{node}\} \geqslant \beta_{od}
+$$
+
+即 $\mathcal{M}\{\text{路径上所有弧和节点均无事故}\} \geqslant 1 - \alpha_{max}$。
+
+组件可靠性：
+
+- 弧可靠性 $R_{ij} = 1 - \alpha_{ij}$；
+- 节点可靠性 $R_i = 1 - \gamma_i$；
+
+层次化聚合：
+
 - 路径可靠性 $R(P) = \min\{R_{arc}, R_{node}\}$；
 - OD 对可靠性 $R_{od} = \min\{R(P)\}$；
 - 网络风险可靠性 $R_{net}^{risk} = \min\{R_{od}\}$。
@@ -96,7 +132,13 @@ $$
 
 ### 3.2 时间可靠性层次
 
-时间可靠性衡量路径模糊行程时间能否满足截止时间 $L_{od}$。定义路径出发时间为 $s$，路径上所有运输弧和转运节点的模糊时间变量之和为路径总模糊时间：
+时间可靠性采用**不确定测度机会约束**形式：
+
+$$
+R_T = \mathcal{M}\{s + \tilde{Z}_{total} \leqslant L_{od}\} \geqslant \alpha_T
+$$
+
+其中路径出发时间为 $s$，路径上所有运输弧和转运节点的模糊时间变量之和为路径总模糊时间：
 
 $$
 \tilde{Z}_{total} = \sum_{ij \in P} \tilde{t}_{ij} + \sum_{k \in T(P)} \tilde{\tau}_k
@@ -104,15 +146,9 @@ $$
 
 其中 $\tilde{t}_{ij}$ 为弧 $(i,j)$ 的模糊运输时间，$\tilde{\tau}_k$ 为转运节点 $k$ 的模糊转运时间，$T(P)$ 为路径 $P$ 上的转运节点集合。
 
-时间可靠性定义为：
-
-$$
-R_T = \mathcal{M}\{s + \tilde{Z}_{total} \leqslant L_{od}\}
-$$
-
 该测度综合考虑了离散式转运时间、道路/铁路运输时间以及铁路班列时刻窗口约束。
 
-对于 $\alpha_T > 0.5$ 的情况，时间可靠性约束 $R_T \geq \alpha_T$ 可用确定性等价表示。设路径总模糊时间的右尾参数为 $(c, d)$（即梯形模糊变量的右半部分），则确定性等价约束为：
+对于 $\alpha_T > 0.5$ 的情况，时间可靠性约束 $R_T \geq \alpha_T$ 可用**确定性等价**表示。设路径总模糊时间的右尾参数为 $(c, d)$（即梯形模糊变量的右半部分），则确定性等价约束为：
 
 $$
 L_{od} \geqslant (2\alpha_T - 1) d + 2(1-\alpha_T) c
@@ -126,9 +162,13 @@ $$
 
 ### 3.3 综合可靠性
 
-完整解的网络可靠性通过以下层次化聚合得到：
+完整解的网络可靠性通过以下层次化聚合得到。所有聚合均基于不确定测度下的机会约束：
 
-**OD 级可靠性**：对每个 OD 对 $o$，设其有 $K_o$ 条批次路径，每条批次路径 $k$ 的风险可靠性和时间可靠性分别为 $R_{o,k}^{risk}$ 和 $R_{o,k}^{time}$。
+**OD 级可靠性**：对每个 OD 对 $o$，设其有 $K_o$ 条批次路径，每条批次路径 $k$ 的风险可靠性和时间可靠性分别为 $R_{o,k}^{risk}$ 和 $R_{o,k}^{time}$。OD 级综合可靠性机会约束为：
+
+$$
+R_o = \min_{k=1}^{K_o} \min\{R_{o,k}^{risk}, R_{o,k}^{time}\} \geqslant \beta_{od}
+$$
 
 **网络级可靠性**：取所有 OD 对的最小值：
 
