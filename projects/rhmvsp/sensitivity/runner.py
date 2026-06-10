@@ -195,11 +195,14 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
 
                 r_risk = sol.get("R_net_risk", 0)
                 r_time = sol.get("R_net_time", 0)
+                raw_risk = sol.get("raw_net_risk", 0.0)
+                raw_time = sol.get("raw_net_time", 0.0)
                 cost = sol.get("total_cost", 0)
                 gap_pct = sol.get("gap_pct", 0.0)
                 results.append({
                     "param": val, "status": "optimal",
                     "cost": cost, "R_risk": r_risk, "R_time": r_time,
+                    "raw_risk": raw_risk, "raw_time": raw_time,
                     "gap_pct": gap_pct,
                     "deploy_cost": sol.get("deploy_cost", 0),
                     "hub_cost": sol.get("hub_cost", 0),
@@ -212,6 +215,8 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                     "od_details": sol.get("od_reliability_details", {}),
                 })
                 logger.info(f"\nResult: {label}={val}: Cost=¥{cost:,.0f}, R_risk={r_risk:.4f}, R_time={r_time:.4f}")
+                logger.info(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('opportunity_cost',0):,.0f}")
+                logger.info(f"  Raw Metrics: RawRisk={raw_risk:.2f}, RawTime={raw_time:.2f}h")
             else:
                 results.append({"param": val, "status": "infeasible"})
                 logger.warning(f"Status: INFEASIBLE")
@@ -252,9 +257,9 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
                  "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
     with open(csv_path, "w") as f:
-        f.write(f"{param_name},status,cost,{','.join(cost_cols)},R_risk,R_time,Gap_pct")
+        f.write(f"{param_name},status,cost,{','.join(cost_cols)},R_risk,R_time,Raw_Risk,Raw_Time,Gap_pct")
         for od_idx in range(5):
-            f.write(f",R_od_{od_idx+1}_risk,R_od_{od_idx+1}_time")
+            f.write(f",R_od_{od_idx+1}_risk,R_od_{od_idx+1}_time,Raw_od_{od_idx+1}_risk,Raw_od_{od_idx+1}_time")
         f.write("\n")
         for r in results:
             f.write(f"{r['param']},{r.get('status','?')}")
@@ -262,11 +267,11 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                 f.write(f",{r['cost']:.0f}")
                 for col in cost_cols:
                     f.write(f",{r.get(col, 0):.0f}")
-                f.write(f",{r['R_risk']:.4f},{r['R_time']:.4f},{r.get('gap_pct',0.0):.4f}")
+                f.write(f",{r['R_risk']:.4f},{r['R_time']:.4f},{r.get('raw_risk',0.0):.4f},{r.get('raw_time',0.0):.4f},{r.get('gap_pct',0.0):.4f}")
                 od_details = r.get("od_details", {})
                 for od_idx in range(5):
                     od_r = od_details.get(od_idx, {})
-                    f.write(f",{od_r.get('R_od_risk', 0):.4f},{od_r.get('R_od_time', 0):.4f}")
+                    f.write(f",{od_r.get('R_od_risk', 0):.4f},{od_r.get('R_od_time', 0):.4f},{od_r.get('raw_risk', 0):.4f},{od_r.get('raw_time', 0):.4f}")
             f.write("\n")
     print(f"Summary CSV saved to: {csv_path}")
 
