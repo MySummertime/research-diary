@@ -43,3 +43,4 @@ data/instance_*.json
 **/*.png
 **/*.tiff
 **/.agents
+data_performance/
