@@ -44,3 +44,4 @@ data/instance_*.json
 **/*.tiff
 **/.agents
 data_performance/
+ai_scripts/
