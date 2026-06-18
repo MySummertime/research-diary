@@ -108,7 +108,7 @@ def run_demo(config: RHMVSPConfig, size: str, logger: Logger):
 		f"  Nodes: {instance['network']['num_nodes']}, "
 		f"Arcs: {instance['network']['num_arcs']}, "
 		f"O-D pairs: {len(instance['od_pairs'])}, "
-		f"Vehicles: {instance['num_vehicles']}"
+		f"West Vehicles: {instance.get('num_vehicles_west', 0)} | East Vehicles: {instance.get('num_vehicles_east', 0)}"
 	)
 
 	# Display network summary
@@ -153,12 +153,23 @@ def run_solve(config: RHMVSPConfig, instance_path: str, logger: Logger):
 	# Load instance
 	with open(instance_path) as f:
 		instance = json.load(f)
+		
+	if "config" in instance:
+		if "T_max" in instance["config"]:
+			config.T_max = instance["config"]["T_max"]
+		if "alpha_max" in instance["config"]:
+			config.alpha_max = instance["config"]["alpha_max"]
+		if "alpha_T" in instance["config"]:
+			config.alpha_T = instance["config"]["alpha_T"]
+		if "K_max" in instance["config"]:
+			config.K_max = instance["config"]["K_max"]
+			
 	logger.info(f"Loaded instance: {instance['name']}")
 	logger.info(
 		f"  Nodes: {instance['network']['num_nodes']}, "
 		f"Arcs: {instance['network']['num_arcs']}, "
 		f"O-D pairs: {len(instance['od_pairs'])}, "
-		f"Vehicles: {instance['num_vehicles']}"
+		f"West Vehicles: {instance.get('num_vehicles_west', 0)} | East Vehicles: {instance.get('num_vehicles_east', 0)}"
 	)
 
 	# Solve
@@ -303,7 +314,7 @@ def main():
 		csv_path = os.path.join(args.output, "summary.csv")
 		sol = solution
 		cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "transfer_cost",
-					 "reposition_cost", "prep_cost", "idle_cost", "opportunity_cost"]
+					 "reposition_cost", "prep_cost", "idle_cost", "unmet_penalty"]
 		with open(csv_path, "w", newline="") as csv_f:
 			w = csv.writer(csv_f)
 			w.writerow(["Status", "Cost"] + cost_cols +

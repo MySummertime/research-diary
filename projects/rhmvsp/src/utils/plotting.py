@@ -12,6 +12,12 @@ import networkx as nx
 import numpy as np
 from matplotlib.lines import Line2D
 
+try:
+    import contextily as ctx
+    HAS_CTX = True
+except ImportError:
+    HAS_CTX = False
+
 from ..core.network import MultimodalNetwork
 from config import ColorPalette, PlotProperties, get_color_by_key
 
@@ -103,6 +109,39 @@ class Visualizer:
 		for label in ax.get_xticklabels() + ax.get_yticklabels():
 			label.set_fontname(PlotProperties.FONT_FAMILY)
 
+	def _get_plot_positions(self, network: MultimodalNetwork) -> dict:
+		"""Transform lat/lon (EPSG:4326) to Web Mercator (EPSG:3857) if contextily/pyproj is available."""
+		pos = {}
+		has_proj = False
+		if HAS_CTX:
+			try:
+				from pyproj import Transformer
+				transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+				has_proj = True
+			except ImportError:
+				pass
+
+		for n, data in network.graph.nodes(data=True):
+			x = data.get("x", np.random.uniform(0, 100))
+			y = data.get("y", np.random.uniform(0, 100))
+			is_geo = (-180 <= x <= 180) and (-90 <= y <= 90)
+			if has_proj and is_geo:
+				x, y = transformer.transform(x, y)
+			pos[n] = (x, y)
+		return pos
+
+	def _add_basemap(self, ax):
+		"""Add geographical basemap if contextily is available and coordinates are geo-like."""
+		if HAS_CTX:
+			try:
+				ctx.add_basemap(
+					ax, 
+					source=ctx.providers.CartoDB.PositronNoLabels, 
+					alpha=0.9
+				)
+			except Exception as e:
+				print(f"Warning: Failed to add basemap: {e}")
+
 	def _calculate_edge_styles(self, edgelist: List[Tuple[int, int]]) -> List[str]:
 		"""Calculate connection styles with incremental curvature to ensure arcs never overlap."""
 		styles = [""] * len(edgelist)
@@ -118,9 +157,7 @@ class Visualizer:
 	def plot_network(self, network: MultimodalNetwork, output_path: str):
 		"""Plot the complete physical multimodal network topology (unfiltered)."""
 		fig, ax = plt.subplots(figsize=self.styles["figure_size"])
-		pos = {}
-		for n, data in network.graph.nodes(data=True):
-			pos[n] = (data.get("x", np.random.uniform(0, 100)), data.get("y", np.random.uniform(0, 100)))
+		pos = self._get_plot_positions(network)
 
 		road_edges = set()
 		rail_edges = set()
@@ -167,7 +204,16 @@ class Visualizer:
 
 		id_labels = {n: str(n) for n in network.graph.nodes()}
 		nx.draw_networkx_labels(network.graph, pos, labels=id_labels, ax=ax, font_family=PlotProperties.FONT_FAMILY, font_size=self.styles["font"]["size"], font_color=PlotProperties.FONT_COLOR_NODE_ID, font_weight=PlotProperties.FONT_WEIGHT_BOLD)
+		for n in hub_nodes:
+			x, y = pos[n]
+			name = network.graph.nodes[n].get("name", "")
+			if name:
+				ax.annotate(name, (x, y), xytext=(0, 6), textcoords="offset points",
+							ha='center', va='bottom', fontsize=self.styles["font"]["size"] + 2,
+							fontfamily=PlotProperties.FONT_FAMILY, fontweight='bold', color='black')
 
+
+		self._add_basemap(ax)
 		self._format_axes(ax)
 		ax.set_xlabel(PlotProperties.LABEL_X_AXIS, fontsize=PlotProperties.FONT_SIZE_AXIS_LABEL, fontweight=PlotProperties.FONT_WEIGHT_BOLD, fontfamily=PlotProperties.FONT_FAMILY)
 		ax.set_ylabel(PlotProperties.LABEL_Y_AXIS, fontsize=PlotProperties.FONT_SIZE_AXIS_LABEL, fontweight=PlotProperties.FONT_WEIGHT_BOLD, fontfamily=PlotProperties.FONT_FAMILY)
@@ -196,13 +242,8 @@ class Visualizer:
 
 		fig, ax = plt.subplots(figsize=self.styles["figure_size"])
 
-		# 1. Extract raw physical coordinates from network graph nodes
-		pos = {}
-		for n, data in network.graph.nodes(data=True):
-			pos[n] = (
-				data.get("x", np.random.uniform(0, 100)),
-				data.get("y", np.random.uniform(0, 100)),
-			)
+		# 1. Extract physical coordinates (projected if geo)
+		pos = self._get_plot_positions(network)
 
 		# 2. Draw background multimodal topology (only arcs used by scheduled routes)
 		v_schedules = solution.get("transport_routes", solution.get("vehicle_schedule", []))
@@ -403,19 +444,19 @@ class Visualizer:
 				mx = (x_u + x_v) / 2.0 + abs_offset * nx_norm
 				my = (y_u + y_v) / 2.0 + abs_offset * ny_norm
 
-				ax.text(
-					mx,
-					my,
-					veh_label,
-					color=color,
-					fontfamily=PlotProperties.FONT_FAMILY,
-					fontweight=PlotProperties.FONT_WEIGHT_BOLD,
-					fontsize=PlotProperties.FONT_SIZE_VEH_LABEL,
-					ha="center",
-					va="center",
-					zorder=6,
-					bbox=PlotProperties.TRANSPARENT_BBOX,
-				)
+				# ax.text(
+				# 	mx,
+				# 	my,
+				# 	veh_label,
+				# 	color=color,
+				# 	fontfamily=PlotProperties.FONT_FAMILY,
+				# 	fontweight=PlotProperties.FONT_WEIGHT_BOLD,
+				# 	fontsize=PlotProperties.FONT_SIZE_VEH_LABEL,
+				# 	ha="center",
+				# 	va="center",
+				# 	zorder=6,
+				# 	bbox=PlotProperties.TRANSPARENT_BBOX,
+				# )
 
 		# 4. Draw Hub (Transfer Nodes) and Non-Hub Nodes
 		transfer_node_ids = set(network.transfer_nodes.keys())
@@ -464,8 +505,17 @@ class Visualizer:
 			font_color=PlotProperties.FONT_COLOR_NODE_ID,
 			font_weight=PlotProperties.FONT_WEIGHT_BOLD,
 		)
+		for n in hub_nodes:
+			x, y = pos[n]
+			name = network.graph.nodes[n].get("name", "")
+			if name:
+				ax.annotate(name, (x, y), xytext=(0, 6), textcoords="offset points",
+							ha='center', va='bottom', fontsize=self.styles["font"]["size"] + 2,
+							fontfamily=PlotProperties.FONT_FAMILY, fontweight='bold', color='black')
+
 
 		# 6. Formatting and Legend
+		self._add_basemap(ax)
 		self._format_axes(ax)
 		ax.set_xlabel(
 			PlotProperties.LABEL_X_AXIS,

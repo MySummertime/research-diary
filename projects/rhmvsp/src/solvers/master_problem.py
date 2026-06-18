@@ -23,15 +23,16 @@ class MasterProblem:
     Objective:
       min  sum_col cost * lambda_col
          + sum_hub c_hub * g_hub
-         + sum_od [p_pen + c_opp] * shortfall_i
+         + sum_od [p_pen + c_unmet_penalty] * shortfall_i
          + repositioning costs (vehicle idle + empty drive + opportunity)
     """
 
-    def __init__(self, config: RHMVSPConfig, network, num_vehicles: int, logger, instance: dict = None):
+    def __init__(self, config: RHMVSPConfig, network, logger, instance: dict = None):
         self.config = config
         self.network = network
         self.od_pairs = network.od_pairs
-        self.num_vehicles = num_vehicles
+        self.num_vehicles_west = instance.get("num_vehicles_west", 2500)
+        self.num_vehicles_east = instance.get("num_vehicles_east", 2500)
         self.logger = logger
         self.instance = instance or {}
         self.engine = UncertaintyEngine(config)
@@ -42,17 +43,17 @@ class MasterProblem:
         self.use_stabilization = getattr(config, 'bap_stabilization', True)
         self.next_col_id = 0
 
-    def _compute_opportunity_costs(self):
+    def _compute_unmet_penaltys(self):
         """
         Compute opportunity costs per OD pair.
         """
-        c_opp = {}
+        c_unmet_penalty = {}
         for i, od in enumerate(self.od_pairs):
-            # Opportunity cost per ton is defined strictly as a fixed unit cost
+            # Unmet penalty per ton is defined strictly as a fixed unit cost
             # under Wang 2025, without additional O-D distance adjustment.
-            c_opp[i] = self.config.c_opp_base
+            c_unmet_penalty[i] = self.config.c_unmet_penalty
 
-        return c_opp
+        return c_unmet_penalty
 
     def solve(self, columns: list, branch_constraints: list = None, is_integer: bool = False) -> tuple[float | None, dict]:
         """
@@ -61,7 +62,7 @@ class MasterProblem:
         Objective:
           min  sum_col cost * lambda_col
              + sum_hub c_hub * g_hub
-             + sum_od [p_pen + c_opp] * shortfall_i
+             + sum_od [p_pen + c_unmet_penalty] * shortfall_i
              + repositioning costs (vehicle idle + empty drive + opportunity)
         """
         if not columns:
@@ -72,7 +73,7 @@ class MasterProblem:
         transfer_node_ids = sorted(list(self.network.transfer_nodes.keys()))
 
         # 2. Compute opportunity costs
-        c_opp = self._compute_opportunity_costs()
+        c_unmet_penalty = self._compute_unmet_penaltys()
 
         q_veh = self.config.q_road
         c_idle = self.config.c_vehicle_idle
@@ -136,49 +137,43 @@ class MasterProblem:
         # Decision: reuse a vehicle from OD_i for OD_j vs. deploying a new one.
         # Full comparison (user's insight):
         #   reposition total = empty_drive_fee + extra_inventory_cost_during_wait
-        #   new_veh total    = deploy_fee (available immediately at E_od_j)
+        #   new_veh total    = deploy_fee (available immediately at time_window_start_j)
         #   → only reposition if total_repo - d_road < 0
-        valid_transitions = {}
+        valid_transitions_west = {}
+        valid_transitions_east = {}
         for i, od_i in enumerate(self.od_pairs):
             for j, od_j in enumerate(self.od_pairs):
-                if i != j:
-                    if od_i.destination == od_j.origin:
-                        req_gap = 0.0
-                        dist = 0.0
-                    else:
-                        dist = self.network.get_exact_road_distance(od_i.destination, od_j.origin)
-                        prep_h = getattr(self.config, 'prep_time_hours', 2.0)
-                        dispatch_buf = getattr(self.config, 'dispatch_buffer_hours', 1.0)
-                        req_gap = max(0.1, dist / self.config.road_speed) + prep_h + dispatch_buf
+                # West: Reposition from OD_i West Hub to OD_j Origin
+                dist_w = self.network.get_exact_road_distance(od_i.origin, od_j.origin)
+                prep_h = getattr(self.config, 'prep_time_hours', 2.0)
+                dispatch_buf = getattr(self.config, 'dispatch_buffer_hours', 1.0)
+                req_gap_w = max(0.1, dist_w / self.config.road_speed) + prep_h + dispatch_buf
+                arr_w_i = od_i.time_window_start + 10.0
+                if arr_w_i + req_gap_w <= od_j.time_window_end:
+                    empty_fee = self.config.c_empty_reposition_per_km * dist_w
+                    repo_arr = arr_w_i + req_gap_w
+                    extra_wait = max(0.0, repo_arr - od_j.time_window_start)
+                    inv_rate = (self.config.c_vehicle_idle + self.config.c_unmet_penalty) / 24.0
+                    time_factor = 0.05
+                    extra_inv_cost = q_veh * inv_rate * (extra_wait + 0.5 * time_factor * extra_wait**2)
+                    valid_transitions_west[(i, j)] = (dist_w, empty_fee + extra_inv_cost)
 
-                    # #10: Vehicle completes OD_i transport at arrival_time, not E_od
-                    buffer_i = getattr(self.config, 'L_od_buffer_hours', 1.5)
-                    arrival_time_i = od_i.L_od - buffer_i  # estimated arrival (midpoint)
-                    if arrival_time_i + req_gap <= od_j.L_od:
-                        # Empty drive cost
-                        empty_drive_fee = self.config.c_empty_reposition_per_km * dist
-
-                        # Time-dependent inventory cost while waiting for the repositioned vehicle
-                        reposition_arrival = arrival_time_i + req_gap
-                        extra_wait = max(0.0, reposition_arrival - od_j.E_od)
-                        inv_rate = (self.config.c_vehicle_idle + self.config.c_opp_base) / 24.0
-                        
-                        # Non-linear vehicle idle cost penalty: accelerates with longer wait
-                        time_factor = 0.05  # cost accelerates 5% per hour squared
-                        extra_inv_cost = q_veh * inv_rate * (extra_wait + 0.5 * time_factor * extra_wait**2)
-
-                        total_repo_cost = empty_drive_fee + extra_inv_cost
-                        valid_transitions[(i, j)] = (dist, total_repo_cost)
+                # East: Reposition from OD_i Destination to OD_j East Hub
+                dist_e = self.network.get_exact_road_distance(od_i.destination, od_j.destination)
+                req_gap_e = max(0.1, dist_e / self.config.road_speed) + prep_h + dispatch_buf
+                arr_e_i = od_i.time_window_end - getattr(self.config, 'time_window_end_buffer_hours', 1.5)
+                if arr_e_i + req_gap_e <= od_j.time_window_end:
+                    empty_fee = self.config.c_empty_reposition_per_km * dist_e
+                    repo_arr = arr_e_i + req_gap_e
+                    extra_wait = max(0.0, repo_arr - od_j.time_window_start)
+                    extra_inv_cost = q_veh * inv_rate * (extra_wait + 0.5 * time_factor * extra_wait**2)
+                    valid_transitions_east[(i, j)] = (dist_e, empty_fee + extra_inv_cost)
 
         if use_gurobi:
-            pi_own = {
-                pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_own_{pair[0]}_{pair[1]}")
-                for pair in valid_transitions
-            }
-            pi_rent = {
-                pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_rent_{pair[0]}_{pair[1]}")
-                for pair in valid_transitions
-            }
+            pi_west_own = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_west_own_{pair[0]}_{pair[1]}") for pair in valid_transitions_west }
+            pi_east_own = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_east_own_{pair[0]}_{pair[1]}") for pair in valid_transitions_east }
+            pi_west_rent = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_west_rent_{pair[0]}_{pair[1]}") for pair in valid_transitions_west }
+            pi_east_rent = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_east_rent_{pair[0]}_{pair[1]}") for pair in valid_transitions_east }
             q_delivered = {
                 i: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"q_del_{i}")
                 for i, od in enumerate(self.od_pairs)
@@ -189,14 +184,10 @@ class MasterProblem:
                 shortage_vars[i] = prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"shortage_{i}")
             prob.update()
         else:
-            pi_own = {
-                pair: pulp.LpVariable(f"pi_own_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous)
-                for pair in valid_transitions
-            }
-            pi_rent = {
-                pair: pulp.LpVariable(f"pi_rent_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous)
-                for pair in valid_transitions
-            }
+            pi_west_own = { pair: pulp.LpVariable(f"pi_west_own_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous) for pair in valid_transitions_west }
+            pi_east_own = { pair: pulp.LpVariable(f"pi_east_own_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous) for pair in valid_transitions_east }
+            pi_west_rent = { pair: pulp.LpVariable(f"pi_west_rent_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous) for pair in valid_transitions_west }
+            pi_east_rent = { pair: pulp.LpVariable(f"pi_east_rent_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous) for pair in valid_transitions_east }
             q_delivered = {
                 i: pulp.LpVariable(f"q_del_{i}", 0, None, pulp.LpContinuous)
                 for i, od in enumerate(self.od_pairs)
@@ -215,34 +206,31 @@ class MasterProblem:
             
             # Own costs
             transport_own = gp.quicksum(col.total_cost * lambdas_own[col.col_id] for col in columns)
-            repo_own = gp.quicksum(valid_transitions[pair][1] * pi_own[pair] for pair in valid_transitions)
+            repo_own = gp.quicksum(valid_transitions_west[pair][1] * pi_west_own[pair] for pair in valid_transitions_west) + gp.quicksum(valid_transitions_east[pair][1] * pi_east_own[pair] for pair in valid_transitions_east)
             
             # Rent costs
             transport_rent = gp.quicksum(
                 (col.total_cost + c_dep_rent + c_rent_hr * (col.arrival_time - col.departure_time)) * lambdas_rent[col.col_id]
                 for col in columns
             )
-            # Gap duration = od_j.L_od - buffer - arrival_time_i
+            # Gap duration = od_j.time_window_end - buffer - arrival_time_i
             def get_gap(p):
                 i, j = p
                 od_i = self.od_pairs[i]
                 od_j = self.od_pairs[j]
-                buf = getattr(self.config, 'L_od_buffer_hours', 1.5)
-                arr_i = od_i.L_od - buf
-                dep_j = od_j.L_od - buf
+                buf = getattr(self.config, 'time_window_end_buffer_hours', 1.5)
+                arr_i = od_i.time_window_end - buf
+                dep_j = od_j.time_window_end - buf
                 return max(0.0, dep_j - arr_i)
                 
-            repo_rent = gp.quicksum(
-                (valid_transitions[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_rent[pair]
-                for pair in valid_transitions
-            )
+            repo_rent = gp.quicksum((valid_transitions_west[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_west_rent[pair] for pair in valid_transitions_west) + gp.quicksum((valid_transitions_east[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_east_rent[pair] for pair in valid_transitions_east)
             
             transport_cost_term = transport_own + transport_rent
             repo_cost_term = repo_own + repo_rent
             hub_cost_term = gp.quicksum(self.config.c_hub * g_vars[i] for i in transfer_node_ids)
             
             demand_penalty_cost_term = gp.quicksum(
-                c_opp[i] * shortage_vars[i] for i, od in enumerate(self.od_pairs)
+                c_unmet_penalty[i] * shortage_vars[i] for i, od in enumerate(self.od_pairs)
             )
             
             dummy_cost_term = gp.quicksum(self.config.big_m * dummy_vars[i] for i in range(len(self.od_pairs)))
@@ -258,7 +246,7 @@ class MasterProblem:
             c_dep_rent = getattr(self.config, 'c_deploy_rent', 1000.0)
             
             transport_own = pulp.lpSum(col.total_cost * lambdas_own[col.col_id] for col in columns)
-            repo_own = pulp.lpSum(valid_transitions[pair][1] * pi_own[pair] for pair in valid_transitions)
+            repo_own = pulp.lpSum(valid_transitions_west[pair][1] * pi_west_own[pair] for pair in valid_transitions_west) + pulp.lpSum(valid_transitions_east[pair][1] * pi_east_own[pair] for pair in valid_transitions_east)
             
             transport_rent = pulp.lpSum(
                 (col.total_cost + c_dep_rent + c_rent_hr * (col.arrival_time - col.departure_time)) * lambdas_rent[col.col_id]
@@ -268,22 +256,19 @@ class MasterProblem:
                 i, j = p
                 od_i = self.od_pairs[i]
                 od_j = self.od_pairs[j]
-                buf = getattr(self.config, 'L_od_buffer_hours', 1.5)
-                arr_i = od_i.L_od - buf
-                dep_j = od_j.L_od - buf
+                buf = getattr(self.config, 'time_window_end_buffer_hours', 1.5)
+                arr_i = od_i.time_window_end - buf
+                dep_j = od_j.time_window_end - buf
                 return max(0.0, dep_j - arr_i)
                 
-            repo_rent = pulp.lpSum(
-                (valid_transitions[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_rent[pair]
-                for pair in valid_transitions
-            )
+            repo_rent = pulp.lpSum((valid_transitions_west[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_west_rent[pair] for pair in valid_transitions_west) + pulp.lpSum((valid_transitions_east[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_east_rent[pair] for pair in valid_transitions_east)
             
             transport_cost_term = transport_own + transport_rent
             repo_cost_term = repo_own + repo_rent
             hub_cost_term = pulp.lpSum(self.config.c_hub * g_vars[i] for i in transfer_node_ids)
             
             demand_penalty_cost_term = pulp.lpSum(
-                c_opp[i] * shortage_vars[i] for i, od in enumerate(self.od_pairs)
+                c_unmet_penalty[i] * shortage_vars[i] for i, od in enumerate(self.od_pairs)
             )
             
             dummy_cost_term = pulp.lpSum(self.config.big_m * dummy_vars[i] for i in range(len(self.od_pairs)))
@@ -324,74 +309,39 @@ class MasterProblem:
 
 
         # Vehicle balance: Own fleet <= num_vehicles
-        veh_limit = self.num_vehicles
+        veh_limit_w = self.num_vehicles_west
+        veh_limit_e = self.num_vehicles_east
         if use_gurobi:
-            prob.addConstr(
-                gp.quicksum(lambdas_own.values()) - gp.quicksum(pi_own.values()) <= veh_limit,
-                name="vehicle_balance"
-            )
-            # Rented fleet is unlimited, but logically sum >= 0
-            prob.addConstr(
-                gp.quicksum(lambdas_rent.values()) - gp.quicksum(pi_rent.values()) >= 0,
-                name="vehicle_balance_rent"
-            )
+            prob.addConstr(gp.quicksum(lambdas_own.values()) - gp.quicksum(pi_west_own.values()) <= veh_limit_w, name="vehicle_balance_west")
+            prob.addConstr(gp.quicksum(lambdas_own.values()) - gp.quicksum(pi_east_own.values()) <= veh_limit_e, name="vehicle_balance_east")
+            prob.addConstr(gp.quicksum(lambdas_rent.values()) - gp.quicksum(pi_west_rent.values()) >= 0, name="vehicle_balance_rent_w")
+            prob.addConstr(gp.quicksum(lambdas_rent.values()) - gp.quicksum(pi_east_rent.values()) >= 0, name="vehicle_balance_rent_e")
         else:
-            prob += (
-                pulp.lpSum(lambdas_own.values()) - pulp.lpSum(pi_own.values()) <= veh_limit,
-                "vehicle_balance",
-            )
-            prob += (
-                pulp.lpSum(lambdas_rent.values()) - pulp.lpSum(pi_rent.values()) >= 0,
-                "vehicle_balance_rent",
-            )
+            prob += (pulp.lpSum(lambdas_own.values()) - pulp.lpSum(pi_west_own.values()) <= veh_limit_w, "vehicle_balance_west")
+            prob += (pulp.lpSum(lambdas_own.values()) - pulp.lpSum(pi_east_own.values()) <= veh_limit_e, "vehicle_balance_east")
+            prob += (pulp.lpSum(lambdas_rent.values()) - pulp.lpSum(pi_west_rent.values()) >= 0, "vehicle_balance_rent_w")
+            prob += (pulp.lpSum(lambdas_rent.values()) - pulp.lpSum(pi_east_rent.values()) >= 0, "vehicle_balance_rent_e")
 
-        # K_max constraint: limit repositioning cycles per vehicle
-        # sum(pi) <= ((K_max - 1) / K_max) * sum(lambda) for finite K_max
-        # (derived from: each vehicle can serve at most K_max O-D pairs)
-        K_max = self.config.K_max
-        if K_max is not None and K_max > 0:
-            repo_ratio = (K_max - 1.0) / K_max
-            if use_gurobi:
-                prob.addConstr(
-                    gp.quicksum(pi_own.values()) <= repo_ratio * gp.quicksum(lambdas_own.values()),
-                    name="k_max_repo_limit_own"
-                )
-                prob.addConstr(
-                    gp.quicksum(pi_rent.values()) <= repo_ratio * gp.quicksum(lambdas_rent.values()),
-                    name="k_max_repo_limit_rent"
-                )
-            else:
-                prob += (
-                    pulp.lpSum(pi_own.values()) <= repo_ratio * pulp.lpSum(lambdas_own.values()),
-                    "k_max_repo_limit_own",
-                )
-                prob += (
-                    pulp.lpSum(pi_rent.values()) <= repo_ratio * pulp.lpSum(lambdas_rent.values()),
-                    "k_max_repo_limit_rent",
-                )
+        
 
         # Flow conservation for repositioning vehicles
         for k in range(len(self.od_pairs)):
-            # OWN
-            in_own = [pi_own[pair] for pair in valid_transitions if pair[1] == k]
-            out_own = [pi_own[pair] for pair in valid_transitions if pair[0] == k]
-            cols_own = [lambdas_own[col.col_id] for col in columns if col.od_idx == k]
+            in_w_own = [pi_west_own[p] for p in valid_transitions_west if p[1] == k]
+            out_w_own = [pi_west_own[p] for p in valid_transitions_west if p[0] == k]
+            in_e_own = [pi_east_own[p] for p in valid_transitions_east if p[1] == k]
+            out_e_own = [pi_east_own[p] for p in valid_transitions_east if p[0] == k]
+            cols_own = [lambdas_own[c.col_id] for c in columns if c.od_idx == k]
             
-            # RENT
-            in_rent = [pi_rent[pair] for pair in valid_transitions if pair[1] == k]
-            out_rent = [pi_rent[pair] for pair in valid_transitions if pair[0] == k]
-            cols_rent = [lambdas_rent[col.col_id] for col in columns if col.od_idx == k]
-
             if use_gurobi:
-                prob.addConstr(gp.quicksum(in_own) <= gp.quicksum(cols_own), name=f"repo_in_own_{k}")
-                prob.addConstr(gp.quicksum(out_own) <= gp.quicksum(cols_own), name=f"repo_out_own_{k}")
-                prob.addConstr(gp.quicksum(in_rent) <= gp.quicksum(cols_rent), name=f"repo_in_rent_{k}")
-                prob.addConstr(gp.quicksum(out_rent) <= gp.quicksum(cols_rent), name=f"repo_out_rent_{k}")
+                prob.addConstr(gp.quicksum(in_w_own) <= gp.quicksum(cols_own), name=f"repo_w_in_own_{k}")
+                prob.addConstr(gp.quicksum(out_w_own) <= gp.quicksum(cols_own), name=f"repo_w_out_own_{k}")
+                prob.addConstr(gp.quicksum(in_e_own) <= gp.quicksum(cols_own), name=f"repo_e_in_own_{k}")
+                prob.addConstr(gp.quicksum(out_e_own) <= gp.quicksum(cols_own), name=f"repo_e_out_own_{k}")
             else:
-                prob += (pulp.lpSum(in_own) <= pulp.lpSum(cols_own), f"repo_in_own_{k}")
-                prob += (pulp.lpSum(out_own) <= pulp.lpSum(cols_own), f"repo_out_own_{k}")
-                prob += (pulp.lpSum(in_rent) <= pulp.lpSum(cols_rent), f"repo_in_rent_{k}")
-                prob += (pulp.lpSum(out_rent) <= pulp.lpSum(cols_rent), f"repo_out_rent_{k}")
+                prob += (pulp.lpSum(in_w_own) <= pulp.lpSum(cols_own), f"repo_w_in_own_{k}")
+                prob += (pulp.lpSum(out_w_own) <= pulp.lpSum(cols_own), f"repo_w_out_own_{k}")
+                prob += (pulp.lpSum(in_e_own) <= pulp.lpSum(cols_own), f"repo_e_in_own_{k}")
+                prob += (pulp.lpSum(out_e_own) <= pulp.lpSum(cols_own), f"repo_e_out_own_{k}")
 
         # Hub activation constraints
         for t_node in transfer_node_ids:
@@ -552,12 +502,12 @@ class MasterProblem:
         for i in range(len(self.od_pairs)):
             duals["od"][i] = prob.getConstrByName(f"capacity_link_{i}").Pi
             demand_pi = prob.getConstrByName(f"capacity_link_{i}").Pi
-            repo_pi_in = prob.getConstrByName(f"repo_in_own_{i}").Pi
-            repo_pi_out = prob.getConstrByName(f"repo_out_own_{i}").Pi
+            repo_pi_in = (prob.getConstrByName(f"repo_w_in_own_{i}").Pi + prob.getConstrByName(f"repo_e_in_own_{i}").Pi)
+            repo_pi_out = (prob.getConstrByName(f"repo_w_out_own_{i}").Pi + prob.getConstrByName(f"repo_e_out_own_{i}").Pi)
             duals["trans_out"][i] = repo_pi_out
             duals["trans_in"][i] = repo_pi_in
         
-        duals["vehicle"][0] = prob.getConstrByName("vehicle_balance").Pi
+        duals["vehicle"][0] = (prob.getConstrByName("vehicle_balance_west").Pi + prob.getConstrByName("vehicle_balance_east").Pi)
 
         for t_node in transfer_node_ids:
             act_pi = prob.getConstrByName(f"hub_activate_{t_node}").Pi
@@ -578,12 +528,12 @@ class MasterProblem:
             cap_pi = capacity_constraints[i].pi or 0.0
             duals["od"][i] = cap_pi
             demand_pi = prob.constraints[f"capacity_link_{i}"].pi or 0.0
-            repo_pi_in = prob.constraints[f"repo_in_own_{i}"].pi or 0.0
-            repo_pi_out = prob.constraints[f"repo_out_own_{i}"].pi or 0.0
+            repo_pi_in = ((prob.constraints[f"repo_w_in_own_{i}"].pi or 0.0) + (prob.constraints[f"repo_e_in_own_{i}"].pi or 0.0))
+            repo_pi_out = ((prob.constraints[f"repo_w_out_own_{i}"].pi or 0.0) + (prob.constraints[f"repo_e_out_own_{i}"].pi or 0.0))
             duals["trans_out"][i] = repo_pi_out
             duals["trans_in"][i] = repo_pi_in
             
-        duals["vehicle"][0] = prob.constraints["vehicle_balance"].pi or 0.0
+        duals["vehicle"][0] = ((prob.constraints["vehicle_balance_west"].pi or 0.0) + (prob.constraints["vehicle_balance_east"].pi or 0.0))
         
         for t_node in transfer_node_ids:
             act_pi = prob.constraints[f"hub_activate_{t_node}"].pi or 0.0

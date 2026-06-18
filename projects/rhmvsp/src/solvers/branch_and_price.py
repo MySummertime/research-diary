@@ -82,7 +82,7 @@ class BranchAndPriceController:
         self.reliability = ReliabilityAnalyzer(config, self.engine)
 
         # Vehicle limit is dynamically provided by the instance configuration
-        self.mp = MasterProblem(config, self.network, instance["num_vehicles"], logger, instance=instance)
+        self.mp = MasterProblem(config, self.network, logger, instance=instance)
         self.pp = PricingProblem(config, self.network, self.engine, logger)
 
         self.best_ub = float("inf")
@@ -217,7 +217,7 @@ class BranchAndPriceController:
             # 1. Heuristic Pricing (exact=False) first to find columns quickly
             for i, od in enumerate(self.network.od_pairs):
                 labels = self.pp.solve(
-                    od.origin, od.destination, i, duals, od.E_od, od.L_od, od.alpha_T_od,
+                    od.origin, od.destination, i, duals, od.time_window_start, od.time_window_end, od.alpha_T_od,
                     node.branch_constraints, exact=False
                 )
 
@@ -237,7 +237,7 @@ class BranchAndPriceController:
             # 2. Always run Exact Pricing (exact=True) to prove optimality
             for i, od in enumerate(self.network.od_pairs):
                 labels = self.pp.solve(
-                    od.origin, od.destination, i, duals, od.E_od, od.L_od, od.alpha_T_od,
+                    od.origin, od.destination, i, duals, od.time_window_start, od.time_window_end, od.alpha_T_od,
                     node.branch_constraints, exact=True
                 )
 
@@ -334,12 +334,12 @@ class BranchAndPriceController:
         actual_cost_without_risk = deploy_cost + transport_cost + transfer_cost
         # Wait-Shift Strategy: Recalculate deterministic upper time to capture early waiting time at rail hubs
         od = self.network.od_pairs[od_idx]
-        t_arr = od.E_od
+        t_arr = od.time_window_start
         total_wait_time = 0.0
         alpha_T = self.config.alpha_T
         prev_mode = 0
 
-        # S2-4: Variables for rigorous M{Z~ <= L_od} measure tracking
+        # S2-4: Variables for rigorous M{Z~ <= time_window_end} measure tracking
         z_a_dur = 0.0
         z_b_dur = 0.0
         z_c_dur = 0.0
@@ -382,10 +382,10 @@ class BranchAndPriceController:
 
             prev_mode = arc.mode
 
-        shifted_departure_time = od.E_od + total_wait_time
+        shifted_departure_time = od.time_window_start + total_wait_time
         
-        # The deadline for this column. Always use the raw instance L_od.
-        l_effective = od.L_od
+        # The deadline for this column. Always use the raw instance time_window_end.
+        l_effective = od.time_window_end
 
         # ---------------------------------------------------------------
         # COLUMN COST = transport + deploy + transfer (no delay penalty)
@@ -394,17 +394,17 @@ class BranchAndPriceController:
         # wait times (which are embedded in the timetable arrival times).
         # The total_wait_time shifts the departure to match the first rail
         # connection. Using shifted_departure_time + z_*_dur would double-count
-        # the wait.  Use od.E_od as the base so z_*_dur correctly measures
+        # the wait.  Use od.time_window_start as the base so z_*_dur correctly measures
         # the total elapsed time from the earliest possible start.
         trap_Z = TrapezoidalFuzzy(
-            a=od.E_od + z_a_dur,
-            b=od.E_od + z_b_dur,
-            c=od.E_od + z_c_dur,
-            d=od.E_od + z_d_dur,
+            a=od.time_window_start + z_a_dur,
+            b=od.time_window_start + z_b_dur,
+            c=od.time_window_start + z_c_dur,
+            d=od.time_window_start + z_d_dur,
         )
         actual_cost = actual_cost_without_risk
         
-        # S2-4: Compute continuous time_R = M{Z~ <= L_od} in [0,1].
+        # S2-4: Compute continuous time_R = M{Z~ <= time_window_end} in [0,1].
         time_R = trap_Z.uncertain_measure_leq(l_effective)
 
         bottleneck_capacity = q_veh
@@ -443,7 +443,7 @@ class BranchAndPriceController:
         }
         for i, od in enumerate(self.network.od_pairs):
             labels = self.pp.solve(
-                od.origin, od.destination, i, dummy_duals, od.E_od, od.L_od, od.alpha_T_od,
+                od.origin, od.destination, i, dummy_duals, od.time_window_start, od.time_window_end, od.alpha_T_od,
                 branch_constraints=[], exact=False
             )
             for lab in labels:
@@ -586,20 +586,20 @@ class BranchAndPriceController:
                         empty_drive_fee = self.config.c_empty_reposition_per_km * dist + self.config.c_prep_reposition
                         reposition_arrival = u['arrival_time'] + req_gap
                         od_j_idx = v['od_idx']
-                        od_E_j = self.network.od_pairs[od_j_idx].E_od
+                        od_E_j = self.network.od_pairs[od_j_idx].time_window_start
                         extra_wait = max(0.0, reposition_arrival - od_E_j)
-                        inv_rate = (self.config.c_vehicle_idle + self.config.c_opp_base) / 24.0
+                        inv_rate = (self.config.c_vehicle_idle + self.config.c_unmet_penalty) / 24.0
                         time_factor = 0.05
                         q_veh = self.config.q_road
                         pure_idle_cost = q_veh * (self.config.c_vehicle_idle / 24.0) * (extra_wait + 0.5 * time_factor * extra_wait**2)
-                        extra_opp = q_veh * (self.config.c_opp_base / 24.0) * (extra_wait + 0.5 * time_factor * extra_wait**2)
-                        extra_inv_cost = pure_idle_cost + extra_opp  # unchanged ILP edge weight
+                        extra_penalty = q_veh * (self.config.c_unmet_penalty / 24.0) * (extra_wait + 0.5 * time_factor * extra_wait**2)
+                        extra_inv_cost = pure_idle_cost + extra_penalty  # unchanged ILP edge weight
                         
-                        valid_edges.append((u_idx, v_idx, empty_drive_fee, pure_idle_cost, extra_opp, dist))
+                        valid_edges.append((u_idx, v_idx, empty_drive_fee, pure_idle_cost, extra_penalty, dist))
 
         if use_gurobi:
             for edge in valid_edges:
-                u, v, empty_fee, pure_idle, extra_opp, dist = edge
+                u, v, empty_fee, pure_idle, extra_penalty, dist = edge
                 x_vars[(u, v)] = stitch_prob.addVar(vtype=GRB.BINARY, name=f"x_{fleet_name}_{u}_{v}")
             stitch_prob.update()
             
@@ -608,8 +608,8 @@ class BranchAndPriceController:
             
             obj_expr = 0
             for edge in valid_edges:
-                u, v, empty_fee, pure_idle, extra_opp, dist = edge
-                rep_cost = empty_fee + pure_idle + extra_opp
+                u, v, empty_fee, pure_idle, extra_penalty, dist = edge
+                rep_cost = empty_fee + pure_idle + extra_penalty
                 if fleet_type == 'own':
                     # Maximize stitches (minimize vehicles) with a large M, then minimize rep_cost
                     val = rep_cost - 10000.0
@@ -674,7 +674,7 @@ class BranchAndPriceController:
 
         else: # Use Pulp
             for edge in valid_edges:
-                u, v, empty_fee, pure_idle, extra_opp, dist = edge
+                u, v, empty_fee, pure_idle, extra_penalty, dist = edge
                 x_vars[(u, v)] = pulp.LpVariable(f"x_{fleet_name}_{u}_{v}", 0, 1, pulp.LpBinary)
 
             c_rent_hr = getattr(self.config, 'c_rent_per_hour', 100.0)
@@ -682,8 +682,8 @@ class BranchAndPriceController:
             
             obj_expr = []
             for edge in valid_edges:
-                u, v, empty_fee, pure_idle, extra_opp, dist = edge
-                rep_cost = empty_fee + pure_idle + extra_opp
+                u, v, empty_fee, pure_idle, extra_penalty, dist = edge
+                rep_cost = empty_fee + pure_idle + extra_penalty
                 if fleet_type == 'own':
                     val = rep_cost - 10000.0
                 else:
@@ -748,16 +748,16 @@ class BranchAndPriceController:
         next_task = {}
         edge_fees = {}
         edge_pure_idles = {}
-        edge_extra_opps = {}
+        edge_extra_penaltys = {}
         if solution_found:
             for edge in valid_edges:
-                u, v, empty_fee, pure_idle, extra_opp, dist = edge
+                u, v, empty_fee, pure_idle, extra_penalty, dist = edge
                 if ((use_gurobi and x_vars[(u, v)].X > 0.5) or
                     (not use_gurobi and x_vars[(u, v)].varValue is not None and x_vars[(u, v)].varValue > 0.5)):
                     next_task[u] = v
                     edge_fees[(u, v)] = empty_fee
                     edge_pure_idles[(u, v)] = pure_idle
-                    edge_extra_opps[(u, v)] = extra_opp
+                    edge_extra_penaltys[(u, v)] = extra_penalty
 
         in_degree = {u: 0 for u in range(len(sub_tasks))}
         for u, v in next_task.items():
@@ -768,7 +768,7 @@ class BranchAndPriceController:
         scheduled = []
         total_empty_fee = 0.0
         total_pure_idle = 0.0
-        total_extra_opp = 0.0
+        total_extra_penalty = 0.0
         total_prep_cost = 0.0
         reposition_events = []  # list of dicts for logging
 
@@ -785,7 +785,7 @@ class BranchAndPriceController:
                         nxt = next_task[curr]
                         total_empty_fee += edge_fees[(curr, nxt)]
                         total_pure_idle += edge_pure_idles[(curr, nxt)]
-                        total_extra_opp += edge_extra_opps[(curr, nxt)]
+                        total_extra_penalty += edge_extra_penaltys[(curr, nxt)]
                         total_prep_cost += self.config.c_prep_reposition
                         # Log reposition event
                         dist = 0.0
@@ -804,7 +804,7 @@ class BranchAndPriceController:
                             "distance_km": round(dist, 2),
                             "empty_fee": round(edge_fees[(curr, nxt)], 2),
                             "pure_idle": round(edge_pure_idles[(curr, nxt)], 2),
-                            "extra_opp": round(edge_extra_opps[(curr, nxt)], 2),
+                            "extra_penalty": round(edge_extra_penaltys[(curr, nxt)], 2),
                         })
                         prev_task = curr
                         curr = nxt
@@ -812,7 +812,7 @@ class BranchAndPriceController:
                         break
                 v_counter += 1
 
-        return num_vehicles_used, scheduled, total_empty_fee, total_pure_idle, total_extra_opp, total_prep_cost, reposition_events
+        return num_vehicles_used, scheduled, total_empty_fee, total_pure_idle, total_extra_penalty, total_prep_cost, reposition_events
 
     def _split_route_segments(self, col: Column) -> tuple[list, list, list]:
         """
@@ -970,60 +970,24 @@ class BranchAndPriceController:
                     rail_tasks.append(r)
                     dispatch_counter += 1
 
-        # S1-2: Global Vehicle Stitching (Rigorous Optimality)
+        # S1-2: East/West Split Vehicle Stitching
         for t in west_tasks_own: t['region'] = 'West'
         for t in east_tasks_own: t['region'] = 'East'
             
-        own_road_tasks = west_tasks_own + east_tasks_own
-        num_veh_own, sched_own, repo_empty_fee, repo_pure_idle, repo_extra_opp, repo_prep_cost, repo_ev_own = self._stitch_sub_fleet(
-            own_road_tasks, "GlobalRoadOwn", start_v_id=1, max_vehicles=self.instance["num_vehicles"], fleet_type="own"
+        max_west = self.instance.get("num_vehicles_west", 2500)
+        max_east = self.instance.get("num_vehicles_east", 2500)
+
+        num_veh_west, sched_west, repo_empty_fee_w, repo_pure_idle_w, repo_extra_penalty_w, repo_prep_cost_w, repo_ev_west = self._stitch_sub_fleet(
+            west_tasks_own, "WestFleet", start_v_id=1, max_vehicles=max_west, fleet_type="own"
         )
         
-        max_available = self.instance["num_vehicles"]
-        if num_veh_own > max_available:
-            self.logger.warning(
-                f"  Fleet constraint violated: {num_veh_own} vehicles used > {max_available} available. "
-                f"Reducing dispatches to meet fleet limit."
-            )
-            # Reduce dispatches: remove road tasks from ODs with most tasks until feasible
-            excess = num_veh_own - max_available
-            # Group tasks by OD and dispatch_id
-            od_dispatch_map = {}  # od_idx -> list of dispatch_ids
-            for t in west_tasks_own:
-                od_idx = t['od_idx']
-                did = t['dispatch_id']
-                od_dispatch_map.setdefault(od_idx, set()).add(did)
-            # Sort ODs by number of dispatches (descending) — drop from largest first
-            od_sorted = sorted(od_dispatch_map.items(), key=lambda x: len(x[1]), reverse=True)
-            dropped_dispatches = set()
-            shortfall_by_od = {}
-            for od_idx, dispatch_ids in od_sorted:
-                if excess <= 0:
-                    break
-                # Drop one dispatch at a time from this OD
-                for did in sorted(dispatch_ids):
-                    if excess <= 0:
-                        break
-                    dropped_dispatches.add(did)
-                    excess -= 1
-                    shortfall_by_od[od_idx] = shortfall_by_od.get(od_idx, 0) + q_veh
-            if dropped_dispatches:
-                self.logger.warning(
-                    f"  Dropped {len(dropped_dispatches)} dispatches to meet fleet limit. "
-                    f"Shortfall: {shortfall_by_od}"
-                )
-                # Remove dropped tasks from west/east/rail lists
-                west_tasks_own = [t for t in west_tasks_own if t['dispatch_id'] not in dropped_dispatches]
-                east_tasks_own = [t for t in east_tasks_own if t['dispatch_id'] not in dropped_dispatches]
-                rail_tasks = [t for t in rail_tasks if t['dispatch_id'] not in dropped_dispatches]
-                # Re-run stitching with reduced tasks
-                own_road_tasks = west_tasks_own + east_tasks_own
-                num_veh_own, sched_own, repo_empty_fee, repo_pure_idle, repo_extra_opp, repo_prep_cost, repo_ev_own = self._stitch_sub_fleet(
-                    own_road_tasks, "GlobalRoadOwn", start_v_id=1, max_vehicles=max_available, fleet_type="own"
-                )
-        num_vehicles_used = num_veh_own
-        scheduled_road = sched_own
-        reposition_events = repo_ev_own
+        num_veh_east, sched_east, repo_empty_fee_e, repo_pure_idle_e, repo_extra_penalty_e, repo_prep_cost_e, repo_ev_east = self._stitch_sub_fleet(
+            east_tasks_own, "EastFleet", start_v_id=num_veh_west+1, max_vehicles=max_east, fleet_type="own"
+        )
+        
+        num_vehicles_used = num_veh_west + num_veh_east
+        scheduled_road = sched_west + sched_east
+        reposition_events = repo_ev_west + repo_ev_east
         
         scheduled_west = [t for t in scheduled_road if t.get('region') == 'West']
         scheduled_east = [t for t in scheduled_road if t.get('region') == 'East']
@@ -1079,7 +1043,7 @@ class BranchAndPriceController:
         total_transfer = sum(t['transfer_cost'] for t in rail_tasks)
 
         s2_allocation_details = []
-        actual_total_opp_cost = 0.0
+        actual_total_penalty_cost = 0.0
         actual_total_idle_cost = 0.0
         c_idle = self.config.c_vehicle_idle
 
@@ -1091,9 +1055,9 @@ class BranchAndPriceController:
             delivered = min(total_capacity_available, od.demand)
             shortfall = max(0.0, od.demand - delivered)
 
-            # Opportunity cost penalty (deterministic shortfall + reposition delay)
-            opp_cost_i = self.config.c_opp_base * shortfall
-            actual_total_opp_cost += opp_cost_i
+            # Unmet penalty penalty (deterministic shortfall + reposition delay)
+            penalty_cost_i = self.config.c_unmet_penalty * shortfall
+            actual_total_penalty_cost += penalty_cost_i
 
             required_dispatches = int(np.ceil(od.demand / q_veh)) if q_veh > 0 else 0
             actual_dispatches = len(od_tasks)
@@ -1106,14 +1070,14 @@ class BranchAndPriceController:
                 "shortfall": round(shortfall, 2),
                 "required_dispatches": required_dispatches,
                 "scheduled_dispatches": actual_dispatches,
-                "opp_cost": round(opp_cost_i, 2),
+                "penalty_cost": round(penalty_cost_i, 2),
             })
 
         # Add reposition delay opportunity cost from stitching edges
-        actual_total_opp_cost += repo_extra_opp
+        actual_total_penalty_cost += (repo_extra_penalty_w + repo_extra_penalty_e)
 
         # Vehicle idle cost from reposition edges (time-dependent waiting cost)
-        actual_total_idle_cost = repo_pure_idle
+        actual_total_idle_cost = (repo_pure_idle_w + repo_pure_idle_e)
 
         # Aggregate identical vehicle paths into transport_routes
         aggregated_routes = {}
@@ -1140,22 +1104,22 @@ class BranchAndPriceController:
                 by_route.setdefault(key, []).append(e)
             self.logger.info(
                 f"  Reposition events: {len(reposition_events)} total | "
-                f"empty_fee=¥{repo_empty_fee:.2f} | idle=¥{repo_pure_idle:.2f} | prep=¥{repo_prep_cost:.2f} | extra_opp=¥{repo_extra_opp:.2f}"
+                f"empty_fee=¥{(repo_empty_fee_w + repo_empty_fee_e):.2f} | idle=¥{(repo_pure_idle_w + repo_pure_idle_e):.2f} | prep=¥{(repo_prep_cost_w + repo_prep_cost_e):.2f} | extra_penalty=¥{(repo_extra_penalty_w + repo_extra_penalty_e):.2f}"
             )
             for key, events in by_route.items():
                 avg_fee = sum(e['empty_fee'] for e in events) / len(events)
                 avg_idle = sum(e['pure_idle'] for e in events) / len(events)
-                avg_opp = sum(e['extra_opp'] for e in events) / len(events)
+                avg_penalty = sum(e['extra_penalty'] for e in events) / len(events)
                 self.logger.info(
                     f"    {key[0]} → {key[1]} (node {key[2]}→{key[3]}): "
-                    f"{len(events)} times | avg empty=¥{avg_fee:.2f}, idle=¥{avg_idle:.2f}, opp=¥{avg_opp:.2f}/ea"
+                    f"{len(events)} times | avg empty=¥{avg_fee:.2f}, idle=¥{avg_idle:.2f}, opp=¥{avg_penalty:.2f}/ea"
                 )
 
-        penalty_cost = actual_total_opp_cost
+        penalty_cost = actual_total_penalty_cost
 
         total_cost = (
             total_deploy + total_transport + total_transfer + total_hub
-            + repo_empty_fee + actual_total_opp_cost + actual_total_idle_cost + repo_prep_cost
+            + (repo_empty_fee_w + repo_empty_fee_e) + actual_total_penalty_cost + actual_total_idle_cost + (repo_prep_cost_w + repo_prep_cost_e)
         )
 
         # S2-5b: Compute true network reliability R_net_risk and R_net_time using ReliabilityAnalyzer.
@@ -1190,14 +1154,14 @@ class BranchAndPriceController:
             "hub_cost": total_hub,
             "transport_cost": total_transport,
             "transfer_cost": total_transfer,
-            "reposition_cost": repo_empty_fee,
+            "reposition_cost": repo_empty_fee_w + repo_empty_fee_e,
             "reposition_events": reposition_events,
             "num_repositions": len(reposition_events),
             "idle_cost": actual_total_idle_cost,
-            "prep_cost": repo_prep_cost,
-            "opportunity_cost": actual_total_opp_cost,
-            "repo_pure_idle": repo_pure_idle,
-            "repo_extra_opp": repo_extra_opp,
+            "total_prep_cost": repo_prep_cost_w + repo_prep_cost_e,
+            "unmet_penalty": actual_total_penalty_cost,
+            "repo_pure_idle": repo_pure_idle_w + repo_pure_idle_e,
+            "repo_extra_penalty": repo_extra_penalty_w + repo_extra_penalty_e,
             "penalty_cost": penalty_cost,
             "active_hubs": sorted(list(used_hubs)),
             "R_net_risk": R_net_risk,
@@ -1205,7 +1169,8 @@ class BranchAndPriceController:
             "raw_net_risk": raw_net_risk,
             "raw_net_time": raw_net_time,
             "od_reliability_details": od_reliability_details,
-            "max_vehicles": self.instance["num_vehicles"],
+            "max_vehicles_west": self.instance.get("num_vehicles_west", 2500),
+            "max_vehicles_east": self.instance.get("num_vehicles_east", 2500),
             "num_vehicles_used": num_vehicles_used,
             "total_dispatches": len(scheduled_road),
             "transport_routes": transport_routes,
@@ -1241,10 +1206,10 @@ class BranchAndPriceController:
                 if tn:
                     transfer_objs.append(tn)
 
-            # Use od.E_od (not col.departure_time which includes origin wait time)
+            # Use od.time_window_start (not col.departure_time which includes origin wait time)
             # to avoid double-counting the wait-shift in the fuzzy time duration.
             result = self.reliability.analyze_path(
-                col.arcs, col.arc_modes, transfer_objs, od_req, od_req.E_od
+                col.arcs, col.arc_modes, transfer_objs, od_req, od_req.time_window_start
             )
 
             od_batches.setdefault(od_idx, []).append(result)

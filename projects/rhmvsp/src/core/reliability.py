@@ -5,7 +5,7 @@ Implements the three-level risk reliability and three-level time reliability
 framework.
 
 S2-3 fix: Time reliability R_T is now a continuous uncertain measure value
-          M{Z~ <= L_od} in [alpha_T, 1], not a binary {0,1} indicator.
+          M{Z~ <= time_window_end} in [alpha_T, 1], not a binary {0,1} indicator.
 S2-5 fix: analyze_solution() correctly computes R_net and is called by the
           Branch-and-Price controller to populate solution output.
 """
@@ -31,7 +31,7 @@ class PathReliabilityResult:
 
     # Feasibility flags
     arc_risk_feasible: bool = True  # All arcs satisfy alpha_max
-    time_window_feasible: bool = True  # Arrival within [E_od, L_od]
+    time_window_feasible: bool = True  # Arrival within [time_window_start, time_window_end]
     operational_feasible: bool = True  # Rail arcs within operational windows
     transfer_feasible: bool = True  # Transfer timing feasible
 
@@ -180,7 +180,7 @@ class ReliabilityAnalyzer:
             arrival_times_upper.append(arrival_upper)
             prev_mode = mode
 
-        # Feasibility: deterministic equivalent arrival <= L_od
+        # Feasibility: deterministic equivalent arrival <= time_window_end
         if alpha_T < 0.5:
             # Left branch: x = z_a + 2*alpha*(z_b - z_a)
             det_equiv_coeff = z_a + 2.0 * alpha_T * (z_b - z_a)
@@ -188,17 +188,17 @@ class ReliabilityAnalyzer:
             # Right branch (alpha_T >= 0.5): det_equiv = (2*alpha_T-1)*z_d + 2*(1-alpha_T)*z_c
             det_equiv_coeff = (2.0 * alpha_T - 1.0) * z_d + 2.0 * (1.0 - alpha_T) * z_c
         det_upper_arrival = departure_time + det_equiv_coeff
-        time_feasible = det_upper_arrival <= od.L_od
+        time_feasible = det_upper_arrival <= od.time_window_end
 
         # The fuzzy trapezoid Z~ must include the departure time offset so that
-        # uncertain_measure_leq(L_od) correctly evaluates M{departure + Z_arcs <= L_od}.
+        # uncertain_measure_leq(time_window_end) correctly evaluates M{departure + Z_arcs <= time_window_end}.
         trap_Z = TrapezoidalFuzzy(
             a=departure_time + z_a,
             b=departure_time + z_b,
             c=departure_time + z_c,
             d=departure_time + z_d,
         )
-        R_T = trap_Z.uncertain_measure_leq(od.L_od)
+        R_T = trap_Z.uncertain_measure_leq(od.time_window_end)
 
         return time_feasible, R_T, arrival_upper, arrival_lower, arrival_times_upper
 

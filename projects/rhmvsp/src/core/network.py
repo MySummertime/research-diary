@@ -71,8 +71,8 @@ class ODPair:
     origin: int
     destination: int
     demand: float                   # Q_od (tons)
-    E_od: float = 0.0              # Delivery time window lower bound
-    L_od: float = 48.0             # Delivery time window upper bound
+    time_window_start: float = 0.0              # Delivery time window lower bound
+    time_window_end: float = 48.0             # Delivery time window upper bound
     alpha_T_od: float = 0.8        # Time reliability threshold
 
 
@@ -158,8 +158,8 @@ class MultimodalNetwork:
             od = ODPair(
                 origin=od_data["origin"], destination=od_data["destination"],
                 demand=od_data["demand"],
-                E_od=od_data.get("E_od", 0.0),
-                L_od=od_data.get("L_od", 48.0),
+                time_window_start=od_data.get("time_window_start", 0.0),
+                time_window_end=od_data.get("time_window_end", 48.0),
                 alpha_T_od=od_data.get("alpha_T_od", 0.8),
             )
             net.od_pairs.append(od)

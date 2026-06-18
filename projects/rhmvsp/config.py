@@ -23,16 +23,19 @@ class RHMVSPConfig:
 
 	# Vehicle parameters
 	K_max: int | None = None  # Max O-D pairs per vehicle (reuse cycles). None = unlimited.
-	q_road: float = 20.0  # Road vehicle capacity (tons)
-	# 60 t/wagon: Chinese railway 整车 standard for liquid ammonia (dangerous goods class 6)
-	q_rail: float = 600.0  # Rail wagon capacity (tons, 整车 标重)
+	q_road: float = 30.0  # Road vehicle capacity (tons)
+	# 现实折中方案：定义铁路的运输单位为一个“危险品车组 (Wagon Group)”。
+	# 根据国铁《铁路危险货物运输管理规则》的“隔离车”制度，一列普通货车不宜连续挂载太多危化品罐车。
+	# 设定一个标准调度车组包含 10 节 50t 的液氨罐车。
+	q_rail: float = 500.0  # Rail wagon group capacity (tons, 10节*50吨)
 
 	# ============================================================
 	# Cost Parameters
 	# ============================================================
 	# Cost parameters calibrated from 12306 official pricing:
-	# Route: Ürümqi South → Chengdu (~3,334 km), 整车 (full carload, 60 t)
-	c_road: float = 0.5    # Road: ¥/ton·km (market reference, tanker truck)
+	# Route: Ürümqi South → Chengdu (~3,334 km), 整车 (full carload)
+	# 根据《绿氨产业_国信证券》第13页，公路运输成本约为0.8元/吨/公里
+	c_road: float = 0.8    # Road: ¥/ton·km (market reference, tanker truck)
 	c_deploy_road: float = 0.0  # Road vehicle deployment fixed cost (自有车为0)
 	c_deploy_rent: float = 1000.0 # Rented vehicle deployment fixed cost (外租车起步价)
 	c_rent_per_hour: float = 30.0 # Rented vehicle hourly rate (外租车小时租金)
@@ -43,17 +46,19 @@ class RHMVSPConfig:
 	# ============================================================
 	c_rail_base_fixed: float = 16.30  # 发到基价 (¥/ton)
 	c_rail_base_var: float = 0.0855  # 运行基价 (¥/ton·km)
+	# 根据《铁路货物运价规则》第22条，液化气体等危险货物运价率加 50%
 	c_rail_hazmat_markup: float = 0.50  # 危险品加成率 (50% markup for hazmat)
 	c_rail_fund: float = 0.033  # 铁路建设基金 (¥/ton·km)
 	
-	# c_deploy_rail includes 毒品专用车 reservation premium
-	c_deploy_rail: float = 700.0  # Rail wagon deployment fixed cost (¥/wagon)
+	# 按照要求，运输商仅承担运费和转运费，不承担铁路系统的固定发车调度费
+	c_deploy_rail: float = 0.0  # Rail wagon group deployment fixed cost (¥/group)
 	# c_transfer = ¥37.75/ton (发站装车 + 到站卸车, hazmat防爆要求)
 	c_transfer: float = 37.75  # Unit transfer/handling cost (¥/ton)
-	c_hub: float = 1000.0  # Transfer facility setup cost (¥)
+	# 同样，转运设施启动费等 resource 成本也应由基建方承担，予以剔除
+	c_hub: float = 0.0  # Transfer facility setup cost (¥)
 	max_cranes: int = 2  # Max concurrent transfer cranes per hub
 	max_storage_tons: float = 500.0  # Max hazmat storage capacity per hub (tons)
-	c_opp_base: float = 1000.0 # Base opportunity cost for unfulfilled demand (¥/ton). Must exceed transport cost per ton to ensure delivery is always preferred over forfeiture.
+	c_unmet_penalty: float = 5000.0 # Base opportunity cost for unfulfilled demand (¥/ton). Must exceed transport cost per ton to ensure delivery is always preferred over forfeiture.
 	c_vehicle_idle: float = 10.0  # Vehicle idle/waiting cost per ton-hour during reposition gap (¥/ton·h)
 	crane_daily_lifts: int = 200  # Daily lifts per crane
 	max_hubs: int | None = None  # Max active transfer hubs (None means unlimited)
@@ -104,7 +109,7 @@ class RHMVSPConfig:
 	# ============================================================
 	# Solver Parameters
 	# ============================================================
-	time_limit: int = 3600  # Solver time limit (seconds)
+	time_limit: int = 99999999999  # Solver time limit (seconds)
 
 	# ============================================================
 	# Branch-and-Price Parameters (§4.5)
