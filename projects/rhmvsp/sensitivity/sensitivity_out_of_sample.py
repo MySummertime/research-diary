@@ -88,7 +88,7 @@ def _run_single(config, inst, exp_dir, model_tag, dT, a_max, seed):
     status  = sol.get("status", "unknown")
     ok = status != "infeasible"
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                 "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+                 "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
     result = {"cost": sol.get("total_cost") if ok else None,
               "R_risk": sol.get("R_net_risk", 0) if ok else None,
               "R_time": sol.get("R_net_time", 0) if ok else None,
@@ -135,7 +135,7 @@ def run_out_of_sample():
     # CSV header
     csv_path = os.path.join(exp_dir, "experiment.csv")
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                 "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+                 "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
     with open(csv_path, "w", newline="") as f:
         csv.writer(f).writerow(
             ["group_label", "delta_T", "alpha_max", "scenario_id",

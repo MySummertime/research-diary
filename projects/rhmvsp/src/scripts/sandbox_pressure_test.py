@@ -26,7 +26,7 @@ def run_delta_t_pressure_test(base_inst, logger):
     buffers = [4.0, 6.0, 8.0, 10.0, 12.0]
     
     for buf in buffers:
-        print(f"\n--- Testing L_od Buffer: {buf} hours ---")
+        print(f"\n--- Testing time_window_end Buffer: {buf} hours ---")
         results = []
         for dt in delta_T_vals:
             cfg = RHMVSPConfig()
@@ -39,9 +39,9 @@ def run_delta_t_pressure_test(base_inst, logger):
             
             # 1. Extreme Time Window Tightening
             for od in inst["od_pairs"]:
-                # Use expected travel time or just E_od + buffer
-                tight_L = od["E_od"] + buf
-                od["L_od"] = tight_L
+                # Use expected travel time or just time_window_start + buffer
+                tight_L = od["time_window_start"] + buf
+                od["time_window_end"] = tight_L
                 
             solver = BranchAndPriceController(cfg, inst, logger)
             sol = solver.solve()

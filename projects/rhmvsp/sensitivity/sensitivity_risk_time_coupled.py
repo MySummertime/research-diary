@@ -180,7 +180,7 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
         cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                     "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+                     "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
         w.writerow(["alpha_max", "delta_T", "status",
                      "cost"] + cost_cols +
                     ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "Gap_pct", "iterations",
@@ -229,7 +229,7 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
                         "reposition_cost": sol.get("reposition_cost", 0),
                         "prep_cost": sol.get("prep_cost", 0),
                         "idle_cost": sol.get("idle_cost", 0),
-                        "opportunity_cost": sol.get("opportunity_cost", 0),
+                        "unmet_penalty": sol.get("unmet_penalty", 0),
                         "R_risk": sol.get("R_net_risk", 0),
                         "R_time": sol.get("R_net_time", 0),
                         "raw_risk": sol.get("raw_net_risk", 0.0),

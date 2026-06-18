@@ -64,7 +64,7 @@ class SensitivityAnalyzer:
         # Sandbox-discovered boundaries for proper sensitivity demonstration
         if "delta_T" in param_dict:
             for od in inst.get("od_pairs", []):
-                od["L_od"] = od["E_od"] + self.sens_config.time_window_buffer_hours
+                od["time_window_end"] = od["time_window_start"] + self.sens_config.time_window_buffer_hours
                 
         if "delta_S" in param_dict:
             demand_per_origin = {}
@@ -90,7 +90,7 @@ class SensitivityAnalyzer:
             "c_unmet": sol.get("c_unmet", 0.0),
             "idle_cost": sol.get("idle_cost", 0.0),
             "reposition_cost": sol.get("reposition_cost", 0.0),
-            "opportunity_cost": sol.get("opportunity_cost", 0.0),
+            "unmet_penalty": sol.get("unmet_penalty", 0.0),
             "active_hubs": len(sol.get("active_hubs", [])),
             "vehicles_used": sol.get("num_vehicles_used", 0),
             "R_sys": sol.get("R_net", getattr(config, 'alpha_max', 0.95)),
@@ -174,7 +174,7 @@ class SensitivityAnalyzer:
             # --- Generate Extra Tables ---
             # 1. Cost Percentage Table
             df_pct = df[[param]].copy()
-            cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "c_unmet", "idle_cost", "opportunity_cost"]
+            cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "c_unmet", "idle_cost", "unmet_penalty"]
             for col in cost_cols:
                 actual_col = f"{col}_metric_out" if (col == param and output_metric_renamed) else col
                 df_pct[f"{col}_pct"] = (df[actual_col] / df["total_cost"] * 100).round(2)

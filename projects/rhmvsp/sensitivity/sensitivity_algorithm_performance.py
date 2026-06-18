@@ -94,7 +94,7 @@ def run_algorithm_performance():
 
     csv_path = os.path.join(exp_dir, "algorithm_performance.csv")
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                 "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+                 "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
     
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
@@ -161,7 +161,7 @@ def run_algorithm_performance():
                 
                 print(f"Scale={scale}, Inst={inst_idx} | Time: {elapsed_bap:.2f}s, Iter: {iter_bap}, Cost: ¥{cost_bap:,.0f}")
                 print(f"  Reliability: R_risk={r_risk_bap:.4f}, R_time={r_time_bap:.4f}")
-                print(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('opportunity_cost',0):,.0f}")
+                print(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('unmet_penalty',0):,.0f}")
                 print(f"  Raw Metrics: RawRisk={raw_risk:.2f}, RawTime={raw_time:.2f}h\n")
                 
                 results.append({

@@ -33,7 +33,7 @@ def run_tests():
                 "delta_D": d,
                 "idle_cost": sol.get("idle_cost", 0.0),
                 "reposition_cost": sol.get("reposition_cost", 0.0),
-                "opportunity_cost": sol.get("opportunity_cost", 0.0),
+                "unmet_penalty": sol.get("unmet_penalty", 0.0),
                 "unmet_penalty": sol.get("unmet_penalty_cost", 0.0),
                 "total_cost": sol.get("total_cost", 0.0)
             })
@@ -41,14 +41,14 @@ def run_tests():
     # Extract data
     idle = np.array([r["idle_cost"] for r in results_list])
     reposition = np.array([r["reposition_cost"] for r in results_list])
-    opportunity = np.array([r["opportunity_cost"] for r in results_list])
+    opportunity = np.array([r["unmet_penalty"] for r in results_list])
     unmet = np.array([r["unmet_penalty"] for r in results_list])
     total = np.array([r["total_cost"] for r in results_list])
     
     print("=== Cost Parameter Variation ===")
     print(f"Vehicle Idle Cost Variance: {np.var(idle):.2f}")
     print(f"Reposition Cost Variance: {np.var(reposition):.2f}")
-    print(f"Opportunity Cost Variance: {np.var(opportunity):.2f}")
+    print(f"Unmet Penalty Variance: {np.var(opportunity):.2f}")
     
     print("\n=== Correlation Coefficients ===")
     if np.var(opportunity) > 0 and np.var(unmet) > 0:

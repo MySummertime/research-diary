@@ -216,11 +216,11 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                     "reposition_cost": sol.get("reposition_cost", 0),
                     "prep_cost": sol.get("prep_cost", 0),
                     "idle_cost": sol.get("idle_cost", 0),
-                    "opportunity_cost": sol.get("opportunity_cost", 0),
+                    "unmet_penalty": sol.get("unmet_penalty", 0),
                     "od_details": sol.get("od_reliability_details", {}),
                 })
                 logger.info(f"\nResult: {label}={val}: Cost=¥{cost:,.0f}, R_risk={r_risk:.4f}, R_time={r_time:.4f}")
-                logger.info(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('opportunity_cost',0):,.0f}")
+                logger.info(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('unmet_penalty',0):,.0f}")
                 logger.info(f"  Raw Metrics: RawRisk={raw_risk:.2f}, RawTime={raw_time:.2f}h")
             else:
                 results.append({"param": val, "status": "infeasible"})
@@ -260,7 +260,7 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
     # Save summary CSV
     csv_path = os.path.join(exp_dir, f"summary_{param_name}.csv")
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                 "reposition_cost","prep_cost","idle_cost","opportunity_cost"]
+                 "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
     with open(csv_path, "w") as f:
         f.write(f"{param_name},status,cost,{','.join(cost_cols)},R_risk,R_time,Raw_Risk,Raw_Time,Gap_pct")
         for od_idx in range(5):

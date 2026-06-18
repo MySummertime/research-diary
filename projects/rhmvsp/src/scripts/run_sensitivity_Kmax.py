@@ -85,7 +85,7 @@ def run_kmax_sensitivity(size: str = "small", time_limit: int = 300):
             "delay_penalty_cost": sol.get("delay_penalty_cost", 0.0),
             "reposition_cost": sol.get("reposition_cost", 0.0),
             "idle_cost": sol.get("idle_cost", 0.0),
-            "opportunity_cost": sol.get("opportunity_cost", 0.0),
+            "unmet_penalty": sol.get("unmet_penalty", 0.0),
             "vehicles_used": sol.get("num_vehicles_used", 0),
             "R_sys": sol.get("R_net", -1.0),
             "R_sys_risk": sol.get("R_net_risk", -1.0),
@@ -126,12 +126,12 @@ def run_kmax_sensitivity(size: str = "small", time_limit: int = 300):
     csv_path = os.path.join(out_dir, "sensitivity_Kmax_table.csv")
     with open(csv_path, "w") as f:
         f.write("K_max,total_cost,reposition_cost,delay_penalty_cost,idle_cost,"
-                "opportunity_cost,vehicles_used,R_sys,R_sys_risk,R_sys_time\n")
+                "unmet_penalty,vehicles_used,R_sys,R_sys_risk,R_sys_time\n")
         for r in results:
             K = r["K_max"] if r["K_max"] is not None else -1
             f.write(f"{K},{r['total_cost']:.2f},{r['reposition_cost']:.2f},"
                     f"{r['delay_penalty_cost']:.2f},{r['idle_cost']:.2f},
-                    f"{r['opportunity_cost']:.2f},{r['vehicles_used']},"
+                    f"{r['unmet_penalty']:.2f},{r['vehicles_used']},"
                     f"{r['R_sys']:.6f},{r['R_sys_risk']:.6f},{r['R_sys_time']:.6f}\n")
     
     logger.info(f"\nResults saved to: {out_dir}/")
