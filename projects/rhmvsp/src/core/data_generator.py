@@ -313,18 +313,18 @@ class InstanceGenerator:
 
 			multiplier = int(rng.uniform(1, 10))
 			demand = float(multiplier * self.config.q_road)
-			E_od = float(round(rng.uniform(0, 24), 1))
+			time_window_start = float(round(rng.uniform(0, 24), 1))
 			transfer_time = 1.0
 			wait_time_est = interval
-			t_expected = E_od + t_road_1 + transfer_time + wait_time_est + t_rail + transfer_time + t_road_2
-			L_od = float(round(t_expected + self.config.prep_time_hours + self.config.dispatch_buffer_hours + self.config.L_od_buffer_hours, 1))
-			self.config.T_max = max(self.config.T_max, L_od + 12.0)
+			t_expected = time_window_start + t_road_1 + transfer_time + wait_time_est + t_rail + transfer_time + t_road_2
+			time_window_end = float(round(t_expected + self.config.prep_time_hours + self.config.dispatch_buffer_hours + self.config.time_window_end_buffer_hours, 1))
+			self.config.T_max = max(self.config.T_max, time_window_end + 12.0)
 
 			od_pairs.append({
 				"id": od_idx + 1,
 				"origin": o, "destination": d, "demand": round(demand, 1),
-				"E_od": round(E_od, 1), "L_od": round(L_od, 1),
-				"E_od_fmt": float_to_day_time(E_od), "L_od_fmt": float_to_day_time(L_od),
+				"time_window_start": round(time_window_start, 1), "time_window_end": round(time_window_end, 1),
+				"time_window_start_fmt": float_to_day_time(time_window_start), "time_window_end_fmt": float_to_day_time(time_window_end),
 				"alpha_T_od": float(self.config.alpha_T),
 			})
 
