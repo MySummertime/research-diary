@@ -130,7 +130,7 @@ class PricingProblem:
         """
         labels_at: dict[int, list[Label]] = {n: [] for n in self.network.get_all_nodes()}
 
-        max_L = max(self.config.T_max, od_L)
+        max_L = od_L
         init_time = od_E if forward else max_L
         init_ng = frozenset({start_node})
 
@@ -544,7 +544,7 @@ class PricingProblem:
                             if not valid_bc:
                                 continue
 
-                        max_L = max(self.config.T_max, od_L)
+                        max_L = od_L
 
                         # S3-1 FIX: Compute exact midpoint arc cost and combine with labels
                         if arc.mode == 2:

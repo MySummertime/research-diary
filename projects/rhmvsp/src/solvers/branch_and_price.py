@@ -44,6 +44,7 @@ class Column:
     bottleneck_capacity: float = 20.0
     lp_value: float = 0.0
     lp_value_own: float = 0.0
+    lp_value_rent: float = 0.0
     transport_cost_upper_bound: float = 0.0
     risk_R: float = 1.0
 
@@ -507,7 +508,7 @@ class BranchAndPriceController:
 
         if target_od is not None:
             # Find the best arc within this OD's columns for branching
-            candidate = BranchingStrategy.get_arc_candidate_for_od(node.columns, target_od)
+            candidate = BranchingStrategy.get_arc_candidate_for_od(node.columns, target_od, node.branch_constraints)
             if candidate:
                 u, v, m = candidate
                 self.logger.info(f"  OD-specific Arc Branching: OD_{target_od} Arc ({u}, {v}, mode={m})")
@@ -1126,8 +1127,9 @@ class BranchAndPriceController:
         # Build vehicle_assignments dict expected by analyze_solution.
         try:
             R_net_result = self._compute_solution_R_net(node)
-        except Exception:
-            R_net_result = -1.0
+        except Exception as e:
+            self.logger.warning(f"R_net computation failed: {e}")
+            R_net_result = None
 
         # Unpack detailed reliability results if available
         od_reliability_details = {}
@@ -1138,8 +1140,8 @@ class BranchAndPriceController:
             raw_net_risk = R_net_result.get('raw_net_risk', 0.0)
             raw_net_time = R_net_result.get('raw_net_time', 0.0)
         else:
-            R_net_risk = R_net_result
-            R_net_time = R_net_result
+            R_net_risk = None
+            R_net_time = None
             raw_net_risk = 0.0
             raw_net_time = 0.0
 

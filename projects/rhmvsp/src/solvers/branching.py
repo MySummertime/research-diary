@@ -16,7 +16,7 @@ class BranchingStrategy:
     """
 
     @staticmethod
-    def get_arc_candidate_for_od(columns: list, target_od: int) -> tuple[int, int, int] | None:
+    def get_arc_candidate_for_od(columns: list, target_od: int, branch_constraints: list = None) -> tuple[int, int, int] | None:
         """
         Select an arc (i,j,arc_id) for branching, scoped to a specific OD index.
 
@@ -37,7 +37,15 @@ class BranchingStrategy:
         best_arc = None
         best_score = 1.0
 
+        enforced_arcs = set()
+        if branch_constraints:
+            for c_type, c_data in branch_constraints:
+                if c_type == "arc_enforce" and c_data[0] == target_od:
+                    enforced_arcs.add((c_data[1], c_data[2], c_data[3]))
+
         for key, usage in arc_usage.items():
+            if key in enforced_arcs:
+                continue  # Skip already enforced arcs to prevent infinite branching loops
             fractional_part = usage - np.floor(usage)
             if 1e-6 < fractional_part < 1 - 1e-6:
                 score = abs(fractional_part - 0.5)
