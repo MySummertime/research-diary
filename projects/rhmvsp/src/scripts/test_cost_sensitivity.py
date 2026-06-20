@@ -24,8 +24,7 @@ def run_tests():
         for d in delta_D_vals:
             cfg = RHMVSPConfig()
             cfg.alpha_max = a
-            cfg.delta_D = d
-            cfg.bap_early_break = True  # Fast run
+            cfg.bap_max_iterations = 5  # Fast run
             solver = BranchAndPriceController(cfg, inst, logger)
             sol = solver.solve()
             results_list.append({

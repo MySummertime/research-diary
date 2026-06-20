@@ -32,8 +32,7 @@ def run_delta_t_pressure_test(base_inst, logger):
             cfg = RHMVSPConfig()
             cfg.delta_T = dt
             cfg.alpha_T = 0.95  # Extremely strict time reliability
-            cfg.bap_early_break = True  # Fast mode
-            cfg.bap_max_iterations = 15 # Prevent hanging
+
             
             inst = copy.deepcopy(base_inst)
             
@@ -69,8 +68,7 @@ def run_delta_s_pressure_test(base_inst, logger):
     
     for ds in delta_S_vals:
         cfg = RHMVSPConfig()
-        cfg.delta_S = ds
-        cfg.bap_early_break = True
+cfg.bap_max_iterations = 15
         
         inst = copy.deepcopy(base_inst)
         

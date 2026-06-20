@@ -130,8 +130,8 @@ def run_kmax_sensitivity(size: str = "small", time_limit: int = 300):
         for r in results:
             K = r["K_max"] if r["K_max"] is not None else -1
             f.write(f"{K},{r['total_cost']:.2f},{r['reposition_cost']:.2f},"
-                    f"{r['delay_penalty_cost']:.2f},{r['idle_cost']:.2f},
-                    f"{r['unmet_penalty']:.2f},{r['vehicles_used']},"
+                    f"{r['delay_penalty_cost']:.2f},{r['idle_cost']:.2f},"
+                    f"{r['unmet_penalty']:.2f},{r['vehicles_used']},
                     f"{r['R_sys']:.6f},{r['R_sys_risk']:.6f},{r['R_sys_time']:.6f}\n")
     
     logger.info(f"\nResults saved to: {out_dir}/")

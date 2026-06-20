@@ -516,19 +516,6 @@ class Visualizer:
 
 		# 6. Formatting and Legend
 		self._add_basemap(ax)
-		self._format_axes(ax)
-		ax.set_xlabel(
-			PlotProperties.LABEL_X_AXIS,
-			fontsize=PlotProperties.FONT_SIZE_AXIS_LABEL,
-			fontweight=PlotProperties.FONT_WEIGHT_BOLD,
-			fontfamily=PlotProperties.FONT_FAMILY,
-		)
-		ax.set_ylabel(
-			PlotProperties.LABEL_Y_AXIS,
-			fontsize=PlotProperties.FONT_SIZE_AXIS_LABEL,
-			fontweight=PlotProperties.FONT_WEIGHT_BOLD,
-			fontfamily=PlotProperties.FONT_FAMILY,
-		)
 
 		# Add network infrastructure to legend
 		legend_handles.insert(
@@ -594,7 +581,10 @@ class Visualizer:
 			prop={"family": PlotProperties.FONT_FAMILY, "size": PlotProperties.FONT_SIZE_LEGEND},
 		)
 
-		# 7. Save outputs in multiple publication formats (PNG & TIFF)
+		# 7. Hide axes (no x/y labels, ticks, or spines)
+		ax.set_axis_off()
+
+		# 8. Save outputs in multiple publication formats (PNG & TIFF)
 		base_dir, base_name = os.path.split(output_path)
 		name_root, _ = os.path.splitext(base_name)
 

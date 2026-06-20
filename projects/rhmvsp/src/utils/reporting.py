@@ -44,7 +44,7 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
                         + solution.get('idle_cost', 0) + solution.get('repo_extra_penalty', 0))
     lines.append(f"  Reposition cost:     ¥{reposition_total:>12,.2f}")
     lines.append(f"    └─ empty drive:    ¥{solution.get('reposition_cost', 0):>12,.2f}")
-    lines.append(f"    └─ preparation:    ¥{solution.get('prep_cost', 0):>12,.2f}")
+    lines.append(f"    └─ preparation:    ¥{solution.get('total_prep_cost', 0):>12,.2f}")
     lines.append(f"    └─ vehicle idle:   ¥{solution.get('idle_cost', 0):>12,.2f}")
     lines.append(f"    └─ repo delay:     ¥{solution.get('repo_extra_penalty', 0):>12,.2f}")
     shortfall = solution.get('unmet_penalty', 0) - solution.get('repo_extra_penalty', 0)
