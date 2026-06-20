@@ -48,10 +48,10 @@ def _update_od_deadlines(instance, config):
                 trap = TrapFz(r1.a+tf.a+ra.a+r2.a, r1.b+tf.b+ra.b+r2.b,
                               r1.c+tf.c+ra.c+r2.c, r1.d+tf.d+ra.d+r2.d)
                 det_L = trap.deterministic_equivalent_upper(config.alpha_T)
-                od["L_od"] = float(round(od.get("E_od", 0.0) + det_L * 1.10, 1))
+                od["time_window_end"] = float(round(od.get("time_window_start", od.get("E_od", 0.0)) + det_L * 1.10, 1))
 
 
-def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
+def run_value_of_fuzzy_time(instance_path="data_real_case/instance.json",
                             time_limit=None,
                             output_root="results"):
     """
@@ -83,7 +83,6 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
         if time_limit:
             cfg.time_limit = time_limit
         cfg.solver_name = "gurobi"
-        cfg.solver_backend = "gurobi"
 
         # Deep copy instance for each run (L_od may differ)
         inst = json.loads(json.dumps(instance))
@@ -110,7 +109,7 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
                     "transport_cost": sol.get("transport_cost", 0),
                     "transfer_cost": sol.get("transfer_cost", 0),
                     "reposition_cost": sol.get("reposition_cost", 0),
-                    "prep_cost": sol.get("prep_cost", 0),
+                    "total_prep_cost": sol.get("total_prep_cost", 0),
                     "idle_cost": sol.get("idle_cost", 0),
                     "unmet_penalty": sol.get("unmet_penalty", 0),
                     "R_risk": sol.get("R_net_risk", 0),
@@ -140,7 +139,7 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
         cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                     "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
+                     "reposition_cost","total_prep_cost","idle_cost","unmet_penalty"]
         hdr = (["delta_T", "alpha_T", "alpha_max", "status", "iterations",
                "cost"] + cost_cols +
               ["R_risk", "R_time", "Raw_Risk", "Raw_Time",
@@ -160,7 +159,11 @@ def run_value_of_fuzzy_time(instance_path="data/small/instance.json",
             if r.get("status") != "optimal":
                 w.writerow([
                     f"{r['param']:.2f}", "", "", r.get("status", "?"),
-                    "", "", "", "", "", "", "", "", "", "",
+                    "", "",  # iterations, cost
+                    "", "", "", "", "", "", "", "",  # 8 cost_cols
+                    "", "", "", "",  # R_risk, R_time, Raw_Risk, Raw_Time
+                    "", "", "", "", "",  # 5 bench columns
+                    "", "", "",  # 3 gap columns
                 ])
                 continue
 

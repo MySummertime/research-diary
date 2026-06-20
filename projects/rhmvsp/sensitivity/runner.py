@@ -136,7 +136,6 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                 obj = getattr(obj, p)
             setattr(obj, parts[-1], val)
         config.solver_name = "gurobi"
-        config.solver_backend = "gurobi"
         config.time_limit = time_limit
 
         # Per-value subfolder
@@ -156,27 +155,19 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
         # only sensitive to alpha_T if L_od itself changes with alpha_T.
         from src.core.uncertainty import UncertaintyEngine as UE2, TrapezoidalFuzzy as TrapFz
         _temp_engine = UE2(config)
-        _arcs = inst["network"]["arcs"]
-        _hub_ids = {tn["node_id"] for tn in inst["network"].get("transfer_nodes", [])}
         for od in inst["od_pairs"]:
-            od_o, od_d = od["origin"], od["destination"]
-            # Filter for actual hub nodes only (transfer_nodes define hubs)
-            roads_out = [a for a in _arcs if a["i"] == od_o and a["mode"] == 1 and a["j"] in _hub_ids]
-            roads_in  = [a for a in _arcs if a["j"] == od_d and a["mode"] == 1 and a["i"] in _hub_ids]
-            rails      = [a for a in _arcs if a["mode"] == 2]
-            if roads_out and roads_in and rails:
-                co = min(roads_out, key=lambda a: a["distance"])
-                ci = min(roads_in,  key=lambda a: a["distance"])
-                rm = [a for a in rails if a["i"] == co["j"] and a["j"] == ci["i"]]
-                if rm:
-                    r1 = _temp_engine.make_transport_time(co["distance"], 1)
-                    tf = _temp_engine.make_transfer_time()
-                    ra = _temp_engine.make_transport_time(rm[0]["distance"], 2)
-                    r2 = _temp_engine.make_transport_time(ci["distance"], 1)
-                    trap = TrapFz(r1.a+tf.a+ra.a+r2.a, r1.b+tf.b+ra.b+r2.b,
-                                  r1.c+tf.c+ra.c+r2.c, r1.d+tf.d+ra.d+r2.d)
-                    det_L = trap.deterministic_equivalent_upper(config.alpha_T)
-                    od["L_od"] = float(round(od.get("E_od", 0.0) + det_L * 1.10, 1))
+            # Use embedded segment distances for base time estimation
+            r1 = _temp_engine.make_transport_time(od.get("dist_road_1", 200), 1)
+            tf = _temp_engine.make_transfer_time()
+            ra = _temp_engine.make_transport_time(od.get("dist_rail", 2000), 2)
+            r2 = _temp_engine.make_transport_time(od.get("dist_road_2", 200), 1)
+            
+            trap = TrapFz(r1.a+tf.a+ra.a+r2.a, r1.b+tf.b+ra.b+r2.b,
+                          r1.c+tf.c+ra.c+r2.c, r1.d+tf.d+ra.d+r2.d)
+            det_L = trap.deterministic_equivalent_upper(config.alpha_T)
+            start_time = od.get("time_window_start", od.get("E_od", 0.0))
+            # tighten the deadline window relative to alpha_T
+            od["time_window_end"] = float(round(start_time + det_L * 1.10, 1))
 
         # Logger (output goes through Tee → experiment.log)
         logger = Logger(level="INFO", log_file=None)
@@ -214,13 +205,13 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                     "transport_cost": sol.get("transport_cost", 0),
                     "transfer_cost": sol.get("transfer_cost", 0),
                     "reposition_cost": sol.get("reposition_cost", 0),
-                    "prep_cost": sol.get("prep_cost", 0),
+                    "total_prep_cost": sol.get("total_prep_cost", 0),
                     "idle_cost": sol.get("idle_cost", 0),
                     "unmet_penalty": sol.get("unmet_penalty", 0),
                     "od_details": sol.get("od_reliability_details", {}),
                 })
                 logger.info(f"\nResult: {label}={val}: Cost=¥{cost:,.0f}, R_risk={r_risk:.4f}, R_time={r_time:.4f}")
-                logger.info(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('unmet_penalty',0):,.0f}")
+                logger.info(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('total_prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('unmet_penalty',0):,.0f}")
                 logger.info(f"  Raw Metrics: RawRisk={raw_risk:.2f}, RawTime={raw_time:.2f}h")
             else:
                 results.append({"param": val, "status": "infeasible"})
@@ -260,7 +251,7 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
     # Save summary CSV
     csv_path = os.path.join(exp_dir, f"summary_{param_name}.csv")
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                 "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
+                 "reposition_cost","total_prep_cost","idle_cost","unmet_penalty"]
     with open(csv_path, "w") as f:
         f.write(f"{param_name},status,cost,{','.join(cost_cols)},R_risk,R_time,Raw_Risk,Raw_Time,Gap_pct")
         for od_idx in range(5):

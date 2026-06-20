@@ -8,7 +8,7 @@ run_sensitivity(
     param_name="alpha_T",
     param_values=alpha_T_values,
     param_attr_path="alpha_T",
-    instance_path="data/small/instance.json",
+    instance_path="data_real_case/instance.json",
     label="alpha_T",
     #time_limit=120,
 )

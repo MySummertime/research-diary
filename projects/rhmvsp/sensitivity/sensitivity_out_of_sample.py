@@ -28,19 +28,15 @@ C_BAP   = COLOURS["C1"]  # Warm Terracotta — BAP (reliable model)
 C_BENCH = COLOURS["C2"]  # Celadon Green   — LP-only (benchmark)
 
 # ── Experiment parameters ─────────────────────────────────────────────────────
-N_SCENARIOS = 200          # Dry-run: 50 → final: 100~200 per group
-INSTANCE_PATH = "data/small/instance.json"
+N_SCENARIOS = 2          # Dry-run: 50 → final: 100~200 per group
+INSTANCE_PATH = "data_real_case/instance.json"
 
-# 6 parameter combinations: (delta_T, alpha_max)
+# 8 parameter combinations: (delta_T, alpha_max)
 PARAM_GRID = [
-    (0.5, 0.02),
-    (0.5, 0.05),
-    (0.6, 0.02),
-    (0.6, 0.05),
-    (0.7, 0.02),
-    (0.7, 0.05),
-    (0.8, 0.02),
-    (0.8, 0.05),
+    (0.4, 0.025), (0.4, 0.035),
+    (0.6, 0.025), (0.6, 0.035),
+    (0.8, 0.025), (0.8, 0.035),
+    (1.0, 0.025), (1.0, 0.035),
 ]
 
 
@@ -51,34 +47,23 @@ def _update_od_deadlines(instance, config):
     via UncertaintyEngine, which directly affects the cumulative trapezoid.
     """
     _temp_engine = UE2(config)
-    _arcs = instance["network"]["arcs"]
-    _hub_ids = {tn["node_id"] for tn in instance["network"].get("transfer_nodes", [])}
     for od in instance.get("od_pairs", []):
         od["alpha_T_od"] = config.alpha_T
-        od_o, od_d = od["origin"], od["destination"]
-        roads_out = [a for a in _arcs if a["i"] == od_o and a["mode"] == 1 and a["j"] in _hub_ids]
-        roads_in  = [a for a in _arcs if a["j"] == od_d and a["mode"] == 1 and a["i"] in _hub_ids]
-        rails     = [a for a in _arcs if a["mode"] == 2]
-        if roads_out and roads_in and rails:
-            co = min(roads_out, key=lambda a: a["distance"])
-            ci = min(roads_in,  key=lambda a: a["distance"])
-            rm = [a for a in rails if a["i"] == co["j"] and a["j"] == ci["i"]]
-            if rm:
-                r1 = _temp_engine.make_transport_time(co["distance"], 1)
-                tf = _temp_engine.make_transfer_time()
-                ra = _temp_engine.make_transport_time(rm[0]["distance"], 2)
-                r2 = _temp_engine.make_transport_time(ci["distance"], 1)
-                trap = TrapFz(r1.a + tf.a + ra.a + r2.a,
-                              r1.b + tf.b + ra.b + r2.b,
-                              r1.c + tf.c + ra.c + r2.c,
-                              r1.d + tf.d + ra.d + r2.d)
-                det_L = trap.deterministic_equivalent_upper(config.alpha_T)
-                od["L_od"] = float(round(od.get("E_od", 0.0) + det_L * 1.10, 1))
+        r1 = _temp_engine.make_transport_time(od.get("dist_road_1", 200), 1)
+        tf = _temp_engine.make_transfer_time()
+        ra = _temp_engine.make_transport_time(od.get("dist_rail", 2000), 2)
+        r2 = _temp_engine.make_transport_time(od.get("dist_road_2", 200), 1)
+
+        trap = TrapFz(r1.a+tf.a+ra.a+r2.a, r1.b+tf.b+ra.b+r2.b,
+                      r1.c+tf.c+ra.c+r2.c, r1.d+tf.d+ra.d+r2.d)
+        det_L = trap.deterministic_equivalent_upper(config.alpha_T)
+        start_time = od.get("time_window_start", od.get("E_od", 0.0))
+        od["time_window_end"] = float(round(start_time + det_L * 1.10, 1))
 
 
 def _run_single(config, inst, exp_dir, model_tag, dT, a_max, seed):
     """Run one BAP/LP-only solve and return dict with cost and sub-components."""
-    logger = Logger(level="ERROR", log_file=None)  # output via stdout → Tee
+    logger = Logger(level="INFO", log_file=None)  # output via stdout → Tee
     solver = BAPSolver(config, json.loads(json.dumps(inst)), logger)
     import time
     t0 = time.time()
@@ -88,7 +73,7 @@ def _run_single(config, inst, exp_dir, model_tag, dT, a_max, seed):
     status  = sol.get("status", "unknown")
     ok = status != "infeasible"
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                 "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
+                 "reposition_cost","total_prep_cost","idle_cost","unmet_penalty"]
     result = {"cost": sol.get("total_cost") if ok else None,
               "R_risk": sol.get("R_net_risk", 0) if ok else None,
               "R_time": sol.get("R_net_time", 0) if ok else None,
@@ -135,7 +120,7 @@ def run_out_of_sample():
     # CSV header
     csv_path = os.path.join(exp_dir, "experiment.csv")
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                 "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
+                 "reposition_cost","total_prep_cost","idle_cost","unmet_penalty"]
     with open(csv_path, "w", newline="") as f:
         csv.writer(f).writerow(
             ["group_label", "delta_T", "alpha_max", "scenario_id",
@@ -148,6 +133,7 @@ def run_out_of_sample():
         print(f"\n=== \u03b4_T={dT:.1f},  \u03b1_max={a_max:.3f} ===")
 
         for s_id in range(N_SCENARIOS):
+            print(f"  [Scenario {s_id+1}/{N_SCENARIOS}] Generating and solving...")
             seed = 1000 * int(dT * 100) + int(a_max * 1000) + s_id
             rng = np.random.default_rng(seed=seed)
 
@@ -159,8 +145,8 @@ def run_out_of_sample():
             # alpha_T stays at default 0.8; delta_T is the sweep variable
             cfg_bap.delta_T   = dT
             cfg_bap.alpha_max = a_max
+            cfg_bap.time_limit = 120
             cfg_bap.solver_name    = "gurobi"
-            cfg_bap.solver_backend = "gurobi"
             scen_bap = json.loads(json.dumps(scen))  # deep copy for isolation
             _update_od_deadlines(scen_bap, cfg_bap)
 
@@ -184,8 +170,8 @@ def run_out_of_sample():
             cfg_lp.delta_T   = dT
             cfg_lp.alpha_max = a_max
             cfg_lp.lp_only   = True
+            cfg_lp.time_limit = 120
             cfg_lp.solver_name    = "gurobi"
-            cfg_lp.solver_backend = "gurobi"
             scen_lp = json.loads(json.dumps(scen))  # deep copy of same scenario
             _update_od_deadlines(scen_lp, cfg_lp)
 
@@ -210,11 +196,13 @@ def run_out_of_sample():
             # Progress
             b_str = f"CNY {r_bap['cost']:,.0f}" if r_bap["cost"] is not None else r_bap["status"]
             l_str = f"CNY {r_lp['cost']:,.0f}" if r_lp["cost"] is not None else r_lp["status"]
+            def _f(v, fmt, default="N/A"):
+                return f"{v:{fmt}}" if v is not None else default
             print(f"  [{done:3d}/{total}]  s={s_id:2d}  BAP={b_str:>14s}  LP={l_str:>14s}  "
-                  f"R_risk={r_bap.get('R_risk',0):.4f}/{r_lp.get('R_risk',0):.4f}  "
-                  f"R_time={r_bap.get('R_time',0):.4f}/{r_lp.get('R_time',0):.4f}  "
-                  f"RawRisk={r_bap.get('raw_risk',0):.2f}/{r_lp.get('raw_risk',0):.2f}  "
-                  f"RawTime={r_bap.get('raw_time',0):.2f}/{r_lp.get('raw_time',0):.2f}h  "
+                  f"R_risk={_f(r_bap.get('R_risk'),'.4f')}/{_f(r_lp.get('R_risk'),'.4f')}  "
+                  f"R_time={_f(r_bap.get('R_time'),'.4f')}/{_f(r_lp.get('R_time'),'.4f')}  "
+                  f"RawRisk={_f(r_bap.get('raw_risk'),'.2f')}/{_f(r_lp.get('raw_risk'),'.2f')}  "
+                  f"RawTime={_f(r_bap.get('raw_time'),'.2f')}/{_f(r_lp.get('raw_time'),'.2f')}h  "
                   f"({r_bap['elapsed']:.1f}s / {r_lp['elapsed']:.1f}s)")
 
     # ── Plot enhanced box-plots ───────────────────────────────────────────────

@@ -8,7 +8,7 @@ run_sensitivity(
     param_name="alpha_max",
     param_values=alpha_max_values,
     param_attr_path="alpha_max",
-    instance_path="data/small/instance.json",
+    instance_path="data_real_case/instance.json",
     label="alpha_max",
     #time_limit=120,
 )

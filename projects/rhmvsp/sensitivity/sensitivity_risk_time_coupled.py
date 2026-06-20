@@ -58,7 +58,7 @@ def _update_od_deadlines(instance, config):
                 trap = TrapFz(r1.a+tf.a+ra.a+r2.a, r1.b+tf.b+ra.b+r2.b,
                               r1.c+tf.c+ra.c+r2.c, r1.d+tf.d+ra.d+r2.d)
                 det_L = trap.deterministic_equivalent_upper(config.alpha_T)
-                od["L_od"] = float(round(od.get("E_od", 0.0) + det_L * 1.10, 1))
+                od["time_window_end"] = float(round(od.get("time_window_start", od.get("E_od", 0.0)) + det_L * 1.10, 1))
 
 
 def _plot_heatmap(delta_t_vals, alpha_max_vals, matrix, metric_name,
@@ -116,7 +116,7 @@ def _plot_heatmap(delta_t_vals, alpha_max_vals, matrix, metric_name,
 # ======================================================================
 #                       MAIN EXPERIMENT
 # ======================================================================
-def run_risk_time_coupled(instance_path="data/small/instance.json",
+def run_risk_time_coupled(instance_path="data_real_case/instance.json",
                           time_limit=None,
                           output_root="results"):
     """Run the α_max × δ_T coupled experiment."""
@@ -135,11 +135,9 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
     # ---- Benchmark: constant model (no time-varying risk) ----
     cfg_bench = RHMVSPConfig()
     cfg_bench.enable_time_varying_risk = False
-    cfg_bench.enable_time_varying_consequence = False
     if time_limit:
         cfg_bench.time_limit = time_limit
     cfg_bench.solver_name = "gurobi"
-    cfg_bench.solver_backend = "gurobi"
 
     inst_bench = json.loads(json.dumps(instance))
     _update_od_deadlines(inst_bench, cfg_bench)
@@ -180,7 +178,7 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
         cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                     "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
+                     "reposition_cost","total_prep_cost","idle_cost","unmet_penalty"]
         w.writerow(["alpha_max", "delta_T", "status",
                      "cost"] + cost_cols +
                     ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "Gap_pct", "iterations",
@@ -203,7 +201,6 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
             if time_limit:
                 cfg.time_limit = time_limit
             cfg.solver_name = "gurobi"
-            cfg.solver_backend = "gurobi"
 
             inst = json.loads(json.dumps(instance))
             _update_od_deadlines(inst, cfg)
@@ -227,7 +224,7 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
                         "transport_cost": sol.get("transport_cost", 0),
                         "transfer_cost": sol.get("transfer_cost", 0),
                         "reposition_cost": sol.get("reposition_cost", 0),
-                        "prep_cost": sol.get("prep_cost", 0),
+                        "total_prep_cost": sol.get("total_prep_cost", 0),
                         "idle_cost": sol.get("idle_cost", 0),
                         "unmet_penalty": sol.get("unmet_penalty", 0),
                         "R_risk": sol.get("R_net_risk", 0),
@@ -262,8 +259,8 @@ def run_risk_time_coupled(instance_path="data/small/instance.json",
 
                 if ok and bench_cost and bench_cost > 0:
                     cost_g  = f"{(rc - bench_cost)  / bench_cost  * 100:+.2f}"
-                    rr_g    = f"{(rr - bench_rrisk) / bench_rrisk * 100:+.2f}"
-                    rt_g    = f"{(rt - bench_rtime) / bench_rtime * 100:+.2f}"
+                    rr_g    = f"{(rr - bench_rrisk) / bench_rrisk * 100:+.2f}" if bench_rrisk else ""
+                    rt_g    = f"{(rt - bench_rtime) / bench_rtime * 100:+.2f}" if bench_rtime else ""
                 else:
                     cost_g = rr_g = rt_g = ""
 
@@ -344,5 +341,5 @@ if __name__ == "__main__":
     print("RISK–TIME COUPLED SENSITIVITY ANALYSIS (P0)")
     print("α_max × δ_T  →  Cost / R_risk / R_time Bubble Heatmaps")
     print("=" * 60)
-    run_risk_time_coupled()
+    run_risk_time_coupled(time_limit=120)
     print("Done.")

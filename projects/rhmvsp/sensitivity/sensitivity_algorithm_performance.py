@@ -41,7 +41,7 @@ def _update_od_deadlines(instance, config):
                 trap = TrapFz(r1.a+tf.a+ra.a+r2.a, r1.b+tf.b+ra.b+r2.b,
                               r1.c+tf.c+ra.c+r2.c, r1.d+tf.d+ra.d+r2.d)
                 det_L = trap.deterministic_equivalent_upper(config.alpha_T)
-                od["L_od"] = float(round(od.get("E_od", 0.0) + det_L * 1.10, 1))
+                od["time_window_end"] = float(round(od.get("time_window_start", od.get("E_od", 0.0)) + det_L * 1.10, 1))
 
 def _plot_algorithm_performance(x_labels, time_vals, iter_vals, save_path):
     set_style()
@@ -94,7 +94,7 @@ def run_algorithm_performance():
 
     csv_path = os.path.join(exp_dir, "algorithm_performance.csv")
     cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                 "reposition_cost","prep_cost","idle_cost","unmet_penalty"]
+                 "reposition_cost","total_prep_cost","idle_cost","unmet_penalty"]
     
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
@@ -116,10 +116,10 @@ def run_algorithm_performance():
                 
             config = RHMVSPConfig()
             config.solver_name = "gurobi"
-            config.solver_backend = "gurobi"
+            config.time_limit = 120
             
             _update_od_deadlines(instance, config)
-            logger = Logger(level="ERROR", log_file=None)
+            logger = Logger(level="INFO", log_file=None)
             
             t0 = time.time()
             sol = None
@@ -161,7 +161,7 @@ def run_algorithm_performance():
                 
                 print(f"Scale={scale}, Inst={inst_idx} | Time: {elapsed_bap:.2f}s, Iter: {iter_bap}, Cost: ¥{cost_bap:,.0f}")
                 print(f"  Reliability: R_risk={r_risk_bap:.4f}, R_time={r_time_bap:.4f}")
-                print(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('unmet_penalty',0):,.0f}")
+                print(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('total_prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Opp=¥{sol.get('unmet_penalty',0):,.0f}")
                 print(f"  Raw Metrics: RawRisk={raw_risk:.2f}, RawTime={raw_time:.2f}h\n")
                 
                 results.append({
