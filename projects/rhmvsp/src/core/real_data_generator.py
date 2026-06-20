@@ -268,6 +268,9 @@ class RealInstanceGenerator:
                 "alpha_T_od": float(self.config.alpha_T),
                 "origin_hub": 1,
                 "destination_hub": 5,
+                "dist_road_1": round(haversine_distance(node_defs[o]["lon"], node_defs[o]["lat"], node_defs[1]["lon"], node_defs[1]["lat"]), 2),
+                "dist_rail": round(haversine_distance(node_defs[1]["lon"], node_defs[1]["lat"], node_defs[5]["lon"], node_defs[5]["lat"]), 2),
+                "dist_road_2": round(haversine_distance(node_defs[5]["lon"], node_defs[5]["lat"], node_defs[d]["lon"], node_defs[d]["lat"]), 2),
             })
             
         for arc in arcs:

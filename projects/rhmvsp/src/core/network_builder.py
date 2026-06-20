@@ -15,6 +15,7 @@ Key design notes:
 """
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import math
@@ -246,7 +247,3 @@ class NetworkBuilder:
                 for h in self.hubs.values()
             ],
         }
-
-
-# Need csv import at top
-import csv

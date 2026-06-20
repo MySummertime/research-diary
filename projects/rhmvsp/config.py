@@ -16,7 +16,6 @@ class RHMVSPConfig:
 	# ============================================================
 	# Network Parameters
 	# ============================================================
-	M = {1: "road", 2: "rail"}  # Transport modes
 
 	# Time discretization
 	T_max: int = 48  # Planning horizon (hours)
@@ -56,13 +55,10 @@ class RHMVSPConfig:
 	c_transfer: float = 37.75  # Unit transfer/handling cost (¥/ton)
 	# 同样，转运设施启动费等 resource 成本也应由基建方承担，予以剔除
 	c_hub: float = 0.0  # Transfer facility setup cost (¥)
-	max_cranes: int = 2  # Max concurrent transfer cranes per hub
-	max_storage_tons: float = 500.0  # Max hazmat storage capacity per hub (tons)
-	c_unmet_penalty: float = 5000.0 # Base opportunity cost for unfulfilled demand (¥/ton). Must exceed transport cost per ton to ensure delivery is always preferred over forfeiture.
+	c_unmet_penalty: float = 5000.0 # Base opportunity cost for unfulfilled demand (¥/ton)
 	c_vehicle_idle: float = 10.0  # Vehicle idle/waiting cost per ton-hour during reposition gap (¥/ton·h)
 	crane_daily_lifts: int = 200  # Daily lifts per crane
 	max_hubs: int | None = None  # Max active transfer hubs (None means unlimited)
-	alpha_c: float = 0.85  # Confidence level for fuzzy cost equivalents
 
 	# ============================================================
 	# Reliability Parameters (§2.4, §3.1.1)	# ============================================================
@@ -89,6 +85,7 @@ class RHMVSPConfig:
 
 	prep_time_hours: float = 2.0  # Empty vehicle preparation time (inspection, cleaning, driver rest)
 	dispatch_buffer_hours: float = 1.0  # Cross-station dispatch buffer
+	time_window_end_buffer_hours: float = 3.0  # Buffer for computing OD delivery deadline from expected arrival
 	c_prep_reposition: float = 200.0  # Fixed preparation cost per reposition event (¥)
 
 	# ============================================================
@@ -100,16 +97,14 @@ class RHMVSPConfig:
 	# Time-Varying Risk Switches (S2-2, §2.2)
 	# ============================================================
 	enable_time_varying_risk: bool = True       # Enable phi(t) traffic/fatigue multiplier on accident probability
-	enable_time_varying_consequence: bool = True  # Enable psi(t) population exposure multiplier on consequence
 	risk_scale: float = 1.0                       # Continuous scaling for time-varying risk (0.0=constant phi=psi=1, 1.0=full time-varying)
 	lp_only: bool = False                         # If True, BAP stops after root-node CG (LP relaxation, no branching)
 	solver_name: str = "gurobi"
-	solver_backend: str = "gurobi"  # Default solver backend
 
 	# ============================================================
 	# Solver Parameters
 	# ============================================================
-	time_limit: int = 99999999999  # Solver time limit (seconds)
+	time_limit: int = 3600  # Solver time limit (seconds)
 
 	# ============================================================
 	# Branch-and-Price Parameters (§4.5)
@@ -123,21 +118,11 @@ class RHMVSPConfig:
 	max_labels_heuristic: int = 20  # Max labels to keep in heuristic pricing
 
 	# ============================================================
-	# Soft Time Window Design
-	# ============================================================
-	# L_od = expected_arrival + L_od_buffer_hours.
-	# A small buffer creates slack in the time window.
-	L_od_buffer_hours: float = 3.0
-
-	# Vehicle limit = num_vehicles × vehicle_limit_multiplier
-	# Default overridden by instance-specific adaptive value in data_generator
-	vehicle_limit_multiplier: float = 3.0
-
-	# ============================================================
 	# Paths & System
 	# ============================================================
 	# Default path for Conda-installed CBC on Mac
 	cbc_path: str = "/opt/homebrew/Caskroom/miniforge/base/envs/rhmvsp/bin/cbc"
+
 
 	# ============================================================
 	# Numerical Constants

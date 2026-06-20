@@ -55,7 +55,7 @@ Examples:
 	parser.add_argument(
 		"--solver",
 		choices=["pulp", "gurobi"],
-		default=config_default.solver_backend,
+		default=config_default.solver_name,
 		help=f"MILP solver backend: pulp or gurobi (default: {config_default.solver_name})",
 	)
 	parser.add_argument(
@@ -102,6 +102,16 @@ def run_demo(config: RHMVSPConfig, size: str, logger: Logger):
 	else:
 		logger.info(f"Generating and saving fixed benchmark {size} instance...")
 		instance = run_generate(config, size, logger)
+
+	if "config" in instance:
+		if "T_max" in instance["config"]:
+			config.T_max = instance["config"]["T_max"]
+		if "alpha_max" in instance["config"]:
+			config.alpha_max = instance["config"]["alpha_max"]
+		if "alpha_T" in instance["config"]:
+			config.alpha_T = instance["config"]["alpha_T"]
+		if "K_max" in instance["config"]:
+			config.K_max = instance["config"]["K_max"]
 
 	logger.info(f"Instance: {instance['name']}")
 	logger.info(
@@ -314,7 +324,7 @@ def main():
 		csv_path = os.path.join(args.output, "summary.csv")
 		sol = solution
 		cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "transfer_cost",
-					 "reposition_cost", "prep_cost", "idle_cost", "unmet_penalty"]
+				 "reposition_cost", "total_prep_cost", "idle_cost", "unmet_penalty"]
 		with open(csv_path, "w", newline="") as csv_f:
 			w = csv.writer(csv_f)
 			w.writerow(["Status", "Cost"] + cost_cols +
