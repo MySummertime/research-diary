@@ -153,21 +153,33 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
         # Recompute L_od for each OD pair based on current alpha_T.
         # L_od determines the delivery deadline; R_T = M{Z~ <= L_od} is
         # only sensitive to alpha_T if L_od itself changes with alpha_T.
+        # Uses arc-based lookup to find nearest hub pair and compute trapezoidal
+        # time from actual network distances (no hardcoded fallback values).
         from src.core.uncertainty import UncertaintyEngine as UE2, TrapezoidalFuzzy as TrapFz
         _temp_engine = UE2(config)
+        _arcs = inst["network"]["arcs"]
+        _hub_ids = {tn["node_id"] for tn in inst["network"].get("transfer_nodes", [])}
         for od in inst["od_pairs"]:
-            # Use embedded segment distances for base time estimation
-            r1 = _temp_engine.make_transport_time(od.get("dist_road_1", 200), 1)
-            tf = _temp_engine.make_transfer_time()
-            ra = _temp_engine.make_transport_time(od.get("dist_rail", 2000), 2)
-            r2 = _temp_engine.make_transport_time(od.get("dist_road_2", 200), 1)
-            
-            trap = TrapFz(r1.a+tf.a+ra.a+r2.a, r1.b+tf.b+ra.b+r2.b,
-                          r1.c+tf.c+ra.c+r2.c, r1.d+tf.d+ra.d+r2.d)
-            det_L = trap.deterministic_equivalent_upper(config.alpha_T)
-            start_time = od.get("time_window_start", od.get("E_od", 0.0))
-            # tighten the deadline window relative to alpha_T
-            od["time_window_end"] = float(round(start_time + det_L * 1.10, 1))
+            od["alpha_T_od"] = config.alpha_T
+            od_o, od_d = od["origin"], od["destination"]
+            roads_out = [a for a in _arcs if a["i"] == od_o and a["mode"] == 1 and a["j"] in _hub_ids]
+            roads_in  = [a for a in _arcs if a["j"] == od_d and a["mode"] == 1 and a["i"] in _hub_ids]
+            rails      = [a for a in _arcs if a["mode"] == 2]
+            if roads_out and roads_in and rails:
+                co = min(roads_out, key=lambda a: a["distance"])
+                ci = min(roads_in,  key=lambda a: a["distance"])
+                rm = [a for a in rails if a["i"] == co["j"] and a["j"] == ci["i"]]
+                if rm:
+                    r1 = _temp_engine.make_transport_time(co["distance"], 1)
+                    tf = _temp_engine.make_transfer_time()
+                    ra = _temp_engine.make_transport_time(rm[0]["distance"], 2)
+                    r2 = _temp_engine.make_transport_time(ci["distance"], 1)
+                    trap = TrapFz(r1.a+tf.a+ra.a+r2.a, r1.b+tf.b+ra.b+r2.b,
+                                  r1.c+tf.c+ra.c+r2.c, r1.d+tf.d+ra.d+r2.d)
+                    det_L = trap.deterministic_equivalent_upper(config.alpha_T)
+                    start_time = od.get("time_window_start", od.get("E_od", 0.0))
+                    # tighten the deadline window relative to alpha_T
+                    od["time_window_end"] = float(round(start_time + det_L * 1.10, 1))
 
         # Logger (output goes through Tee → experiment.log)
         logger = Logger(level="INFO", log_file=None)
