@@ -42,112 +42,117 @@ class RealInstanceGenerator:
         """Generate the real geographic instance."""
         
         # 1. Define nodes and coordinates
+        #    15 Hubs + 12 Spokes
+        #    Three corridors: North (陇海→京沪), Central (京广→沪宁), South (兰渝→成渝→渝贵→渝昆→京九→广深)
         node_defs = {
-            # 5 Hubs
-            1: {"code": "URC", "name": "Urumqi", "type": "Hub", "lon": 87.62, "lat": 43.83, "region": "West"},
-            2: {"code": "LHW", "name": "Lanzhou", "type": "Hub", "lon": 103.83, "lat": 36.06, "region": "West"},
-            3: {"code": "CGO", "name": "Zhengzhou", "type": "Hub", "lon": 113.66, "lat": 34.75, "region": "Mid"},
-            4: {"code": "HFE", "name": "Hefei", "type": "Hub", "lon": 117.23, "lat": 31.82, "region": "East"},
-            5: {"code": "SHA", "name": "Shanghai", "type": "Hub", "lon": 121.47, "lat": 31.23, "region": "East"},
-            
-            # 5 Specific West Spokes (Xinjiang)
-            6: {"code": "KHG", "name": "Kashgar", "type": "Spoke", "lon": 75.99, "lat": 39.47, "region": "West"},
-            7: {"code": "HMI", "name": "Hami", "type": "Spoke", "lon": 93.52, "lat": 42.82, "region": "West"},
-            8: {"code": "KRL", "name": "Korla", "type": "Spoke", "lon": 86.17, "lat": 41.73, "region": "West"},
-            9: {"code": "AKU", "name": "Aksu", "type": "Spoke", "lon": 80.27, "lat": 41.17, "region": "West"},
-            10: {"code": "HTN", "name": "Hotan", "type": "Spoke", "lon": 79.92, "lat": 37.11, "region": "West"},
-            
-            # 5 Specific East Spokes
-            11: {"code": "XUZ", "name": "Xuzhou", "type": "Spoke", "lon": 117.28, "lat": 34.20, "region": "East"},
-            12: {"code": "NKG", "name": "Nanjing", "type": "Spoke", "lon": 118.80, "lat": 32.06, "region": "East"},
-            13: {"code": "SZV", "name": "Suzhou", "type": "Spoke", "lon": 120.59, "lat": 31.30, "region": "East"},
-            14: {"code": "HGH", "name": "Hangzhou", "type": "Spoke", "lon": 120.12, "lat": 30.22, "region": "East"},
-            15: {"code": "FOC", "name": "Fuzhou", "type": "Spoke", "lon": 119.30, "lat": 26.07, "region": "East"},
+            # ── 15 Hubs ──
+            1:  {"code": "URC",  "name": "Urumqi",    "type": "Hub", "lon": 87.62,  "lat": 43.83, "region": "North"},
+            2:  {"code": "LHW",  "name": "Lanzhou",    "type": "Hub", "lon": 103.83, "lat": 36.06, "region": "North"},
+            21: {"code": "SIA",  "name": "Xi'an",       "type": "Hub", "lon": 108.94, "lat": 34.26, "region": "North"},
+            3:  {"code": "CGO",  "name": "Zhengzhou",  "type": "Hub", "lon": 113.66, "lat": 34.75, "region": "North"},
+            11: {"code": "XUZ",  "name": "Xuzhou",     "type": "Hub", "lon": 117.28, "lat": 34.20, "region": "North"},
+            28: {"code": "LYG",  "name": "Lianyungang", "type": "Hub", "lon": 119.17, "lat": 34.60, "region": "North"},
+            40: {"code": "JNA",  "name": "Jinan",       "type": "Hub", "lon": 117.00, "lat": 36.67, "region": "North"},
+            22: {"code": "WUH",  "name": "Wuhan",       "type": "Hub", "lon": 114.30, "lat": 30.59, "region": "Central"},
+            4:  {"code": "HFE",  "name": "Hefei",      "type": "Hub", "lon": 117.23, "lat": 31.82, "region": "Central"},
+            5:  {"code": "SHA",  "name": "Shanghai",    "type": "Hub", "lon": 121.47, "lat": 31.23, "region": "Central"},
+            29: {"code": "CTU",  "name": "Chengdu",     "type": "Hub", "lon": 104.07, "lat": 30.57, "region": "South"},
+            30: {"code": "CKG",  "name": "Chongqing",   "type": "Hub", "lon": 106.55, "lat": 29.56, "region": "South"},
+            31: {"code": "NCH",  "name": "Nanchang",    "type": "Hub", "lon": 115.86, "lat": 28.68, "region": "South"},
+            38: {"code": "GZU",  "name": "Guangzhou",   "type": "Hub", "lon": 113.26, "lat": 23.13, "region": "South"},
+            39: {"code": "NNG",  "name": "Nanning",     "type": "Hub", "lon": 108.37, "lat": 22.82, "region": "South"},
+
+            # ── North Spokes (Xinjiang + Longhai corridor) ──
+            6:  {"code": "KHG",  "name": "Kashgar",    "type": "Spoke", "lon": 75.99,  "lat": 39.47, "region": "North"},
+            7:  {"code": "HMI",  "name": "Hami",       "type": "Spoke", "lon": 93.52,  "lat": 42.82, "region": "North"},
+            8:  {"code": "KRL",  "name": "Korla",      "type": "Spoke", "lon": 86.17,  "lat": 41.73, "region": "North"},
+            9:  {"code": "AKU",  "name": "Aksu",       "type": "Spoke", "lon": 80.27,  "lat": 41.17, "region": "North"},
+            10: {"code": "HTN",  "name": "Hotan",      "type": "Spoke", "lon": 79.92,  "lat": 37.11, "region": "North"},
+            24: {"code": "BJI",  "name": "Baoji",      "type": "Spoke", "lon": 107.24, "lat": 34.36, "region": "North"},
+            34: {"code": "RZH",  "name": "Rizhao",     "type": "Spoke", "lon": 119.46, "lat": 35.38, "region": "North"},
+
+            # ── Central Spokes (Jingguang corridor + Yangtze Delta) ──
+            12: {"code": "NKG",  "name": "Nanjing",    "type": "Spoke", "lon": 118.80, "lat": 32.06, "region": "Central"},
+            13: {"code": "SZV",  "name": "Suzhou",     "type": "Spoke", "lon": 120.59, "lat": 31.30, "region": "Central"},
+
+            # ── South Spokes ──
+            14: {"code": "HGH",  "name": "Hangzhou",   "type": "Spoke", "lon": 120.12, "lat": 30.22, "region": "South"},
+            32: {"code": "MYG",  "name": "Mianyang",   "type": "Spoke", "lon": 104.68, "lat": 31.47, "region": "South"},
+            33: {"code": "KWE",  "name": "Guiyang",    "type": "Spoke", "lon": 106.63, "lat": 26.65, "region": "South"},
+            34: {"code": "RZH",  "name": "Rizhao",     "type": "Spoke", "lon": 119.46, "lat": 35.38, "region": "North"},
+            35: {"code": "LUZ",  "name": "Luzhou",     "type": "Spoke", "lon": 105.44, "lat": 28.88, "region": "South"},
+            36: {"code": "QZH",  "name": "Qinzhou",    "type": "Spoke", "lon": 108.65, "lat": 21.98, "region": "South"},
+            37: {"code": "SZX",  "name": "Shenzhen",   "type": "Spoke", "lon": 114.07, "lat": 22.55, "region": "South"},
         }
-        
-        # Add 2 West dummy spokes and 3 East dummy spokes
-        for i in range(16, 18):
-            node_defs[i] = {
-                "code": f"WD_{i}", "name": f"West_Dummy_{i}", "type": "Spoke",
-                "lon": node_defs[1]["lon"] + self.rng.uniform(-3, 3),
-                "lat": node_defs[1]["lat"] + self.rng.uniform(-3, 3),
-                "region": "West"
-            }
-        for i in range(18, 21):
-            node_defs[i] = {
-                "code": f"ED_{i}", "name": f"East_Dummy_{i}", "type": "Spoke",
-                "lon": node_defs[5]["lon"] + self.rng.uniform(-3, 3),
-                "lat": node_defs[5]["lat"] + self.rng.uniform(-3, 3),
-                "region": "East"
-            }
+
         hub_ids = [k for k, v in node_defs.items() if v["type"] == "Hub"]
         spoke_ids = [k for k, v in node_defs.items() if v["type"] == "Spoke"]
-        
-        nodes = [{"id": k, "x": round(v["lon"], 2), "y": round(v["lat"], 2), "name": v["name"]} for k, v in node_defs.items()]
-        
-        # Regional Hub logic
-        rail_edges = []
-        west_hubs = [k for k, v in node_defs.items() if v["region"] == "West" and v["type"] == "Hub"]
-        mid_hubs = [k for k, v in node_defs.items() if v["region"] == "Mid" and v["type"] == "Hub"]
-        east_hubs = [k for k, v in node_defs.items() if v["region"] == "East" and v["type"] == "Hub"]
 
-        # 1. West hubs fully connected
-        for i in range(len(west_hubs)):
-            for j in range(i+1, len(west_hubs)):
-                rail_edges.append((west_hubs[i], west_hubs[j]))
+        nodes = [{"id": k, "x": round(v["lon"], 2), "y": round(v["lat"], 2), "name": v["name"]}
+                 for k, v in node_defs.items()]
 
-        # 2. Mid hubs fully connected
-        for i in range(len(mid_hubs)):
-            for j in range(i+1, len(mid_hubs)):
-                rail_edges.append((mid_hubs[i], mid_hubs[j]))
+        # ── Rail edges: hub–hub only, three-corridor hub chains ──
+        rail_edges = [
+            # Shared entry: Urumqi → Lanzhou
+            (1, 2),
+            # North corridor (陇海线 → 京沪线 → 胶新线)
+            (2, 21),    # Lanzhou → Xi'an
+            (21, 3),    # Xi'an → Zhengzhou
+            (3, 11),    # Zhengzhou → Xuzhou
+            (11, 40),   # Xuzhou → Jinan     [京沪线]
+            (40, 28),   # Jinan → Lianyungang [胶新线]
+            # Central corridor (京广线 → 区域线 → 沪宁线)
+            (3, 22),    # Zhengzhou → Wuhan
+            (22, 4),    # Wuhan → Hefei
+            (4, 5),     # Hefei → Shanghai
+            # South corridor (兰渝→成渝→渝贵→京九→广深/广昆)
+            (2, 29),    # Lanzhou → Chengdu
+            (29, 30),   # Chengdu → Chongqing
+            (30, 39),   # Chongqing → Nanning   [渝贵线/湘桂线]
+            (39, 38),   # Nanning → Guangzhou    [南广高铁]
+            (38, 31),   # Guangzhou → Nanchang   [京广线]
+            (31, 14),   # Nanchang → Hangzhou    [沪昆线]
+            (14, 5),    # Hangzhou → Shanghai    [沪昆线]
+            (29, 35),   # Chengdu → Luzhou       [隆黄铁路]
+            (31, 37),   # Nanchang → Shenzhen    [京九线/广深线]
+            (31, 36),   # Nanchang → Qinzhou     [南防线]
+        ]
 
-        # 3. East hubs fully connected
-        for i in range(len(east_hubs)):
-            for j in range(i+1, len(east_hubs)):
-                rail_edges.append((east_hubs[i], east_hubs[j]))
-
-        # 4. West to Mid connected
-        for w in west_hubs:
-            for m in mid_hubs:
-                rail_edges.append((w, m))
-
-        # 5. Mid to East connected
-        for m in mid_hubs:
-            for e in east_hubs:
-                rail_edges.append((m, e))
-        
+        # ── Road edges: spoke→nearest hub(s) + spoke↔spoke within group ──
         road_edges = []
-        
-        # Region separation for Road
-        west_spokes = [k for k, v in node_defs.items() if v["region"] == "West" and v["type"] == "Spoke"] # 20 spokes
-        east_spokes = [k for k, v in node_defs.items() if v["region"] == "East" and v["type"] == "Spoke"] # 20 spokes
-        west_hubs = [k for k, v in node_defs.items() if v["region"] == "West" and v["type"] == "Hub"] # 1, 2
-        east_hubs = [k for k, v in node_defs.items() if v["region"] == "East" and v["type"] == "Hub"] # 9, 10
-        
-        # Connect West Spokes to West Hubs
-        for s in west_spokes:
-            for h in west_hubs:
-                road_edges.append((s, h))
-        
-        # Connect East Spokes to East Hubs
-        for s in east_spokes:
-            for h in east_hubs:
-                road_edges.append((s, h))
-                
-        # Inter-spoke road connections (West to West, East to East) to ensure robust routing and repositioning
-        west_spoke_edges = []
-        for i in range(len(west_spokes)):
-            for j in range(i+1, len(west_spokes)):
-                west_spoke_edges.append((west_spokes[i], west_spokes[j]))
-        self.rng.shuffle(west_spoke_edges)
-        road_edges.extend(west_spoke_edges) # Dense mesh in West
-        
-        east_spoke_edges = []
-        for i in range(len(east_spokes)):
-            for j in range(i+1, len(east_spokes)):
-                east_spoke_edges.append((east_spokes[i], east_spokes[j]))
-        self.rng.shuffle(east_spoke_edges)
-        road_edges.extend(east_spoke_edges) # Dense mesh in East
+
+        # Spoke-to-hub: each spoke connects to its 1–2 nearest hubs by road
+        spoke_nearest_hubs = {
+            6:  [2],       # Kashgar → Lanzhou
+            7:  [2],       # Hami → Lanzhou
+            8:  [1, 2],    # Korla → Urumqi, Lanzhou
+            9:  [2],       # Aksu → Lanzhou
+            10: [2],       # Hotan → Lanzhou
+            24: [21],      # Baoji → Xi'an
+            34: [40],      # Rizhao → Jinan
+            12: [4, 5],    # Nanjing → Hefei, Shanghai
+            13: [5],       # Suzhou → Shanghai
+            14: [5, 31],   # Hangzhou → Shanghai, Nanchang
+            32: [29],      # Mianyang → Chengdu
+            33: [30, 31],  # Guiyang → Chongqing, Nanchang
+            35: [29],      # Luzhou → Chengdu
+            36: [39],      # Qinzhou → Nanning
+            37: [38],      # Shenzhen → Guangzhou
+        }
+        for spoke, hubs in spoke_nearest_hubs.items():
+            for h in hubs:
+                road_edges.append((spoke, h))
+
+        # Spoke↔spoke road mesh within each corridor group
+        spoke_groups = {
+            "North":   [6, 7, 8, 9, 10, 24, 34],
+            "Central":  [12, 13],
+            "South":    [14, 32, 33, 35, 36, 37],
+        }
+        for group_spokes in spoke_groups.values():
+            for i in range(len(group_spokes)):
+                for j in range(i + 1, len(group_spokes)):
+                    road_edges.append((group_spokes[i], group_spokes[j]))
         
         arcs = []
         arc_id = 1
@@ -216,61 +221,67 @@ class RealInstanceGenerator:
             })
 
         # 4. Generate Specific OD Pairs (West to East)
-        # Keep exactly the same task logic, updated to match new IDs
-        # Previous origins: 6: Kashgar, 10: Hotan, 9: Aksu, 8: Korla, 7: Hami.
-        # Previous destinations: 15: Fuzhou, 14: Hangzhou, 13: Suzhou, 12: Nanjing, 11: Xuzhou.
-        # New origins: 11: Kashgar, 15: Hotan, 14: Aksu, 13: Korla, 12: Hami
-        # New destinations: 20: Fuzhou, 19: Hangzhou, 18: Suzhou, 17: Nanjing, 16: Xuzhou
-        
+        # All OD pairs route through the hub chain: origin→(road)→Lanzhou→(rail)→...→Shanghai→(road)→destination
+        # origin_hub=2 (Lanzhou) is the network entry hub; destination_hub=5 (Shanghai) is the exit hub
         tasks = [
-            {"o": 6, "d": 15, "multiplier": 150.0 / self.config.q_rail},  # OD 1
-            {"o": 10, "d": 14, "multiplier": 240.0 / self.config.q_rail}, # OD 2
-            {"o": 9, "d": 13, "multiplier": 360.0 / self.config.q_rail}, # OD 3
-            {"o": 8, "d": 12, "multiplier": 510.0 / self.config.q_rail}, # OD 4
-            {"o": 7, "d": 11, "multiplier": 690.0 / self.config.q_rail}, # OD 5
+            {"o": 6, "d": 13, "multiplier": 150.0 / self.config.q_rail},  # OD 1: Kashgar → Suzhou     [Central corridor]
+            {"o": 10, "d": 35, "multiplier": 240.0 / self.config.q_rail}, # OD 2: Hotan → Luzhou       [South corridor]
+            {"o": 9, "d": 38, "multiplier": 360.0 / self.config.q_rail}, # OD 3: Aksu → Guangzhou     [South corridor]
+            {"o": 8, "d": 39, "multiplier": 510.0 / self.config.q_rail}, # OD 4: Korla → Nanning      [South corridor]
+            {"o": 7, "d": 40, "multiplier": 300.0 / self.config.q_rail}, # OD 5: Hami → Jinan         [North corridor]
         ]
-        
+
         od_pairs = []
         max_required_time = 0.0
-        
+
         # Update T_max globally for this instance to 28 days (672 hours)
         self.config.T_max = 672.0
-        
+
         for idx, task in enumerate(tasks):
             o, d = task["o"], task["d"]
             demand = float(round(task["multiplier"] * self.config.q_rail, 0))
-            
-            est_dist = haversine_distance(node_defs[o]["lon"], node_defs[o]["lat"], node_defs[d]["lon"], node_defs[d]["lat"])
-            est_trip_time = est_dist / 60.0 
-            
-            time_window_start = float(round(10.0 + idx * 20.0 + self.rng.uniform(-5, 5), 1)) # Staggered starts
-            
-            # Geographical distance-based deadline
-            # Route: Origin(o) -> Hub(1) -> Hub(5) -> Destination(d)
-            t_road_1 = haversine_distance(node_defs[o]["lon"], node_defs[o]["lat"], node_defs[1]["lon"], node_defs[1]["lat"]) / self.config.road_speed
-            t_rail = haversine_distance(node_defs[1]["lon"], node_defs[1]["lat"], node_defs[5]["lon"], node_defs[5]["lat"]) / self.config.rail_speed
-            t_road_2 = haversine_distance(node_defs[5]["lon"], node_defs[5]["lat"], node_defs[d]["lon"], node_defs[d]["lat"]) / self.config.road_speed
-            
-            # We add 20 hours buffer for waiting and transfers
+
+            time_window_start = float(round(10.0 + idx * 20.0 + self.rng.uniform(-5, 5), 1))
+
+            # Geographical distance-based deadline via the hub chain
+            # Route: Origin(o) →(road)→ Lanzhou(2) →(rail chain)→ Shanghai(5) →(road)→ Destination(d)
+            # Use the longest corridor (South: Lanzhou→Chengdu→Chongqing→Wuhan→Nanchang→Hangzhou→Shanghai) as upper bound
+            t_road_1 = haversine_distance(node_defs[o]["lon"], node_defs[o]["lat"],
+                                          node_defs[2]["lon"], node_defs[2]["lat"]) / self.config.road_speed
+            t_rail = 0.0
+            chain = [2, 29, 30, 22, 31, 14, 5]  # South corridor hub chain
+            for k in range(len(chain) - 1):
+                t_rail += haversine_distance(node_defs[chain[k]]["lon"], node_defs[chain[k]]["lat"],
+                                             node_defs[chain[k+1]]["lon"], node_defs[chain[k+1]]["lat"]) / self.config.rail_speed
+            t_road_2 = haversine_distance(node_defs[5]["lon"], node_defs[5]["lat"],
+                                          node_defs[d]["lon"], node_defs[d]["lat"]) / self.config.road_speed
+
+            # 20 hours buffer for waiting and transfers
             t_expected = time_window_start + t_road_1 + t_rail + t_road_2 + 20.0
-            
-            # To ensure time_reliability is not exactly 1.0 but around 0.3-0.8, we don't give a massive buffer
-            # We just add a 12 hour buffer to the expected time.
+            # 12 hour additional buffer so time_reliability lands in [0.3, 0.8]
             time_window_end = float(round(t_expected + 12.0, 1))
-            
+
             max_required_time = max(max_required_time, time_window_end)
-            
+
             od_pairs.append({
                 "id": idx + 1,
                 "origin": o, "destination": d, "demand": demand,
-                "time_window_start": round(time_window_start, 1), "time_window_end": round(time_window_end, 1),
-                "time_window_start_fmt": float_to_day_time(time_window_start), "time_window_end_fmt": float_to_day_time(time_window_end),
+                "time_window_start": round(time_window_start, 1),
+                "time_window_end": round(time_window_end, 1),
+                "time_window_start_fmt": float_to_day_time(time_window_start),
+                "time_window_end_fmt": float_to_day_time(time_window_end),
                 "alpha_T_od": float(self.config.alpha_T),
-                "origin_hub": 1,
-                "destination_hub": 5,
-                "dist_road_1": round(haversine_distance(node_defs[o]["lon"], node_defs[o]["lat"], node_defs[1]["lon"], node_defs[1]["lat"]), 2),
-                "dist_rail": round(haversine_distance(node_defs[1]["lon"], node_defs[1]["lat"], node_defs[5]["lon"], node_defs[5]["lat"]), 2),
-                "dist_road_2": round(haversine_distance(node_defs[5]["lon"], node_defs[5]["lat"], node_defs[d]["lon"], node_defs[d]["lat"]), 2),
+                "origin_hub": 2,     # Lanzhou — network entry hub
+                "destination_hub": 5, # Shanghai — network exit hub
+                "dist_road_1": round(haversine_distance(node_defs[o]["lon"], node_defs[o]["lat"],
+                                                       node_defs[2]["lon"], node_defs[2]["lat"]), 2),
+                "dist_rail": round(sum(
+                    haversine_distance(node_defs[chain[k]]["lon"], node_defs[chain[k]]["lat"],
+                                       node_defs[chain[k+1]]["lon"], node_defs[chain[k+1]]["lat"])
+                    for k in range(len(chain) - 1)
+                ), 2),
+                "dist_road_2": round(haversine_distance(node_defs[5]["lon"], node_defs[5]["lat"],
+                                                       node_defs[d]["lon"], node_defs[d]["lat"]), 2),
             })
             
         for arc in arcs:

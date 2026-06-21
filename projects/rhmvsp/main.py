@@ -163,7 +163,10 @@ def run_solve(config: RHMVSPConfig, instance_path: str, logger: Logger):
 	# Load instance
 	with open(instance_path) as f:
 		instance = json.load(f)
-		
+
+	# Deep copy to avoid leaking instance-specific overrides back to caller
+	config = copy.deepcopy(config)
+	
 	if "config" in instance:
 		if "T_max" in instance["config"]:
 			config.T_max = instance["config"]["T_max"]

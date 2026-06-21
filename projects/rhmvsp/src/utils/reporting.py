@@ -122,8 +122,17 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
             arr = float_to_day_time(t['arrival_time'])
             n_veh = t.get('num_vehicles', 1)
             total_vehicles += n_veh
+            # Build full node path from arcs: [(i,j,mode), ...]
+            arcs = t.get('arcs', [])
+            if arcs:
+                node_path = [str(arcs[0]['i'])]
+                for a in arcs:
+                    node_path.append(str(a['j']))
+                path_str = "->".join(node_path)
+            else:
+                path_str = f"{t.get('origin', '')} -> {t.get('destination', '')}"
             lines.append(
-                f"  {t.get('od_pair', '')} | {t.get('origin', '')} -> {t.get('destination', '')} | {dep} to {arr} | {n_veh} vehicle(s)"
+                f"  {t.get('od_pair', '')} | {path_str} | {dep} to {arr} | {n_veh} vehicle(s)"
             )
         # Use num_vehicles_used (unique vehicles after stitching) instead of summing route segments
         unique_vehicles = solution.get('num_vehicles_used', total_vehicles)
