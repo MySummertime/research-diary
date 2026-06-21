@@ -226,9 +226,9 @@ class RealInstanceGenerator:
         tasks = [
             {"o": 6, "d": 13, "multiplier": 150.0 / self.config.q_rail},  # OD 1: Kashgar → Suzhou     [Central corridor]
             {"o": 10, "d": 35, "multiplier": 240.0 / self.config.q_rail}, # OD 2: Hotan → Luzhou       [South corridor]
-            {"o": 9, "d": 38, "multiplier": 360.0 / self.config.q_rail}, # OD 3: Aksu → Guangzhou     [South corridor]
-            {"o": 8, "d": 39, "multiplier": 510.0 / self.config.q_rail}, # OD 4: Korla → Nanning      [South corridor]
-            {"o": 7, "d": 40, "multiplier": 300.0 / self.config.q_rail}, # OD 5: Hami → Jinan         [North corridor]
+            {"o": 9, "d": 37, "multiplier": 360.0 / self.config.q_rail}, # OD 3: Aksu → Shenzhen     [South corridor]
+            {"o": 8, "d": 36, "multiplier": 510.0 / self.config.q_rail}, # OD 4: Korla → Qinzhou      [South corridor]
+            {"o": 7, "d": 34, "multiplier": 300.0 / self.config.q_rail}, # OD 5: Hami → Rizhao       [North corridor]
         ]
 
         od_pairs = []
