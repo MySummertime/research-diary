@@ -38,14 +38,14 @@ class Visualizer:
 			"node": {
 				"hub": {
 					"color": get_color_by_key(self.network_colors, "HUB"),
-					"shape": PlotProperties.NODE_SHAPE,
-					"size": PlotProperties.NODE_SIZE_HUB,
-					"edgecolor": PlotProperties.MARKER_EDGE_COLOR,
-					"linewidth": PlotProperties.NODE_LINE_WIDTH,
-				},
-				"non_hub": {
-					"color": get_color_by_key(self.network_colors, "NON_HUB"),
-					"shape": PlotProperties.NODE_SHAPE,
+				"shape": PlotProperties.NODE_SHAPE_HUB,
+				"size": PlotProperties.NODE_SIZE_HUB,
+				"edgecolor": PlotProperties.MARKER_EDGE_COLOR,
+				"linewidth": PlotProperties.NODE_LINE_WIDTH,
+			},
+			"non_hub": {
+				"color": get_color_by_key(self.network_colors, "NON_HUB"),
+				"shape": PlotProperties.NODE_SHAPE_SPOKE,
 					"size": PlotProperties.NODE_SIZE_SPOKE,
 					"edgecolor": PlotProperties.MARKER_EDGE_COLOR,
 					"linewidth": PlotProperties.NODE_LINE_WIDTH,
@@ -187,7 +187,7 @@ class Visualizer:
 				if patches:
 					for p in patches:
 						p.set_capstyle("butt")
-						p.set_linestyle((0, (8, 8)))
+						p.set_linestyle(PlotProperties.DASH_PATTERN_RAIL)
 
 		transfer_node_ids = set(network.transfer_nodes.keys())
 		all_node_ids = set(network.graph.nodes())
@@ -219,8 +219,8 @@ class Visualizer:
 		ax.set_ylabel(PlotProperties.LABEL_Y_AXIS, fontsize=PlotProperties.FONT_SIZE_AXIS_LABEL, fontweight=PlotProperties.FONT_WEIGHT_BOLD, fontfamily=PlotProperties.FONT_FAMILY)
 
 		legend_handles = [
-			Line2D([0], [0], marker=PlotProperties.NODE_SHAPE, color=PlotProperties.LEGEND_MARKER_FACE_WHITE, label=PlotProperties.LABEL_LEGEND_HUB, markerfacecolor=style_hub["color"], markeredgecolor=style_hub["edgecolor"], markersize=PlotProperties.LEGEND_MARKER_SIZE_HUB, markeredgewidth=PlotProperties.LEGEND_MARKER_EDGE_WIDTH_HUB),
-			Line2D([0], [0], marker=PlotProperties.NODE_SHAPE, color=PlotProperties.LEGEND_MARKER_FACE_WHITE, label=PlotProperties.LABEL_LEGEND_SPOKE, markerfacecolor=style_non["color"], markeredgecolor=style_non["edgecolor"], markersize=PlotProperties.LEGEND_MARKER_SIZE_SPOKE, markeredgewidth=PlotProperties.LEGEND_MARKER_EDGE_WIDTH_SPOKE),
+			Line2D([0], [0], marker=PlotProperties.NODE_SHAPE_HUB, color=PlotProperties.LEGEND_MARKER_FACE_WHITE, label=PlotProperties.LABEL_LEGEND_HUB, markerfacecolor=style_hub["color"], markeredgecolor=style_hub["edgecolor"], markersize=PlotProperties.LEGEND_MARKER_SIZE_HUB, markeredgewidth=PlotProperties.LEGEND_MARKER_EDGE_WIDTH_HUB),
+			Line2D([0], [0], marker=PlotProperties.NODE_SHAPE_SPOKE, color=PlotProperties.LEGEND_MARKER_FACE_WHITE, label=PlotProperties.LABEL_LEGEND_SPOKE, markerfacecolor=style_non["color"], markeredgecolor=style_non["edgecolor"], markersize=PlotProperties.LEGEND_MARKER_SIZE_SPOKE, markeredgewidth=PlotProperties.LEGEND_MARKER_EDGE_WIDTH_SPOKE),
 			Line2D([0], [0], color=get_color_by_key(self.network_colors, "RAILWAY"), lw=PlotProperties.LINE_WIDTH_RAIL, linestyle=PlotProperties.STYLE_RAIL, label=PlotProperties.LABEL_LEGEND_RAIL),
 			Line2D([0], [0], color=get_color_by_key(self.network_colors, "ROAD"), lw=PlotProperties.LINE_WIDTH_ROAD, linestyle=PlotProperties.STYLE_ROAD, label=PlotProperties.LABEL_LEGEND_ROAD),
 		]
@@ -523,7 +523,7 @@ class Visualizer:
 			Line2D(
 				[0],
 				[0],
-				marker=PlotProperties.NODE_SHAPE,
+				marker=PlotProperties.NODE_SHAPE_HUB,
 				color=PlotProperties.LEGEND_MARKER_FACE_WHITE,
 				label=PlotProperties.LABEL_LEGEND_HUB,
 				markerfacecolor=style_hub["color"],
@@ -537,7 +537,7 @@ class Visualizer:
 			Line2D(
 				[0],
 				[0],
-				marker=PlotProperties.NODE_SHAPE,
+				marker=PlotProperties.NODE_SHAPE_SPOKE,
 				color=PlotProperties.LEGEND_MARKER_FACE_WHITE,
 				label=PlotProperties.LABEL_LEGEND_SPOKE,
 				markerfacecolor=style_non["color"],

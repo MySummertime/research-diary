@@ -46,7 +46,7 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
     lines.append(f"    └─ empty drive:    ¥{solution.get('reposition_cost', 0):>12,.2f}")
     lines.append(f"    └─ preparation:    ¥{solution.get('total_prep_cost', 0):>12,.2f}")
     lines.append(f"    └─ vehicle idle:   ¥{solution.get('idle_cost', 0):>12,.2f}")
-    lines.append(f"    └─ repo delay:     ¥{solution.get('repo_extra_penalty', 0):>12,.2f}")
+    lines.append(f"    └─ repo unmet:     ¥{solution.get('repo_extra_penalty', 0):>12,.2f}")
     shortfall = solution.get('unmet_penalty', 0) - solution.get('repo_extra_penalty', 0)
     lines.append(f"  Unmet penalty:       ¥{shortfall:>12,.2f}")
     lines.append("")
@@ -84,7 +84,7 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
                 if 'raw_risk' in od_r and 'raw_time' in od_r:
                     r_str += f" [Raw Risk: {od_r['raw_risk']:.2f}, Raw Time: {od_r['raw_time']:.2f}h]"
             lines.append(
-                f"  {od_name:<8s} | {r_str} | Batches={od_r.get('num_batches', 0)} | Binding={od_r.get('binding','N/A')}"
+                f"  {od_name:<8s} | {r_str} | Batches={od_r.get('num_batches', 0)} | Binding={od_r.get('binding','N/A')} | Deliver={od_r.get('delivery_ratio', 1.0):.0%}"
             )
         lines.append("")
 
@@ -101,8 +101,8 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
     repo_events = solution.get("reposition_events", [])
     if repo_events:
         lines.append("--- Reposition Details ---")
-        lines.append(f"  Total repositions: {len(repo_events)} | Empty: ¥{solution.get('reposition_cost', 0):,.2f} | Idle: ¥{solution.get('repo_pure_idle', 0):,.2f} | Opp: ¥{solution.get('repo_extra_penalty', 0):,.2f}")
-        lines.append(f"  {'Veh':>4s} | {'From':>10s} | {'To':>10s} | {'Dep-Node':>8s} | {'Arr-Node':>8s} | {'Time':>16s} | {'Dist':>8s} | {'Empty':>10s} | {'Idle':>10s} | {'Opp':>10s}")
+        lines.append(f"  Total repositions: {len(repo_events)} | Empty: ¥{solution.get('reposition_cost', 0):,.2f} | Idle: ¥{solution.get('repo_pure_idle', 0):,.2f} | Unmet: ¥{solution.get('repo_extra_penalty', 0):,.2f}")
+        lines.append(f"  {'Veh':>4s} | {'From':>10s} | {'To':>10s} | {'Dep-Node':>8s} | {'Arr-Node':>8s} | {'Time':>16s} | {'Dist':>8s} | {'Empty':>10s} | {'Idle':>10s} | {'Unmet':>10s}")
         lines.append(f"  {'-'*4:>4s} | {'-'*10:>10s} | {'-'*10:>10s} | {'-'*8:>8s} | {'-'*8:>8s} | {'-'*16:>16s} | {'-'*8:>8s} | {'-'*10:>10s} | {'-'*10:>10s} | {'-'*10:>10s}")
         for r in repo_events:
             r_dep = float_to_day_time(r['from_arrival'])
