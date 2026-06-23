@@ -79,9 +79,17 @@ class PricingProblem:
 
     def _get_transfer_time(self, tn, alpha_T: float) -> float:
         """
-        Transfer time is fixed to 1.0 hour for unloading from road to rail.
+        Transfer time from the instance transfer node definition.
+        Uses the deterministic-equivalent at alpha_T for consistency with
+        the reliability evaluator's fuzzy accumulation.
+
+        Transfer trapezoid: (a, b, c, d) → det_equiv = (2α-1)*d + 2(1-α)*c  when α ≥ 0.5
         """
-        return 1.0
+        a, b, c, d = tn.transfer_time_a, tn.transfer_time_b, tn.transfer_time_c, tn.transfer_time_d
+        if alpha_T < 0.5:
+            return a + 2.0 * alpha_T * (b - a)
+        else:
+            return (2.0 * alpha_T - 1.0) * d + 2.0 * (1.0 - alpha_T) * c
 
     def solve(self, origin: int, destination: int, od_idx: int, duals: dict,
               od_E: float, od_L: float, alpha_T: float, branch_constraints: list = None,

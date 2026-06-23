@@ -34,7 +34,8 @@ class RHMVSPConfig:
 	# Cost parameters calibrated from 12306 official pricing:
 	# Route: Ürümqi South → Chengdu (~3,334 km), 整车 (full carload)
 	# 根据《绿氨产业_国信证券》第13页，公路运输成本约为0.8元/吨/公里
-	c_road: float = 0.8    # Road: ¥/ton·km (market reference, tanker truck)
+	# 根据黄丽霞(2017)论文校准: 公路运费¥0.49/吨·km, 考虑HazMat特殊车辆溢价
+	c_road: float = 0.55    # Road: ¥/ton·km (HazMat tanker, calibrated to literature)
 	c_deploy_road: float = 0.0  # Road vehicle deployment fixed cost (自有车为0)
 	c_deploy_rent: float = 1000.0 # Rented vehicle deployment fixed cost (外租车起步价)
 	c_rent_per_hour: float = 30.0 # Rented vehicle hourly rate (外租车小时租金)
@@ -45,14 +46,15 @@ class RHMVSPConfig:
 	# ============================================================
 	c_rail_base_fixed: float = 16.30  # 发到基价 (¥/ton)
 	c_rail_base_var: float = 0.0855  # 运行基价 (¥/ton·km)
-	# 根据《铁路货物运价规则》第22条，液化气体等危险货物运价率加 50%
-	c_rail_hazmat_markup: float = 0.50  # 危险品加成率 (50% markup for hazmat)
+	# 黄丽霞(2017): Class 3易燃=1.5x, Class 6有毒=2.0x, Class 8腐蚀=1.5x
+	# 取1.5x作为基准(50% markup), 对应液化气体类危化品
+	c_rail_hazmat_markup: float = 1.50  # 危险品加成率 (150% of base, i.e. 1.5x multiplier)
 	c_rail_fund: float = 0.033  # 铁路建设基金 (¥/ton·km)
 	
 	# 按照要求，运输商仅承担运费和转运费，不承担铁路系统的固定发车调度费
 	c_deploy_rail: float = 0.0  # Rail wagon group deployment fixed cost (¥/group)
-	# c_transfer = ¥37.75/ton (发站装车 + 到站卸车, hazmat防爆要求)
-	c_transfer: float = 37.75  # Unit transfer/handling cost (¥/ton)
+	# 黄丽霞(2017): 转运费¥500/车(60t)≈¥8.3/吨; HazMat防爆要求加成
+	c_transfer: float = 25.0  # Unit transfer/handling cost (¥/ton)
 	# 同样，转运设施启动费等 resource 成本也应由基建方承担，予以剔除
 	c_hub: float = 0.0  # Transfer facility setup cost (¥)
 	c_unmet_penalty: float = 5000.0 # Base opportunity cost for unfulfilled demand (¥/ton)
@@ -72,7 +74,7 @@ class RHMVSPConfig:
 
 	# ============================================================
 	# Fuzzy Variable Parameters (§3.2)	# ============================================================
-	road_speed: float = 60.0  # Road speed (km/h)
+	road_speed: float = 80.0  # Road speed (km/h, Huang 2017: 80 km/h for HazMat tanker)
 	rail_speed: float = 80.0  # Rail speed (km/h)
 	# Trapezoidal fuzzy time ratios for rail: (a_ratio, b_ratio, c_ratio, d_ratio)
 	# Rail time ~ Trap(base*a, base*b, base*c, base*d) with plateau [b,c]
@@ -83,10 +85,10 @@ class RHMVSPConfig:
 	# Bidirectional label correction overlap ratio (§4.5)
 	pricing_overlap_ratio: float = 0.75  # each direction covers this fraction of time span
 
-	prep_time_hours: float = 2.0  # Empty vehicle preparation time (inspection, cleaning, driver rest)
-	dispatch_buffer_hours: float = 1.0  # Cross-station dispatch buffer
-	time_window_end_buffer_hours: float = 3.0  # Buffer for computing OD delivery deadline from expected arrival
-	c_prep_reposition: float = 200.0  # Fixed preparation cost per reposition event (¥)
+	prep_time_hours: float = 4.0  # Empty vehicle preparation time (inspection, cleaning, driver rest)
+	dispatch_buffer_hours: float = 2.0  # Cross-station dispatch buffer
+	time_window_end_buffer_hours: float = 6.0  # Buffer for computing OD delivery deadline from expected arrival
+	c_prep_reposition: float = 300.0  # Fixed preparation cost per reposition event (¥)
 
 	# ============================================================
 	# Time Uncertainty Parameter

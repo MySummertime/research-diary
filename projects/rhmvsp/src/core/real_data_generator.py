@@ -72,12 +72,13 @@ class RealInstanceGenerator:
             8:  {"code": "KRL",  "name": "Korla",      "type": "Spoke", "lon": 86.17,  "lat": 41.73, "region": "North"},   # Xinjiang
             9:  {"code": "AKU",  "name": "Aksu",       "type": "Spoke", "lon": 80.27,  "lat": 41.17, "region": "North"},   # Xinjiang
             10: {"code": "HTN",  "name": "Hotan",      "type": "Spoke", "lon": 79.92,  "lat": 37.11, "region": "North"},   # Xinjiang
-            # 5 Yangtze River Delta destinations (hazmat consumption)
+            # 3 Yangtze River Delta destinations
             13: {"code": "SZV",  "name": "Suzhou",     "type": "Spoke", "lon": 120.59, "lat": 31.30, "region": "YZR"},     # Jiangsu — chemical fibre parks
             41: {"code": "NTG",  "name": "Nantong",    "type": "Spoke", "lon": 120.86, "lat": 32.01, "region": "YZR"},     # Jiangsu — new chemical zone
             47: {"code": "WUX",  "name": "Wuxi",       "type": "Spoke", "lon": 120.30, "lat": 31.57, "region": "YZR"},     # Jiangsu — petrochemical base
-            48: {"code": "NGB",  "name": "Ningbo",     "type": "Spoke", "lon": 121.55, "lat": 29.87, "region": "YZR"},     # Zhejiang — Zhenhai Refinery
-            49: {"code": "JHA",  "name": "Jiaxing",    "type": "Spoke", "lon": 120.76, "lat": 30.75, "region": "YZR"},     # Zhejiang — Shanghai-HZ corridor
+            # 2 Pearl River Delta destinations
+            37: {"code": "SZX",  "name": "Shenzhen",   "type": "Spoke", "lon": 114.07, "lat": 22.55, "region": "PRD"},     # Guangdong — port hazmat
+            42: {"code": "HUZ",  "name": "Huizhou",    "type": "Spoke", "lon": 114.42, "lat": 23.11, "region": "PRD"},     # Guangdong — chemical zone
 
         }
 
@@ -102,6 +103,10 @@ class RealInstanceGenerator:
             (44, 38),      # Changsha → Guangzhou [京广线]
             # 郑渝高铁: Zhengzhou → Chongqing (direct)
             (3, 30),       # Zhengzhou → Chongqing [郑渝高铁 2022]
+            # 郑州→东部长三角: Zhengzhou → Hefei / Nanjing / Shanghai (经徐州枢纽)
+            (3, 4),        # Zhengzhou → Hefei     [京广→合蚌高铁]
+            (3, 12),       # Zhengzhou → Nanjing   [陇海→京沪线 经徐州]
+            (3, 5),        # Zhengzhou → Shanghai  [陇海→京沪线 经徐州]
             # 合武线/合宁线/沪宁线: Wuhan → Hefei → Nanjing → Shanghai
             (22, 4),       # Wuhan → Hefei        [合武线]
             (4, 12),       # Hefei → Nanjing      [合宁线]
@@ -129,6 +134,8 @@ class RealInstanceGenerator:
             (45, 38),      # Fuzhou → Guangzhou   [杭深线]
             # 京九线/广深线
             (38, 31),      # Guangzhou → Nanchang [京九线/广深线]
+            # 京九线/广深线: Nanchang → Shenzhen
+            (31, 37),      # Nanchang → Shenzhen  [京九线/广深线]
             # 武九线: Wuhan → Nanchang (via Jiujiang)
             (22, 31),      # Wuhan → Nanchang    [武九线]
         ]
@@ -141,16 +148,17 @@ class RealInstanceGenerator:
         spoke_nearest_hubs = {
             # Xinjiang origins → Urumqi (sole rail entry)
             6:  [1],       # Kashgar → Urumqi
-            7:  [1],       # Hami → Urumqi (no direct road to Lanzhou)
-            8:  [1],       # Korla → Urumqi (no direct road to Lanzhou)
+            7:  [1],       # Hami → Urumqi
+            8:  [1],       # Korla → Urumqi
             9:  [1],       # Aksu → Urumqi
             10: [1],       # Hotan → Urumqi
             # Yangtze River Delta destinations
             13: [5],       # Suzhou → Shanghai
             41: [5],       # Nantong → Shanghai
             47: [5, 12],   # Wuxi → Shanghai, Nanjing
-            48: [14],      # Ningbo → Hangzhou
-            49: [5, 14],   # Jiaxing → Shanghai, Hangzhou
+            # Pearl River Delta destinations
+            37: [38],      # Shenzhen → Guangzhou
+            42: [38],      # Huizhou → Guangzhou
         }
         for spoke, hubs in spoke_nearest_hubs.items():
             for h in hubs:
@@ -159,7 +167,8 @@ class RealInstanceGenerator:
         # Spoke↔spoke road mesh within each corridor group
         spoke_groups = {
             "North": [6, 7, 8, 9, 10],    # Xinjiang origins
-            "YZR":   [13, 41, 47, 48, 49], # Yangtze River Delta destinations
+            "YZR":   [13, 41, 47],         # Yangtze River Delta destinations
+            "PRD":   [37, 42],             # Pearl River Delta destinations
         }
         for group_spokes in spoke_groups.values():
             for i in range(len(group_spokes)):
@@ -225,8 +234,8 @@ class RealInstanceGenerator:
         for hub in hub_ids:
             gamma_val = float(round(self.rng.uniform(0.001, 0.01), 5))
             transfer_nodes.append({
-                "node_id": hub, "transfer_time_a": 0.5, "transfer_time_b": 1.0,
-                "transfer_time_c": 2.0, "transfer_time_d": 4.0,
+                "node_id": hub, "transfer_time_a": 4.0, "transfer_time_b": 8.0,
+                "transfer_time_c": 12.0, "transfer_time_d": 16.0,
                 "gamma": gamma_val,
                 "unit_transfer_cost": float(self.config.c_transfer),
                 "facility_cost": float(self.config.c_hub),
@@ -237,11 +246,11 @@ class RealInstanceGenerator:
         # origin_hub=2 (Lanzhou) is the network entry hub
         # destination_hub depends on which hub the destination spoke connects to
         tasks = [
-            {"o": 6,  "d": 13, "dh": 5,  "multiplier": 150.0 / self.config.q_rail},  # OD 1: Kashgar → Suzhou    [→Shanghai hub 5]
-            {"o": 10, "d": 41, "dh": 5,  "multiplier": 240.0 / self.config.q_rail},  # OD 2: Hotan → Nantong     [→Shanghai hub 5]
-            {"o": 9,  "d": 47, "dh": 5,  "multiplier": 360.0 / self.config.q_rail},  # OD 3: Aksu → Wuxi        [→Shanghai hub 5]
-            {"o": 8,  "d": 48, "dh": 14, "multiplier": 510.0 / self.config.q_rail},  # OD 4: Korla → Ningbo      [→Hangzhou hub 14]
-            {"o": 7,  "d": 49, "dh": 14, "multiplier": 300.0 / self.config.q_rail},  # OD 5: Hami → Jiaxing      [→Hangzhou hub 14]
+            {"o": 6,  "d": 13, "dh": 5,  "multiplier": 150.0 / self.config.q_rail},  # OD 1: Kashgar → Suzhou    [→Shanghai hub 5]  (北 corridor)
+            {"o": 10, "d": 41, "dh": 5,  "multiplier": 240.0 / self.config.q_rail},  # OD 2: Hotan → Nantong     [→Shanghai hub 5]  (北 corridor)
+            {"o": 9,  "d": 47, "dh": 5,  "multiplier": 360.0 / self.config.q_rail},  # OD 3: Aksu → Wuxi        [→Shanghai hub 5]  (北 corridor)
+            {"o": 8,  "d": 37, "dh": 38, "multiplier": 320.0 / self.config.q_rail},  # OD 4: Korla → Shenzhen   [→Guangzhou hub 38] (南 corridor)
+            {"o": 7,  "d": 42, "dh": 38, "multiplier": 270.0 / self.config.q_rail},  # OD 5: Hami → Huizhou     [→Guangzhou hub 38] (南 corridor)
         ]
 
         od_pairs = []
@@ -259,10 +268,8 @@ class RealInstanceGenerator:
                                           node_defs[2]["lon"], node_defs[2]["lat"]) / self.config.road_speed
             t_rail = 0.0
             rail_chains = {
-                5:  [2, 21, 3, 22, 4, 5],       # Lanzhou → … → Shanghai
-                14: [2, 21, 3, 22, 4, 12, 14],   # Lanzhou → … → Nanjing → Hangzhou
-                29: [2, 29],
-                38: [2, 29, 30, 39, 38],
+                5:  [2, 21, 3, 22, 4, 5],       # Lanzhou → Xi'an → … → Shanghai (北 corridor)
+                38: [2, 29, 30, 33, 38],          # Lanzhou → Chengdu → … → Guiyang → Guangzhou (南 corridor)
             }
             chain = rail_chains.get(dh, [2, 29, 30, 39, 38, 31, 14, 5])
             for k in range(len(chain) - 1):
@@ -270,27 +277,25 @@ class RealInstanceGenerator:
                                              node_defs[chain[k+1]]["lon"], node_defs[chain[k+1]]["lat"]) / self.config.rail_speed
             t_road_2 = haversine_distance(node_defs[dh]["lon"], node_defs[dh]["lat"],
                                           node_defs[d]["lon"], node_defs[d]["lat"]) / self.config.road_speed
-            t_travel = t_road_1 + t_rail + t_road_2
+            # Physical travel time (road + rail only)
+            t_travel_raw = t_road_1 + t_rail + t_road_2
+            # Estimated overhead: transfers + rail waiting.
+            # Tuned so that t_travel ≈ actual raw_time from reliability evaluator.
+            t_overhead = 73.0
+            t_travel = t_travel_raw + t_overhead
 
-            # --- Demand- and distance-driven time window ---
-            # Vehicle-loads needed for this OD
-            num_loads = max(1, int(np.ceil(demand / self.config.q_road)))
-            # R_time = uncertain_measure_leq(tw_end) for fuzzy arrival.
-            # z_d ≈ 1.9 × t_travel (empirical from raw_time ratios).
-            # For R_time in [alpha_T, 1.0): tw_width ∈ [1.56*t, 1.9*t]
-            # Use 1.75 to target R_time ≈ 0.85-0.95 after 24h rounding.
-            base_factor = 2.5
-            demand_bonus = 0.03 * min(num_loads, 20) / 20  # small demand scaling
-            tw_width = t_travel * (base_factor + demand_bonus)
-            # Round up to next 24h multiple
-            tw_width = float(np.ceil(tw_width / 24.0) * 24)
-
-            # --- Time windows aligned to 24h multiples ---
-            # Round start to next 24h multiple after road1 pickup + cargo ready
-            raw_start = t_road_1 + 10.0 + idx * 24.0
+            # --- Per-OD delivery deadline ---
+            # Tight deadline: start + 1.0×t_travel (estimated raw time).
+            # The fuzzy upper bound z_d ≈ 1.3×raw exceeds this, giving R_time < 1.0.
+            # After 24h rounding, window ≈ raw_time + up to 23h buffer (feasible).
+            raw_start = t_road_1 + 10.0 + idx * 6.0
             time_window_start = float(np.ceil(raw_start / 24.0) * 24)
-            # tw_width already rounded to 24h multiple above
-            time_window_end = float(time_window_start + tw_width)
+            time_window_end = float(np.ceil((time_window_start + t_travel * 1.0) / 24.0) * 24)
+            # Ensure window is at least as wide as physical travel time + 24h
+            min_end = time_window_start + t_travel_raw + 24
+            if time_window_end < min_end:
+                time_window_end = float(np.ceil(min_end / 24.0) * 24)
+            tw_width = time_window_end - time_window_start
 
             max_required_time = max(max_required_time, time_window_end)
 
@@ -376,7 +381,7 @@ class RealInstanceGenerator:
             },
             "od_pairs": od_pairs,
             "railway_timetable": railway_timetable,
-            "hub_fleet_size": {"1": 40, "5": 10, "14": 10},  # per-hub fleet (disabled for now)
+            "hub_fleet_size": {"1": 40, "5": 10, "38": 24},  # per-hub fleet (disabled for now)
             "num_vehicles_west": 46,
             "num_vehicles_east": 46,
             "config": {
