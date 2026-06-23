@@ -280,21 +280,19 @@ class RealInstanceGenerator:
             # Physical travel time (road + rail only)
             t_travel_raw = t_road_1 + t_rail + t_road_2
             # Estimated overhead: transfers + rail waiting.
-            # Tuned so that t_travel ≈ actual raw_time from reliability evaluator.
-            t_overhead = 73.0
+            # The reliability evaluator now includes rail waiting in z_d.
+            # 60h gives enough slack for all ODs to be feasible while keeping
+            # R_time < 1.0 for most ODs.
+            t_overhead = 60.0
             t_travel = t_travel_raw + t_overhead
 
             # --- Per-OD delivery deadline ---
-            # Tight deadline: start + 1.0×t_travel (estimated raw time).
-            # The fuzzy upper bound z_d ≈ 1.3×raw exceeds this, giving R_time < 1.0.
-            # After 24h rounding, window ≈ raw_time + up to 23h buffer (feasible).
+            # Deadline = start + t_travel, rounded to 12h grid for nicer windows.
+            # The fuzzy upper bound z_d (now including rail waiting) ≈ 1.3×raw_time,
+            # which should exceed the deadline, giving R_time < 1.0.
             raw_start = t_road_1 + 10.0 + idx * 6.0
-            time_window_start = float(np.ceil(raw_start / 24.0) * 24)
-            time_window_end = float(np.ceil((time_window_start + t_travel * 1.0) / 24.0) * 24)
-            # Ensure window is at least as wide as physical travel time + 24h
-            min_end = time_window_start + t_travel_raw + 24
-            if time_window_end < min_end:
-                time_window_end = float(np.ceil(min_end / 24.0) * 24)
+            time_window_start = float(np.ceil(raw_start / 12.0) * 12)
+            time_window_end = float(np.ceil((time_window_start + t_travel) / 12.0) * 12)
             tw_width = time_window_end - time_window_start
 
             max_required_time = max(max_required_time, time_window_end)
@@ -351,22 +349,28 @@ class RealInstanceGenerator:
                 for train_num in range(2):
                     base_hour = 6 + train_num * 12
                     
-                    # Staggered departure with +/- 0.5h uniform jitter
-                    dep_h = (day - 1) * 24 + base_hour + offset + self.rng.uniform(-0.5, 0.5)
-                    arr_h = dep_h + trip_time
+                    # S2-1: Compute separate offsets for forward (u→v) and reverse (v→u) directions.
+                    # Forward offset based on u's position, reverse offset based on v's position.
+                    offset_fwd = haversine_distance(node_defs[1]["lon"], node_defs[1]["lat"], node_defs[u]["lon"], node_defs[u]["lat"]) / self.config.rail_speed + 4.0 if u != 1 else 0.0
+                    offset_rev = haversine_distance(node_defs[1]["lon"], node_defs[1]["lat"], node_defs[v]["lon"], node_defs[v]["lat"]) / self.config.rail_speed + 4.0 if v != 1 else 0.0
                     
-                    # Both directions
+                    # Forward: u → v
+                    dep_h_fwd = (day - 1) * 24 + base_hour + offset_fwd + self.rng.uniform(-0.5, 0.5)
+                    arr_h_fwd = dep_h_fwd + trip_time
                     railway_timetable.append({
                         "train_id": train_id_counter, "origin_hub": u, "destination_hub": v,
-                        "departure_time": round(dep_h, 2), "arrival_time": round(arr_h, 2),
-                        "dep_fmt": float_to_day_time(dep_h), "arr_fmt": float_to_day_time(arr_h)
+                        "departure_time": round(dep_h_fwd, 2), "arrival_time": round(arr_h_fwd, 2),
+                        "dep_fmt": float_to_day_time(dep_h_fwd), "arr_fmt": float_to_day_time(arr_h_fwd)
                     })
                     train_id_counter += 1
                     
+                    # Reverse: v → u
+                    dep_h_rev = (day - 1) * 24 + base_hour + offset_rev + self.rng.uniform(-0.5, 0.5)
+                    arr_h_rev = dep_h_rev + trip_time
                     railway_timetable.append({
                         "train_id": train_id_counter, "origin_hub": v, "destination_hub": u,
-                        "departure_time": round(dep_h, 2), "arrival_time": round(arr_h, 2),
-                        "dep_fmt": float_to_day_time(dep_h), "arr_fmt": float_to_day_time(arr_h)
+                        "departure_time": round(dep_h_rev, 2), "arrival_time": round(arr_h_rev, 2),
+                        "dep_fmt": float_to_day_time(dep_h_rev), "arr_fmt": float_to_day_time(arr_h_rev)
                     })
                     train_id_counter += 1
 

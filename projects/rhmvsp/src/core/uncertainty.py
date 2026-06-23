@@ -279,13 +279,13 @@ def _population_exposure_multiplier(hour_of_day: float, risk_scale: float = 1.0)
     if h < 6.0:
         raw = 0.5
     elif h < 8.0:
-        raw = 0.5 + 0.25 * ((h - 6.0) / 2.0)
+        raw = 0.5 + 0.5 * ((h - 6.0) / 2.0)  # Linear from 0.5→1.0 over 06:00-08:00
     elif h < 20.0:
         raw = 1.0
     elif h < 22.0:
-        raw = 1.0 - 0.25 * ((h - 20.0) / 2.0)
+        raw = 1.0 - 0.2 * ((h - 20.0) / 2.0)  # Linear from 1.0→0.8 over 20:00-22:00
     else:
-        raw = 0.75 - 0.25 * ((h - 22.0) / 2.0)
+        raw = 0.8 - 0.3 * ((h - 22.0) / 2.0)  # Linear from 0.8→0.5 over 22:00-06:00
     return 1.0 + risk_scale * (raw - 1.0)
 
 
@@ -354,6 +354,16 @@ class UncertaintyEngine:
 
         if mode == 1:  # Road: triangular equivalent (c=d)
             base = distance / self.config.road_speed
+            # S2-1: Use road_fuzzy_time_ratio from config if available,
+            # otherwise fall back to delta_T-based dynamic computation.
+            road_ratios = getattr(self.config, 'road_fuzzy_time_ratio', None)
+            if road_ratios:
+                return TrapezoidalFuzzy(
+                    a=base * road_ratios[0],
+                    b=base * road_ratios[1],
+                    c=base * road_ratios[2],
+                    d=base * road_ratios[3],
+                )
             a_ratio = max(0.1, 1.0 - 0.2 * scale)
             c_ratio = 1.0 + 0.5 * scale
             return TrapezoidalFuzzy(

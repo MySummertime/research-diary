@@ -44,7 +44,7 @@ def sample_scenario(
 
 # ── internal helpers ──────────────────────────────────────────────────────────
 
-Q_ROAD = 20.0  # Road vehicle capacity (tons) — from config.py
+Q_ROAD = 30.0  # Road vehicle capacity (tons) — from config.py
 
 
 def _perturb_demand(

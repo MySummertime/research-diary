@@ -163,10 +163,17 @@ class ReliabilityAnalyzer:
                     arrival_upper += trap_transfer.d
                     arrival_lower += trap_transfer.a
                     transfer_idx += 1
-            # Rail waiting window
+            # Rail waiting window: must be included in z_d so that the fuzzy
+            # upper bound correctly accounts for timetable waiting.
             if mode == 2:
+                wait_time = max(0.0, arc.e_window - arrival_upper)
                 arrival_upper = max(arrival_upper, arc.e_window)
                 arrival_lower = max(arrival_lower, arc.e_window)
+                # Add deterministic wait to all fuzzy components (it's a fixed offset)
+                z_a += wait_time
+                z_b += wait_time
+                z_c += wait_time
+                z_d += wait_time
             # Transport time: use engine for dynamic fuzzy parameters (#9)
             # This ensures config.rail_fuzzy_time_ratio and config.delta_T
             # are reflected in the evaluation, not just in pricing.

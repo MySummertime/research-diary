@@ -89,6 +89,8 @@ def run_demo(config: RHMVSPConfig, size: str, logger: Logger):
 	"""Run demo with a synthetic instance of specified size."""
 	timer = Timer()
 	timer.start()
+	# S2-1: Deep copy config to avoid mutating caller's config (consistent with run_solve)
+	config = copy.deepcopy(config)
 	logger.info("=" * 60)
 	logger.info(f"RHMVSP Demo Mode - {size.upper()} Synthetic Instance")
 	logger.info("=" * 60)
@@ -276,7 +278,6 @@ def main():
 
 	# Initialize configuration
 	config = RHMVSPConfig()
-	config.solver_backend = args.solver
 	config.solver_name = args.solver
 	config.time_limit = args.time_limit
 	config.seed = args.seed

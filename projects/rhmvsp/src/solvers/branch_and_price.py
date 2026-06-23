@@ -272,6 +272,11 @@ class BranchAndPriceController:
         """Integrality check for all integer variables: column dispatch (lambda) and hub activation (g_vars)."""
         tol = self.config.tolerance
         for col in node.columns:
+            # S1-1: Check lp_value_own and lp_value_rent separately — each must be integer.
+            for attr in ("lp_value_own", "lp_value_rent"):
+                val = getattr(col, attr, None)
+                if val is not None and tol < abs(val - round(val)) < 1.0 - tol:
+                    return False
             if hasattr(col, "lp_value") and tol < abs(col.lp_value - round(col.lp_value)) < 1.0 - tol:
                 return False
         if hasattr(self.mp, "hub_values"):
@@ -352,10 +357,13 @@ class BranchAndPriceController:
                 if prev_mode != 0 and prev_mode != arc.mode:
                     tn = self.network.transfer_nodes.get(arc.i)
                     if tn:
-                        z_a_dur += 1.0
-                        z_b_dur += 1.0
-                        z_c_dur += 1.0
-                        z_d_dur += 1.0
+                        # S2-4: Use engine transfer time (configurable via delta_T) for consistency
+                        # with reliability evaluator. Previously hardcoded to 1.0.
+                        trap_tf = self.engine.make_transfer_time()
+                        z_a_dur += trap_tf.a
+                        z_b_dur += trap_tf.b
+                        z_c_dur += trap_tf.c
+                        z_d_dur += trap_tf.d
             if arc.mode == 2:
                 # #16: Timetable keyed by (origin_hub, dest_hub). Assumes one physical
                 # rail arc per hub pair (true in current data_generator). If multiple
@@ -363,13 +371,17 @@ class BranchAndPriceController:
                 runs = getattr(self.network, 'timetable', {}).get((arc.i, arc.j), [])
                 valid_runs = [r for r in runs if r["departure_time"] >= t_arr]
                 t_start = valid_runs[0]["departure_time"] if valid_runs else max(t_arr, arc.e_window)
-                total_wait_time += max(0.0, t_start - t_arr)
+                wait = max(0.0, t_start - t_arr)
+                total_wait_time += wait
                 t_end = valid_runs[0]["arrival_time"] if valid_runs else t_start + 4.0
                 t_arr = t_end
-                z_a_dur += arc.time_a
-                z_b_dur += arc.time_b
-                z_c_dur += arc.time_c
-                z_d_dur += getattr(arc, 'time_d', arc.time_c)  # #9: trapezoidal for rail
+                # S2-1: Add wait time to fuzzy accumulators (deterministic component).
+                # Without this, the fuzzy Z~ underestimates total time, making time_R
+                # systematically too optimistic.
+                z_a_dur += arc.time_a + wait
+                z_b_dur += arc.time_b + wait
+                z_c_dur += arc.time_c + wait
+                z_d_dur += getattr(arc, 'time_d', arc.time_c) + wait  # #9: trapezoidal for rail
             else:
                 tri = self.engine.make_transport_time(arc.distance, arc.mode)
                 arc_de = tri.deterministic_equivalent_upper(alpha_T)
@@ -392,12 +404,9 @@ class BranchAndPriceController:
         # ---------------------------------------------------------------
         # COLUMN COST = transport + deploy + transfer (no delay penalty)
         # ---------------------------------------------------------------
-        # NOTE: z_*_dur already includes arc travel times AND rail timetable
-        # wait times (which are embedded in the timetable arrival times).
-        # The total_wait_time shifts the departure to match the first rail
-        # connection. Using shifted_departure_time + z_*_dur would double-count
-        # the wait.  Use od.time_window_start as the base so z_*_dur correctly measures
-        # the total elapsed time from the earliest possible start.
+        # NOTE: z_*_dur includes arc travel times, transfer times, AND rail timetable
+        # wait times. Using od.time_window_start as the base so z_*_dur measures
+        # total elapsed time from the earliest possible start.
         trap_Z = TrapezoidalFuzzy(
             a=od.time_window_start + z_a_dur,
             b=od.time_window_start + z_b_dur,
@@ -866,7 +875,8 @@ class BranchAndPriceController:
         """
         # --- Re-solve master as MIP to get integer lambdas AND repositioning (pi) values ---
         # The CG LP relaxation gives fractional lambdas; MIP gives proper integer dispatches.
-        mip_val, _ = self.mp.solve(node.columns, branch_constraints=[], is_integer=True)
+        # S1-1: Pass branch_constraints from current node so MIP respects branching decisions.
+        mip_val, _ = self.mp.solve(node.columns, branch_constraints=node.branch_constraints, is_integer=True)
 
         west_tasks_own = []
         east_tasks_own = []
