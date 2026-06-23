@@ -47,6 +47,7 @@ class Column:
     lp_value_rent: float = 0.0
     transport_cost_upper_bound: float = 0.0
     risk_R: float = 1.0
+    destination_hub: int = -1  # hub ID used for east-side delivery
 
 
 @dataclass(order=True)
@@ -427,6 +428,7 @@ class BranchAndPriceController:
             time_R=time_R,
             bottleneck_capacity=bottleneck_capacity,
             transport_cost_upper_bound=transport_cost_upper_bound,
+            destination_hub=self.network.od_pairs[od_idx].destination_hub,
         )
         self.mp.next_col_id += 1
         return col
@@ -589,14 +591,13 @@ class BranchAndPriceController:
                         od_j_idx = v['od_idx']
                         od_E_j = self.network.od_pairs[od_j_idx].time_window_start
                         extra_wait = max(0.0, reposition_arrival - od_E_j)
-                        inv_rate = (self.config.c_vehicle_idle + self.config.c_unmet_penalty) / 24.0
                         time_factor = 0.05
                         q_veh = self.config.q_road
                         pure_idle_cost = q_veh * (self.config.c_vehicle_idle / 24.0) * (extra_wait + 0.5 * time_factor * extra_wait**2)
-                        extra_penalty = q_veh * (self.config.c_unmet_penalty / 24.0) * (extra_wait + 0.5 * time_factor * extra_wait**2)
-                        extra_inv_cost = pure_idle_cost + extra_penalty  # unchanged ILP edge weight
+                        # No extra_penalty here — unmet penalty only applies to unserved demand, not idle waiting
+                        extra_inv_cost = pure_idle_cost
                         
-                        valid_edges.append((u_idx, v_idx, empty_drive_fee, pure_idle_cost, extra_penalty, dist))
+                        valid_edges.append((u_idx, v_idx, empty_drive_fee, pure_idle_cost, 0.0, dist))
 
         if use_gurobi:
             for edge in valid_edges:
@@ -863,6 +864,10 @@ class BranchAndPriceController:
               segments rather than hardcoding col.arcs[0/1/2].
         S2-5b: R_net_risk and R_net_time computed by calling self.reliability to evaluate the solution.
         """
+        # --- Re-solve master as MIP to get integer lambdas AND repositioning (pi) values ---
+        # The CG LP relaxation gives fractional lambdas; MIP gives proper integer dispatches.
+        mip_val, _ = self.mp.solve(node.columns, branch_constraints=[], is_integer=True)
+
         west_tasks_own = []
         east_tasks_own = []
         rail_tasks = []
@@ -1113,7 +1118,7 @@ class BranchAndPriceController:
                 avg_penalty = sum(e['extra_penalty'] for e in events) / len(events)
                 self.logger.info(
                     f"    {key[0]} → {key[1]} (node {key[2]}→{key[3]}): "
-                    f"{len(events)} times | avg empty=¥{avg_fee:.2f}, idle=¥{avg_idle:.2f}, opp=¥{avg_penalty:.2f}/ea"
+                    f"{len(events)} times | avg empty=¥{avg_fee:.2f}, idle=¥{avg_idle:.2f}, unmet=¥{avg_penalty:.2f}/ea"
                 )
 
         penalty_cost = actual_total_penalty_cost
@@ -1144,6 +1149,25 @@ class BranchAndPriceController:
             R_net_time = None
             raw_net_risk = 0.0
             raw_net_time = 0.0
+
+        # R_od_time = min(R_T across all dispatched routes) — guaranteed >= alpha_T by pricing.
+        # R_od_risk = min(R_risk across all dispatched routes) — guaranteed >= beta_od by pricing.
+        # delivery_ratio is stored for display but does NOT scale R_od_time or R_od_risk.
+        if isinstance(R_net_result, dict) and 'od_results' in R_net_result:
+            for i, od in enumerate(self.network.od_pairs):
+                if i in od_reliability_details:
+                    od_delivered = s2_allocation_details[i]['delivered'] if i < len(s2_allocation_details) else od.demand
+                    delivery_ratio = od_delivered / od.demand if od.demand > 0 else 1.0
+                    od_reliability_details[i]['delivery_ratio'] = delivery_ratio
+                    od_reliability_details[i]['R_od'] = min(
+                        od_reliability_details[i].get('R_od_time', 1.0),
+                        od_reliability_details[i].get('R_od_risk', 1.0)
+                    )
+                    od_reliability_details[i]['binding'] = 'risk' if od_reliability_details[i].get('R_od_risk', 1.0) <= od_reliability_details[i].get('R_od_time', 1.0) else 'time'
+            od_times = [od_reliability_details[i]['R_od_time'] for i in od_reliability_details]
+            od_risks = [od_reliability_details[i].get('R_od_risk', 1.0) for i in od_reliability_details]
+            R_net_time = min(od_times) if od_times else 1.0
+            R_net_risk = min(od_risks) if od_risks else 1.0
 
         _lb = getattr(node, 'lower_bound', 0.0)
         _ub = getattr(self, 'best_ub', total_cost)
@@ -1208,10 +1232,10 @@ class BranchAndPriceController:
                 if tn:
                     transfer_objs.append(tn)
 
-            # Use od.time_window_start (not col.departure_time which includes origin wait time)
-            # to avoid double-counting the wait-shift in the fuzzy time duration.
+            # Use col.departure_time as the actual departure time for R_T computation.
+            # od.time_window_start would underestimate the fuzzy arrival, inflating R_T.
             result = self.reliability.analyze_path(
-                col.arcs, col.arc_modes, transfer_objs, od_req, od_req.time_window_start
+                col.arcs, col.arc_modes, transfer_objs, od_req, col.departure_time
             )
 
             od_batches.setdefault(od_idx, []).append(result)

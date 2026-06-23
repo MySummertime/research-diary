@@ -18,7 +18,7 @@ class RHMVSPConfig:
 	# ============================================================
 
 	# Time discretization
-	T_max: int = 48  # Planning horizon (hours)
+	T_max: int = 672  # Planning horizon (hours, 28 days for cross-China HazMat routing)
 
 	# Vehicle parameters
 	K_max: int | None = None  # Max O-D pairs per vehicle (reuse cycles). None = unlimited.
@@ -38,7 +38,7 @@ class RHMVSPConfig:
 	c_deploy_road: float = 0.0  # Road vehicle deployment fixed cost (自有车为0)
 	c_deploy_rent: float = 1000.0 # Rented vehicle deployment fixed cost (外租车起步价)
 	c_rent_per_hour: float = 30.0 # Rented vehicle hourly rate (外租车小时租金)
-	c_empty_reposition_per_km: float = 4.0  # Empty truck repositioning (¥/km, diesel+driver+depreciation)
+	c_empty_reposition_per_km: float = 2.0  # Empty truck repositioning (¥/km, diesel+driver+depreciation)
 	# ============================================================
 	# Railway Freight Two-Part Tariff Pricing (基于《铁路货物运价规则》)
 	# Formula per ton = (发到基价 + 运行基价 × 计费里程) × (1 + 危险品加成率) + 建设基金 × 计费里程
@@ -296,9 +296,10 @@ class PlotProperties:
 	PAD_INCHES = 0.1
 
 	# Markers & Nodes & Legend
-	NODE_SHAPE = "o"
-	NODE_SIZE_HUB = 900
-	NODE_SIZE_SPOKE = 800
+	NODE_SHAPE_HUB = "s"       # square for hubs
+	NODE_SHAPE_SPOKE = "o"     # circle for spokes
+	NODE_SIZE_HUB = 500
+	NODE_SIZE_SPOKE = 400
 	NODE_LINE_WIDTH = 1.5
 	MARKER_EDGE_COLOR = "#333333"
 	LEGEND_MARKER_SIZE_HUB = 13

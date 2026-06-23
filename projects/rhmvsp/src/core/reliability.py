@@ -316,7 +316,10 @@ class ReliabilityAnalyzer:
                 result.arc_risk_feasible = False
 
         result.raw_risk_value = total_raw_risk
-        result.raw_time_spent = t_upper - departure_time
+        # raw_time_spent is the total transport time (arrival upper bound).
+        # Do NOT subtract departure_time (which is od.time_window_start, not actual departure),
+        # as that causes negative values when vehicles arrive before time window opens.
+        result.raw_time_spent = t_upper
 
         # 3. Path-level risk reliability (Eq.4)
         result.risk_reliability = self.engine.path_reliability(

@@ -33,6 +33,7 @@ class MasterProblem:
         self.od_pairs = network.od_pairs
         self.num_vehicles_west = instance.get("num_vehicles_west", 2500)
         self.num_vehicles_east = instance.get("num_vehicles_east", 2500)
+        self.hub_fleet = instance.get("hub_fleet_size", {})  # per-hub fleet: {hub_id: fleet_size}
         self.logger = logger
         self.instance = instance or {}
         self.engine = UncertaintyEngine(config)
@@ -147,16 +148,17 @@ class MasterProblem:
                 dist_w = self.network.get_exact_road_distance(od_i.origin, od_j.origin)
                 prep_h = getattr(self.config, 'prep_time_hours', 2.0)
                 dispatch_buf = getattr(self.config, 'dispatch_buffer_hours', 1.0)
+                prep_repos = getattr(self.config, 'c_prep_reposition', 200.0)
                 req_gap_w = max(0.1, dist_w / self.config.road_speed) + prep_h + dispatch_buf
                 arr_w_i = od_i.time_window_start + 10.0
                 if arr_w_i + req_gap_w <= od_j.time_window_end:
                     empty_fee = self.config.c_empty_reposition_per_km * dist_w
                     repo_arr = arr_w_i + req_gap_w
                     extra_wait = max(0.0, repo_arr - od_j.time_window_start)
-                    inv_rate = (self.config.c_vehicle_idle + self.config.c_unmet_penalty) / 24.0
+                    inv_rate = self.config.c_vehicle_idle / 24.0
                     time_factor = 0.05
                     extra_inv_cost = q_veh * inv_rate * (extra_wait + 0.5 * time_factor * extra_wait**2)
-                    valid_transitions_west[(i, j)] = (dist_w, empty_fee + extra_inv_cost)
+                    valid_transitions_west[(i, j)] = (dist_w, prep_repos + empty_fee + extra_inv_cost)
 
                 # East: Reposition from OD_i Destination to OD_j East Hub
                 dist_e = self.network.get_exact_road_distance(od_i.destination, od_j.destination)
@@ -167,9 +169,47 @@ class MasterProblem:
                     repo_arr = arr_e_i + req_gap_e
                     extra_wait = max(0.0, repo_arr - od_j.time_window_start)
                     extra_inv_cost = q_veh * inv_rate * (extra_wait + 0.5 * time_factor * extra_wait**2)
-                    valid_transitions_east[(i, j)] = (dist_e, empty_fee + extra_inv_cost)
+                    valid_transitions_east[(i, j)] = (dist_e, prep_repos + empty_fee + extra_inv_cost)
 
+        # Decision Variables
         if use_gurobi:
+            lambdas_own = {
+                col.col_id: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"lambda_own_{col.col_id}")
+                for col in columns
+            }
+            lambdas_rent = {
+                col.col_id: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"lambda_rent_{col.col_id}")
+                for col in columns
+            }
+            g_vars = {
+                i: prob.addVar(lb=0, ub=1, vtype=GRB.CONTINUOUS, name=f"g_{i}")
+                for i in transfer_node_ids
+            }
+            dummy_vars = {
+                i: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"dummy_{i}")
+                for i in range(len(self.od_pairs))
+            }
+        else:
+            lambdas_own = {
+                col.col_id: pulp.LpVariable(f"lambda_own_{col.col_id}", 0, None, pulp.LpContinuous)
+                for col in columns
+            }
+            lambdas_rent = {
+                col.col_id: pulp.LpVariable(f"lambda_rent_{col.col_id}", 0, None, pulp.LpContinuous)
+                for col in columns
+            }
+            g_vars = {
+                i: pulp.LpVariable(f"g_{i}", 0, 1, pulp.LpContinuous)
+                for i in transfer_node_ids
+            }
+            dummy_vars = {
+                i: pulp.LpVariable(f"dummy_{i}", 0, None, pulp.LpContinuous)
+                for i in range(len(self.od_pairs))
+            }
+
+        # Decision Variables (repositioning, delivery, shortfall)
+        if use_gurobi:
+            # OD-level Empty Repositioning Variables pi_{i,j}
             pi_west_own = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_west_own_{pair[0]}_{pair[1]}") for pair in valid_transitions_west }
             pi_east_own = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_east_own_{pair[0]}_{pair[1]}") for pair in valid_transitions_east }
             pi_west_rent = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_west_rent_{pair[0]}_{pair[1]}") for pair in valid_transitions_west }
@@ -178,7 +218,6 @@ class MasterProblem:
                 i: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"q_del_{i}")
                 for i, od in enumerate(self.od_pairs)
             }
-            # Shortfall variables
             shortage_vars = {}
             for i in range(len(self.od_pairs)):
                 shortage_vars[i] = prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"shortage_{i}")
@@ -308,19 +347,47 @@ class MasterProblem:
         # Demand satisfaction at origin/destination (S2-8)
 
 
-        # Vehicle balance: Own fleet <= num_vehicles
-        veh_limit_w = self.num_vehicles_west
-        veh_limit_e = self.num_vehicles_east
-        if use_gurobi:
-            prob.addConstr(gp.quicksum(lambdas_own.values()) - gp.quicksum(pi_west_own.values()) <= veh_limit_w, name="vehicle_balance_west")
-            prob.addConstr(gp.quicksum(lambdas_own.values()) - gp.quicksum(pi_east_own.values()) <= veh_limit_e, name="vehicle_balance_east")
-            prob.addConstr(gp.quicksum(lambdas_rent.values()) - gp.quicksum(pi_west_rent.values()) >= 0, name="vehicle_balance_rent_w")
-            prob.addConstr(gp.quicksum(lambdas_rent.values()) - gp.quicksum(pi_east_rent.values()) >= 0, name="vehicle_balance_rent_e")
+        # Vehicle balance: per-hub fleet model (each hub has its own fleet of vehicles)
+        # When hub_fleet is set, use per-hub constraints; otherwise fall back to global fleet.
+        # Per-hub constraint disabled for now — column generation needs more iterations
+        # to produce enough repositioning-capable columns before the constraint can bind.
+        if False and self.hub_fleet:
+            for hub_id_str, fleet_size in self.hub_fleet.items():
+                hub_id = int(hub_id_str)
+                cols_for_hub = [col for col in columns if col.destination_hub == hub_id]
+                if cols_for_hub:
+                    # Count ALL repositionings where source uses hub h (including intra-hub)
+                    # Each repositioning reuses one vehicle, reducing effective fleet consumption
+                    repo_reuse = [pi_east_own[p] for p in valid_transitions_east 
+                                  if self.od_pairs[p[0]].destination_hub == hub_id]
+                    repo_reuse_rent = [pi_east_rent[p] for p in valid_transitions_east 
+                                      if self.od_pairs[p[0]].destination_hub == hub_id]
+                    if use_gurobi:
+                        prob.addConstr(
+                            gp.quicksum(lambdas_own[col.col_id] for col in cols_for_hub) 
+                            - gp.quicksum(repo_reuse) - gp.quicksum(repo_reuse_rent) <= fleet_size,
+                            name=f"fleet_hub_{hub_id}"
+                        )
+                    else:
+                        prob += (
+                            pulp.lpSum(lambdas_own[col.col_id] for col in cols_for_hub) 
+                            - pulp.lpSum(repo_reuse) - pulp.lpSum(repo_reuse_rent) <= fleet_size,
+                            f"fleet_hub_{hub_id}"
+                        )
         else:
-            prob += (pulp.lpSum(lambdas_own.values()) - pulp.lpSum(pi_west_own.values()) <= veh_limit_w, "vehicle_balance_west")
-            prob += (pulp.lpSum(lambdas_own.values()) - pulp.lpSum(pi_east_own.values()) <= veh_limit_e, "vehicle_balance_east")
-            prob += (pulp.lpSum(lambdas_rent.values()) - pulp.lpSum(pi_west_rent.values()) >= 0, "vehicle_balance_rent_w")
-            prob += (pulp.lpSum(lambdas_rent.values()) - pulp.lpSum(pi_east_rent.values()) >= 0, "vehicle_balance_rent_e")
+            # Fallback: global fleet balance (original model)
+            veh_limit_w = self.num_vehicles_west
+            veh_limit_e = self.num_vehicles_east
+            if use_gurobi:
+                prob.addConstr(gp.quicksum(lambdas_own.values()) - gp.quicksum(pi_west_own.values()) <= veh_limit_w, name="vehicle_balance_west")
+                prob.addConstr(gp.quicksum(lambdas_own.values()) - gp.quicksum(pi_east_own.values()) <= veh_limit_e, name="vehicle_balance_east")
+                prob.addConstr(gp.quicksum(lambdas_rent.values()) - gp.quicksum(pi_west_rent.values()) >= 0, name="vehicle_balance_rent_w")
+                prob.addConstr(gp.quicksum(lambdas_rent.values()) - gp.quicksum(pi_east_rent.values()) >= 0, name="vehicle_balance_rent_e")
+            else:
+                prob += (pulp.lpSum(lambdas_own.values()) - pulp.lpSum(pi_west_own.values()) <= veh_limit_w, "vehicle_balance_west")
+                prob += (pulp.lpSum(lambdas_own.values()) - pulp.lpSum(pi_east_own.values()) <= veh_limit_e, "vehicle_balance_east")
+                prob += (pulp.lpSum(lambdas_rent.values()) - pulp.lpSum(pi_west_rent.values()) >= 0, "vehicle_balance_rent_w")
+                prob += (pulp.lpSum(lambdas_rent.values()) - pulp.lpSum(pi_east_rent.values()) >= 0, "vehicle_balance_rent_e")
 
         
 
