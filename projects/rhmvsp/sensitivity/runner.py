@@ -201,7 +201,9 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                     trap = TrapFz(trap_a, trap_b, trap_c, trap_d)
                     det_L = trap.deterministic_equivalent_upper(config.alpha_T)
                     start_time = od.get("time_window_start", 0.0)
-                    od["time_window_end"] = float(round(start_time + det_L * 1.10, 1))
+                    # 1.50 multiplier: accounts for rail timetable waiting time
+                    # not captured in det_L (which only sums fuzzy transport times).
+                    od["time_window_end"] = float(round(start_time + det_L * 1.50, 1))
 
         # Logger (output goes through Tee → experiment.log)
         logger = Logger(level="INFO", log_file=None)
