@@ -335,7 +335,7 @@ class PricingProblem:
                     new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
                     
                     new_risk = min(parent.risk_R, arc_R, node_R)
-                    if new_risk >= self.config.beta_od:
+                    if self.config.skip_risk_constraint or new_risk >= self.config.beta_od:
                         new_labels.append(Label(
                             cost=new_cost_base, reduced_cost=new_rc_base,
                             time_upper=new_time, time_lower=new_time, risk_R=new_risk,
@@ -353,7 +353,7 @@ class PricingProblem:
                 new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
                 
                 new_risk = min(parent.risk_R, arc_R, node_R)
-                if new_risk >= self.config.beta_od:
+                if self.config.skip_risk_constraint or new_risk >= self.config.beta_od:
                     new_labels.append(Label(
                         cost=new_cost_base, reduced_cost=new_rc_base,
                         time_upper=new_time, time_lower=new_time, risk_R=new_risk,
@@ -381,7 +381,7 @@ class PricingProblem:
                     new_cost_base = parent.cost + actual_cost_total
                     new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
                     new_risk = min(parent.risk_R, arc_R, node_R)
-                    if new_risk >= self.config.beta_od and new_time >= self.od_E:
+                    if (self.config.skip_risk_constraint or new_risk >= self.config.beta_od) and new_time >= self.od_E:
                         new_labels.append(Label(
                             cost=new_cost_base, reduced_cost=new_rc_base,
                             time_upper=new_time, time_lower=new_time, risk_R=new_risk,
@@ -398,7 +398,7 @@ class PricingProblem:
                 new_cost_base = parent.cost + actual_cost_total
                 new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
                 new_risk = min(parent.risk_R, arc_R, node_R)
-                if new_risk >= self.config.beta_od and new_time >= self.od_E:
+                if (self.config.skip_risk_constraint or new_risk >= self.config.beta_od) and new_time >= self.od_E:
                     new_labels.append(Label(
                         cost=new_cost_base, reduced_cost=new_rc_base,
                         time_upper=new_time, time_lower=new_time, risk_R=new_risk,

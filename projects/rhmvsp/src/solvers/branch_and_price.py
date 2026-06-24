@@ -129,6 +129,24 @@ class BranchAndPriceController:
             if lp_val >= self.best_ub:
                 continue
 
+            # LP-only mode: return LP relaxation bound directly (no MIP re-solve)
+            if self.config.lp_only:
+                self.logger.info("  LP-only mode: returning LP relaxation bound.")
+                elapsed_wall = self.pp.total_espprc_wall_time
+                elapsed_cpu = self.pp.total_espprc_cpu_time
+                return {
+                    "status": "optimal",
+                    "total_cost": lp_val,
+                    "lp_bound": lp_val,
+                    "gap_pct": 0.0,
+                    "iterations": self.col_gen_iterations,
+                    "total_columns": len(curr_node.columns),
+                    "solve_wall_time": elapsed_wall,
+                    "solve_cpu_time": elapsed_cpu,
+                    "R_net_risk": 1.0,
+                    "R_net_time": 1.0,
+                }
+
             # In root node or when columns are sufficient, extract exact physical integer MIP solution immediately
             sol = self._extract_solution(curr_node)
             if sol and sol.get("total_cost", float("inf")) < self.best_ub:
@@ -140,11 +158,6 @@ class BranchAndPriceController:
                 )
                 
                 self.logger.info("  Continuing search to prove optimality (or until time limit).")
-
-            # LP-only mode: stop after root-node CG (no branching)
-            if self.config.lp_only:
-                self.logger.info("  LP-only mode: stopping after root node.")
-                break
 
             if self._is_integer(curr_node):
                 continue
