@@ -112,8 +112,6 @@ def run_demo(config: RHMVSPConfig, size: str, logger: Logger):
 			config.alpha_max = instance["config"]["alpha_max"]
 		if "alpha_T" in instance["config"]:
 			config.alpha_T = instance["config"]["alpha_T"]
-		if "K_max" in instance["config"]:
-			config.K_max = instance["config"]["K_max"]
 
 	logger.info(f"Instance: {instance['name']}")
 	logger.info(
@@ -176,9 +174,7 @@ def run_solve(config: RHMVSPConfig, instance_path: str, logger: Logger):
 			config.alpha_max = instance["config"]["alpha_max"]
 		if "alpha_T" in instance["config"]:
 			config.alpha_T = instance["config"]["alpha_T"]
-		if "K_max" in instance["config"]:
-			config.K_max = instance["config"]["K_max"]
-			
+
 	logger.info(f"Loaded instance: {instance['name']}")
 	logger.info(
 		f"  Nodes: {instance['network']['num_nodes']}, "
@@ -301,7 +297,7 @@ def main():
 	logger.info(f"Mode: {args.mode} | Solver: {args.solver} | Seed: {args.seed}")
 	logger.info(
 		f"Config: alpha_max={config.alpha_max}, alpha_T={config.alpha_T}, "
-		f"K_max={config.K_max}, T_max={config.T_max}"
+		f"T_max={config.T_max}"
 	)
 
 	# Dispatch

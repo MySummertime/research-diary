@@ -339,7 +339,6 @@ class InstanceGenerator:
 			"num_vehicles": num_vehicles,
 			"config": {
 				"T_max": self.config.T_max,
-				"K_max": self.config.K_max,
 				"alpha_max": self.config.alpha_max,
 				"alpha_T": self.config.alpha_T,
 				"timetable_services_per_direction": num_services,

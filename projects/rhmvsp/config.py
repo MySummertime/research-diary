@@ -21,7 +21,6 @@ class RHMVSPConfig:
 	T_max: int = 672  # Planning horizon (hours, 28 days for cross-China HazMat routing)
 
 	# Vehicle parameters
-	K_max: int | None = None  # Max O-D pairs per vehicle (reuse cycles). None = unlimited.
 	q_road: float = 30.0  # Road vehicle capacity (tons)
 	# 现实折中方案：定义铁路的运输单位为一个“危险品车组 (Wagon Group)”。
 	# 根据国铁《铁路危险货物运输管理规则》的“隔离车”制度，一列普通货车不宜连续挂载太多危化品罐车。
@@ -101,6 +100,7 @@ class RHMVSPConfig:
 	enable_time_varying_risk: bool = True       # Enable phi(t) traffic/fatigue multiplier on accident probability
 	risk_scale: float = 1.0                       # Continuous scaling for time-varying risk (0.0=constant phi=psi=1, 1.0=full time-varying)
 	lp_only: bool = False                         # If True, BAP stops after root-node CG (LP relaxation, no branching)
+	skip_risk_constraint: bool = False              # If True, pricing skips R >= beta_od check (benchmark mode)
 	solver_name: str = "gurobi"
 
 	# ============================================================
@@ -178,7 +178,6 @@ class RHMVSPConfig:
 			"T_max": "planning_horizon_hours_T_max",
 			"dt_road": "time_granularity_road_hours_dt_road",
 			"dt_rail": "time_granularity_rail_hours_dt_rail",
-			"K_max": "max_reuse_cycles_per_vehicle_K_max",
 			"q_road": "vehicle_capacity_road_tons_q_road",
 			"q_rail": "wagon_capacity_rail_tons_q_rail",
 			"c_road": "unit_transport_cost_road_c_road",
