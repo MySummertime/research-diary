@@ -58,7 +58,7 @@ def _plot_algorithm_performance(x_labels, time_vals, iter_vals, save_path):
     plt.close(fig)
 
 def run_algorithm_performance():
-    scales = ['small'] # , 'medium', 'large']
+    scales = ['small' , 'medium', 'large']
     instances_per_scale = [1, 2]
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

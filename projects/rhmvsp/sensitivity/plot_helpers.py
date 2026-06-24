@@ -204,7 +204,9 @@ def dual_y_axis_with_cost_bar(x_label: str, x_vals, r_risk_vals, r_time_vals,
                                c1: str = COLOURS["C1"], c2: str = COLOURS["C2"],
                                c_cost: str = COLOURS["C3"],
                                y1_label: str = r'$R_{risk}$',
-                               y2_label: str = r'$R_{time}$'):
+                               y2_label: str = r'$R_{time}$',
+                               y1_title: str = r'Network Reliability',
+                               y2_title: str = r'Total Cost (CNY)'):
     """
     Dual Y-axis chart:
       Left axis  – R_risk (solid circle) and R_time (dashed square), line plots.
@@ -221,7 +223,7 @@ def dual_y_axis_with_cost_bar(x_label: str, x_vals, r_risk_vals, r_time_vals,
     ax2 = ax1.twinx()
     ax2.bar(x_pos, cost_vals, width=bar_width, color=c_cost,
             edgecolor='none', alpha=0.6, label='Total Cost', zorder=1)
-    ax2.set_ylabel(r'Total Cost (CNY)', fontsize=14, color=c_cost)
+    ax2.set_ylabel(y2_title, fontsize=14, color=c_cost)
     ax2.tick_params(axis='y', direction='in', labelcolor=c_cost, labelsize=11)
     ax2.spines['top'].set_visible(False)
 
@@ -231,7 +233,7 @@ def dual_y_axis_with_cost_bar(x_label: str, x_vals, r_risk_vals, r_time_vals,
 
     # Left y-axis: R_risk and R_time lines
     ax1.set_xlabel(x_label, fontsize=14)
-    ax1.set_ylabel(r'Network Reliability', fontsize=14)
+    ax1.set_ylabel(y1_title, fontsize=14)
     ax1.set_xticks(x_pos)
     ax1.set_xticklabels(_fmt_values(x_vals), fontsize=11, rotation=45, ha='right')
 

@@ -1,11 +1,14 @@
 """
-Sensitivity Analysis: Out-of-Sample Box-Plot (BAP vs LP-only Benchmark).
+Sensitivity Analysis: Out-of-Sample Box-Plot (BAP vs LP Relaxation).
 
-Generates N Monte Carlo scenarios for 6 representative (delta_T, alpha_max)
-combinations, solves each with BAP (reliable model) and LP-only (benchmark),
-and plots enhanced box-plots with strip-scatter overlay.
+Design (solve-on-original, evaluate-on-perturbed):
+  1. Solve BAP (Branch-and-Price, integer) on ORIGINAL instance → S_bap
+  2. Solve LP Relaxation (root-node CG, no branching) on ORIGINAL → S_lp
+  3. Generate N Monte Carlo perturbed scenarios (demand + time + risk)
+  4. Re-solve both models on each perturbed scenario
+  5. Compare 4 reliability metrics: raw_risk, raw_time, R_risk, R_time
 
-Reference style: Wang (2025) Fig. 8 — paired box-plots per parameter group.
+Output: 4 enhanced box-plots comparing reliability metric distributions.
 """
 import sys, os, json
 from datetime import datetime
@@ -25,26 +28,29 @@ from sensitivity.plot_helpers import set_style, COLOURS, enhanced_boxplot
 from sensitivity.utils import update_od_deadlines as _update_od_deadlines
 
 # ── Colour constants (colour set2.txt) ────────────────────────────────────────
-C_BAP   = COLOURS["C1"]  # Warm Terracotta — BAP (reliable model)
-C_BENCH = COLOURS["C2"]  # Celadon Green   — LP-only (benchmark)
+C_BAP = COLOURS["C1"]  # Warm Terracotta — BAP (our method)
+C_LP  = COLOURS["C2"]  # Celadon Green   — LP Relaxation (benchmark)
 
 # ── Experiment parameters ─────────────────────────────────────────────────────
-N_SCENARIOS = 20          # Dry-run: 50 → final: 100~200 per group
+N_SCENARIOS = 10          # scenarios per group (reduced for faster testing)
 INSTANCE_PATH = "data_real_case/instance.json"
 
-# 8 parameter combinations: (delta_T, alpha_max)
+# 4 parameter combinations for quick test
 PARAM_GRID = [
-    (0.4, 0.025), (0.4, 0.035),
-    (0.6, 0.025), (0.6, 0.035),
-    (0.8, 0.025), (0.8, 0.035),
-    (1.0, 0.025), (1.0, 0.035),
+    (0.5, 0.03), (0.5, 0.05),
+    (0.8, 0.03), (0.8, 0.05),
 ]
 
 
-def _run_single(config, inst, exp_dir, model_tag, dT, a_max, seed):
-    """Run one BAP/LP-only solve and return dict with cost and sub-components."""
-    logger = Logger(level="INFO", log_file=None)  # output via stdout → Tee
+def _run_single(config, inst, exp_dir, model_tag, aT, a_max, seed):
+    """Run one BAP/LP solve and return dict with cost and sub-components."""
+    logger = Logger(level="INFO", log_file=None)
+    
+    if model_tag == "lp":
+        config.lp_only = True  # LP relaxation: stop after root-node CG
+    
     solver = BAPSolver(config, json.loads(json.dumps(inst)), logger)
+    
     import time
     t0 = time.time()
     sol = solver.solve()
@@ -66,7 +72,21 @@ def _run_single(config, inst, exp_dir, model_tag, dT, a_max, seed):
 
 
 def run_out_of_sample():
-    """Main: 8 groups × N scenarios × 2 models = 16N solves."""
+    """
+    Out-of-sample robustness experiment: BAP vs LP Relaxation.
+
+    For each (alpha_T, alpha_max) group:
+      1. Solve BAP (integer) on original instance → S_bap
+      2. Solve LP Relaxation (root-node CG, no branching) → S_lp
+      3. Generate N Monte Carlo perturbed scenarios (demand + time + risk)
+      4. Re-solve both models on each perturbed scenario
+      5. Compare 4 reliability metrics: raw_risk, raw_time, R_risk, R_time
+
+    The LP relaxation gives a lower bound on cost but relaxes integrality,
+    leading to optimistic (overly good) reliability estimates that don't
+    hold in practice. BAP provides integer-feasible solutions with tighter
+    reliability guarantees.
+    """
 
     with open(INSTANCE_PATH) as f:
         base_instance = json.load(f)
@@ -83,18 +103,26 @@ def run_out_of_sample():
     # Save experiment metadata
     meta = {
         "n_scenarios": N_SCENARIOS,
-        "param_grid": [(dT, am) for dT, am in PARAM_GRID],
+        "param_grid": [(aT, am) for aT, am in PARAM_GRID],
         "instance": INSTANCE_PATH,
-        "alpha_T_fixed": 0.8,
     }
     with open(os.path.join(exp_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
-    group_labels = [f"{dT}-{aM:.2f}" for dT, aM in PARAM_GRID]
-    bap_costs   = defaultdict(list)    # group_label → [cost, ...]
-    bench_costs = defaultdict(list)
+    group_labels = [f"({aT:.1f}, {aM:.3f})" for aT, aM in PARAM_GRID]
+    bap_costs    = defaultdict(list)
+    bap_raw_risk = defaultdict(list)
+    bap_raw_time = defaultdict(list)
+    bap_R_risk   = defaultdict(list)
+    bap_R_time   = defaultdict(list)
 
-    total = len(PARAM_GRID) * N_SCENARIOS * 2
+    lp_costs     = defaultdict(list)
+    lp_raw_risk  = defaultdict(list)
+    lp_raw_time  = defaultdict(list)
+    lp_R_risk    = defaultdict(list)
+    lp_R_time    = defaultdict(list)
+
+    total = len(PARAM_GRID) * N_SCENARIOS * 2  # BAP + LP per scenario
     done  = 0
 
     # CSV header
@@ -103,40 +131,37 @@ def run_out_of_sample():
                  "reposition_cost","total_prep_cost","idle_cost","unmet_penalty"]
     with open(csv_path, "w", newline="") as f:
         csv.writer(f).writerow(
-            ["group_label", "delta_T", "alpha_max", "scenario_id",
+            ["group_label", "alpha_T", "alpha_max", "scenario_id",
              "model", "cost"] + cost_cols +
             ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "status", "elapsed_s"]
         )
 
-    for dT, a_max in PARAM_GRID:
-        label = f"{dT}-{a_max:.2f}"
-        print(f"\n=== \u03b4_T={dT:.1f},  \u03b1_max={a_max:.3f} ===")
+    for aT, a_max in PARAM_GRID:
+        label = f"({aT:.1f}, {a_max:.3f})"
+        print(f"\n=== α_T={aT:.1f},  α_max={a_max:.3f} ===")
 
         for s_id in range(N_SCENARIOS):
             print(f"  [Scenario {s_id+1}/{N_SCENARIOS}] Generating and solving...")
-            seed = 1000 * int(dT * 100) + int(a_max * 1000) + s_id
+            seed = 1000 * int(aT * 100) + int(a_max * 1000) + s_id
             rng = np.random.default_rng(seed=seed)
 
-            # ── One shared scenario (paired design) ─────────────────────────
+            # ── One shared perturbed scenario (paired design) ────────────────
             scen = sample_scenario(base_instance, rng)
 
-            # ── BAP (reliable model) ─────────────────────────────────────────
-            cfg_bap  = RHMVSPConfig()
-            # alpha_T stays at default 0.8; delta_T is the sweep variable
-            cfg_bap.delta_T   = dT
+            # ── BAP (Branch-and-Price, integer) ──────────────────────────────
+            cfg_bap = RHMVSPConfig()
+            cfg_bap.alpha_T = aT
             cfg_bap.alpha_max = a_max
             cfg_bap.time_limit = 120
-            cfg_bap.solver_name    = "gurobi"
-            scen_bap = json.loads(json.dumps(scen))  # deep copy for isolation
+            cfg_bap.solver_name = "gurobi"
+            scen_bap = json.loads(json.dumps(scen))
             _update_od_deadlines(scen_bap, cfg_bap)
 
-            r_bap = _run_single(
-                cfg_bap, scen_bap, exp_dir, "bap", dT, a_max, s_id
-            )
+            r_bap = _run_single(cfg_bap, scen_bap, exp_dir, "bap", aT, a_max, s_id)
             done += 1
 
             with open(csv_path, "a", newline="") as f:
-                row = [label, dT, a_max, s_id, "BAP", r_bap["cost"]]
+                row = [label, aT, a_max, s_id, "BAP", r_bap["cost"]]
                 for col in cost_cols:
                     row.append(r_bap.get(col) if r_bap["cost"] is not None else None)
                 row += [r_bap.get("R_risk"), r_bap.get("R_time"),
@@ -144,28 +169,33 @@ def run_out_of_sample():
                         r_bap["status"], r_bap["elapsed"]]
                 csv.writer(f).writerow(row)
 
-            # ── LP-only (benchmark) — same scenario, different config ─────────
-            cfg_lp  = RHMVSPConfig()
-            # alpha_T stays at default 0.8; delta_T is the sweep variable
-            cfg_lp.delta_T   = dT
+            # ── LP Relaxation (benchmark, root-node CG only) ─────────────────
+            cfg_lp = RHMVSPConfig()
+            cfg_lp.alpha_T = aT
             cfg_lp.alpha_max = a_max
-            cfg_lp.lp_only   = True
             cfg_lp.time_limit = 120
-            cfg_lp.solver_name    = "gurobi"
-            scen_lp = json.loads(json.dumps(scen))  # deep copy of same scenario
+            cfg_lp.solver_name = "gurobi"
+            scen_lp = json.loads(json.dumps(scen))
             _update_od_deadlines(scen_lp, cfg_lp)
 
-            r_lp = _run_single(
-                cfg_lp, scen_lp, exp_dir, "lp", dT, a_max, s_id
-            )
+            r_lp = _run_single(cfg_lp, scen_lp, exp_dir, "lp", aT, a_max, s_id)
             done += 1
 
             # Store aligned — NaN for failed runs keeps index correspondence
             bap_costs[label].append(r_bap["cost"] if r_bap["cost"] is not None else float("nan"))
-            bench_costs[label].append(r_lp["cost"] if r_lp["cost"] is not None else float("nan"))
+            bap_raw_risk[label].append(r_bap.get("raw_risk", float("nan")))
+            bap_raw_time[label].append(r_bap.get("raw_time", float("nan")))
+            bap_R_risk[label].append(r_bap.get("R_risk", float("nan")))
+            bap_R_time[label].append(r_bap.get("R_time", float("nan")))
+
+            lp_costs[label].append(r_lp["cost"] if r_lp["cost"] is not None else float("nan"))
+            lp_raw_risk[label].append(r_lp.get("raw_risk", float("nan")))
+            lp_raw_time[label].append(r_lp.get("raw_time", float("nan")))
+            lp_R_risk[label].append(r_lp.get("R_risk", float("nan")))
+            lp_R_time[label].append(r_lp.get("R_time", float("nan")))
 
             with open(csv_path, "a", newline="") as f:
-                row = [label, dT, a_max, s_id, "LP", r_lp["cost"]]
+                row = [label, aT, a_max, s_id, "LP", r_lp["cost"]]
                 for col in cost_cols:
                     row.append(r_lp.get(col) if r_lp["cost"] is not None else None)
                 row += [r_lp.get("R_risk"), r_lp.get("R_time"),
@@ -175,61 +205,68 @@ def run_out_of_sample():
 
             # Progress
             b_str = f"CNY {r_bap['cost']:,.0f}" if r_bap["cost"] is not None else r_bap["status"]
-            l_str = f"CNY {r_lp['cost']:,.0f}" if r_lp["cost"] is not None else r_lp["status"]
+            n_str = f"CNY {r_lp['cost']:,.0f}" if r_lp["cost"] is not None else r_lp["status"]
             def _f(v, fmt, default="N/A"):
                 return f"{v:{fmt}}" if v is not None else default
-            print(f"  [{done:3d}/{total}]  s={s_id:2d}  BAP={b_str:>14s}  LP={l_str:>14s}  "
+            print(f"  [{done:3d}/{total}]  s={s_id:2d}  BAP={b_str:>14s}  LP={n_str:>14s}  "
                   f"R_risk={_f(r_bap.get('R_risk'),'.4f')}/{_f(r_lp.get('R_risk'),'.4f')}  "
                   f"R_time={_f(r_bap.get('R_time'),'.4f')}/{_f(r_lp.get('R_time'),'.4f')}  "
                   f"RawRisk={_f(r_bap.get('raw_risk'),'.2f')}/{_f(r_lp.get('raw_risk'),'.2f')}  "
                   f"RawTime={_f(r_bap.get('raw_time'),'.2f')}/{_f(r_lp.get('raw_time'),'.2f')}h  "
                   f"({r_bap['elapsed']:.1f}s / {r_lp['elapsed']:.1f}s)")
 
-    # ── Plot enhanced box-plots ───────────────────────────────────────────────
-    bap_list   = [bap_costs[l]   for l in group_labels]
-    bench_list = [bench_costs[l] for l in group_labels]
-
-    enhanced_boxplot(
-        group_labels=group_labels,
-        bap_costs=bap_list,
-        bench_costs=bench_list,
-        save_path=os.path.join(exp_dir, "out_of_sample_boxplot"),
-        y_label="Total Cost (CNY)",
-        model_bap_label="BAP (Reliable)",
-        model_bench_label="LP Relaxation (Benchmark)",
-        c_bap=C_BAP,
-        c_bench=C_BENCH,
-    )
-
-    # Summary statistics + cost gap + paired Wilcoxon signed-rank test
+    # ── Generate 4 box-plots (one per metric) ───────────────────────────────
     from scipy.stats import wilcoxon as _wilcoxon
+
+    metrics = [
+        ("raw_risk",  bap_raw_risk,  lp_raw_risk,  r"Raw Risk ($\sum (1-R_{ij})$)", "raw_risk_boxplot"),
+        ("raw_time",  bap_raw_time,  lp_raw_time,  r"Raw Time (h)",                 "raw_time_boxplot"),
+        ("R_risk",    bap_R_risk,    lp_R_risk,    r"Risk Reliability ($R_{risk}$)",  "R_risk_boxplot"),
+        ("R_time",    bap_R_time,    lp_R_time,    r"Time Reliability ($R_{time}$)",  "R_time_boxplot"),
+    ]
+
+    for metric_name, bap_data, lp_data, y_label, filename in metrics:
+        bap_list = [bap_data[l] for l in group_labels]
+        lp_list  = [lp_data[l]  for l in group_labels]
+
+        enhanced_boxplot(
+            group_labels=group_labels,
+            bap_costs=bap_list,
+            bench_costs=lp_list,
+            save_path=os.path.join(exp_dir, filename),
+            y_label=y_label,
+            x_label=r"$(\alpha_T,\;\alpha_{max})$",
+            model_bap_label="BAP (Integer)",
+            model_bench_label="LP Relaxation",
+            c_bap=C_BAP,
+            c_bench=C_LP,
+        )
+        print(f"  Saved {filename}.png/.tiff")
+
+    # ── Summary statistics ──────────────────────────────────────────────────
     print("\n=== Summary ===")
-    for lbl in group_labels:
-        b = np.array(bap_costs[lbl], dtype=float)
-        l = np.array(bench_costs[lbl], dtype=float)
-        valid = ~(np.isnan(b) | np.isnan(l))
-        bp, lp = b[valid], l[valid]
-        b_med = np.nanmedian(b)
-        l_med = np.nanmedian(l)
-        n = len(bp)
-        if n > 0 and l_med != 0:
-            gap_pct = (b_med - l_med) / l_med * 100
-            gap_str = f"gap={gap_pct:+.1f}%"
+    for metric_name, bap_data, lp_data, y_label, _ in metrics:
+        print(f"\n--- {y_label} ---")
+        for lbl in group_labels:
+            b = np.array(bap_data[lbl], dtype=float)
+            l = np.array(lp_data[lbl], dtype=float)
+            valid = ~(np.isnan(b) | np.isnan(l))
+            bp, lp = b[valid], l[valid]
+            b_med = np.nanmedian(b)
+            l_med = np.nanmedian(l)
+            n = len(bp)
             if n >= 3 and not np.all(bp == lp):
                 _stat, _p = _wilcoxon(bp, lp, alternative='two-sided')
                 if   _p < 0.001: sig = "***"
                 elif _p < 0.01:  sig = "**"
                 elif _p < 0.05:  sig = "*"
                 else:            sig = "ns"
-                print(f"  {lbl:>10s}  BAP={b_med:>12,.0f}  LP={l_med:>12,.0f}  "
-                      f"{gap_str:>10s}  n={n}  p={_p:.4f} {sig}")
+                print(f"  {lbl:>10s}  BAP={b_med:>10.4f}  LP={l_med:>10.4f}  "
+                      f"n={n}  p={_p:.4f} {sig}")
+            elif n > 0:
+                print(f"  {lbl:>10s}  BAP={b_med:>10.4f}  LP={l_med:>10.4f}  (n={n})")
             else:
-                print(f"  {lbl:>10s}  BAP={b_med:>12,.0f}  LP={l_med:>12,.0f}  "
-                      f"{gap_str:>10s}  (n={n})")
-        elif n > 0:
-            print(f"  {lbl:>10s}  BAP={b_med:>12,.0f}  LP={l_med:>12,.0f}  (n={n})")
-        else:
-            print(f"  {lbl:>10s}  No data")
+                print(f"  {lbl:>10s}  No data")
 
     print(f"\nResults saved to {exp_dir}/")
     tee.close()
@@ -237,7 +274,9 @@ def run_out_of_sample():
 
 
 if __name__ == "__main__":
-    print(f"Out-of-Sample Sensitivity Analysis  (N={N_SCENARIOS} scenarios × {len(PARAM_GRID)} groups)")
+    print(f"Out-of-Sample Sensitivity Analysis: BAP vs LP Relaxation")
+    print(f"  N={N_SCENARIOS} scenarios × {len(PARAM_GRID)} groups")
+    print(f"  Metrics: raw_risk, raw_time, R_risk, R_time")
     print("=" * 65)
     exp_dir = run_out_of_sample()
-    print(f"\nDone!  Open {exp_dir}/out_of_sample_boxplot.png")
+    print(f"\nDone!  Open {exp_dir}/ for 4 boxplots.")

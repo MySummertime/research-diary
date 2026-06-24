@@ -4,92 +4,15 @@ Creates per-value subfolders under results/sensitivity_<timestamp>/ with
 log, solution.json, network.png/tiff, solution_plot.png/tiff — same as main.py.
 """
 import json
+import math
 import os
 import sys
 from datetime import datetime
 
-import numpy as np
-import networkx as nx
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
-
 from config import RHMVSPConfig
-from src.core.network import MultimodalNetwork
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
 from src.utils.logging import Logger
-from src.utils.plotting import Visualizer
-from src.utils.reporting import format_solution_report
-from sensitivity.plot_helpers import dual_y_axis, three_subplots, COLOURS
-
-# Dual Y-axis chart colours from colour set2.txt
-COLOR_RISK = COLOURS["C1"]   # Warm Terracotta
-COLOR_TIME = COLOURS["C2"]   # Celadon Green
-
-def _plot_dual_y_axis(param_name, label, x_values, r_risk_vals, r_time_vals, cost_vals, save_path,
-                      y1_label=r'Network Risk Reliability ($R_{risk}$)',
-                      y2_label=r'Network Time Reliability ($R_{time}$)'):
-    """Generate a dual y-axis line chart (R_risk left, R_time right) and save as png + tiff."""
-    from sensitivity.plot_helpers import set_style
-    set_style()
-
-    fig, ax1 = plt.subplots(figsize=(7, 5))
-
-    # Format the label for LaTeX (e.g., 'alpha_max' -> r'$\alpha_{max}$')
-    latex_label = label
-    if "_" in label:
-        parts = label.split("_", 1)
-        if parts[0] in ["alpha", "beta", "gamma", "delta", "epsilon", "theta"]:
-            latex_label = rf"$\{parts[0]}_{{{parts[1]}}}$"
-
-    # Categorical x positions + adaptive decimal labels
-    x_pos = np.arange(len(x_values))
-    from sensitivity.plot_helpers import _fmt_values
-    x_labels = _fmt_values(x_values)
-
-    # Left y-axis: R_risk
-    ax1.set_xlabel(latex_label, fontsize=14)
-    ax1.set_ylabel(y1_label, fontsize=14, color=COLOR_RISK)
-    line1, = ax1.plot(x_pos, r_risk_vals, color=COLOR_RISK, marker='o', markersize=5,
-                       linewidth=1.8, label=y1_label, zorder=5)
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(x_labels, fontsize=11, rotation=45, ha='right')
-    ax1.tick_params(axis='x', direction='in', labelsize=11)
-    ax1.tick_params(axis='y', direction='in', labelcolor=COLOR_RISK, labelsize=11)
-    ax1.yaxis.grid(True, linestyle='--', color='gray', alpha=0.5)
-    ax1.yaxis.set_major_locator(MaxNLocator(nbins=6))
-
-    r_risk_min = min(r_risk_vals) if r_risk_vals else 0
-    r_risk_max = max(r_risk_vals) if r_risk_vals else 1
-    margin_r = max(0.01, (r_risk_max - r_risk_min) * 0.15)
-    ax1.set_ylim(r_risk_min - margin_r, r_risk_max + margin_r)
-    ax1.set_xlim(-0.5, len(x_values) - 0.5)
-    ax1.spines['top'].set_visible(False)
-
-    # Right y-axis: R_time
-    ax2 = ax1.twinx()
-    ax2.set_ylabel(y2_label, fontsize=14, color=COLOR_TIME)
-    line2, = ax2.plot(x_pos, r_time_vals, color=COLOR_TIME, marker='s', markersize=5,
-                       linewidth=1.8, linestyle='--', label=y2_label, zorder=4)
-    ax2.tick_params(axis='y', direction='in', labelcolor=COLOR_TIME, labelsize=11)
-    r_time_min = min(r_time_vals) if r_time_vals else 0
-    r_time_max = max(r_time_vals) if r_time_vals else 1
-    margin_t = max(0.01, (r_time_max - r_time_min) * 0.15)
-    ax2.set_ylim(r_time_min - margin_t, r_time_max + margin_t)
-    ax2.spines['top'].set_visible(False)
-
-    # Combined legend (no frame)
-    lines = [line1, line2]
-    labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=2, frameon=False, fontsize=11)
-
-    plt.tight_layout()
-
-    for ext in ["png", "tiff"]:
-        fig.savefig(f"{save_path}.{ext}", dpi=600, bbox_inches='tight', format=ext)
-    plt.close(fig)
-    return f"{save_path}.png", f"{save_path}.tiff"
+from sensitivity.plot_helpers import dual_y_axis_with_cost_bar
 
 
 def run_sensitivity(param_name: str, param_values: list, param_attr_path: str, 
@@ -153,16 +76,13 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
         # Recompute L_od for each OD pair based on current alpha_T.
         # Uses BFS to find multi-hop rail paths and compute trapezoidal time.
         from src.core.uncertainty import UncertaintyEngine as UE2, TrapezoidalFuzzy as TrapFz
-        _temp_engine = UE2(config)
         _arcs = inst["network"]["arcs"]
         _hub_ids = {tn["node_id"] for tn in inst["network"].get("transfer_nodes", [])}
-        # Build rail subgraph for BFS
         _rail_graph = {}
         for a in _arcs:
             if a["mode"] == 2:
                 _rail_graph.setdefault(a["i"], []).append(a)
         def _bfs_rail(start, end):
-            """BFS shortest rail path from start hub to end hub."""
             from collections import deque
             visited = {start: []}
             queue = deque([start])
@@ -175,6 +95,8 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                             return visited[arc["j"]]
                         queue.append(arc["j"])
             return None
+        # --- Same formula as real_data_generator.py ---
+        # Compute physical travel time + 60h overhead per OD.
         for od in inst["od_pairs"]:
             od["alpha_T_od"] = config.alpha_T
             od_o, od_d = od["origin"], od["destination"]
@@ -185,25 +107,12 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                 ci = min(roads_in,  key=lambda a: a["distance"])
                 rail_path = _bfs_rail(co["j"], ci["i"])
                 if rail_path:
-                    r1 = _temp_engine.make_transport_time(co["distance"], 1)
-                    tf = _temp_engine.make_transfer_time()
-                    trap_a = r1.a + tf.a
-                    trap_b = r1.b + tf.b
-                    trap_c = r1.c + tf.c
-                    trap_d = r1.d + tf.d
-                    for ra_arc in rail_path:
-                        ra = _temp_engine.make_transport_time(ra_arc["distance"], 2)
-                        trap_a += ra.a; trap_b += ra.b; trap_c += ra.c; trap_d += ra.d
-                    tf2 = _temp_engine.make_transfer_time()
-                    trap_a += tf2.a; trap_b += tf2.b; trap_c += tf2.c; trap_d += tf2.d
-                    r2 = _temp_engine.make_transport_time(ci["distance"], 1)
-                    trap_a += r2.a; trap_b += r2.b; trap_c += r2.c; trap_d += r2.d
-                    trap = TrapFz(trap_a, trap_b, trap_c, trap_d)
-                    det_L = trap.deterministic_equivalent_upper(config.alpha_T)
+                    t_road_1 = co["distance"] / config.road_speed
+                    t_rail = sum(arc["distance"] / config.rail_speed for arc in rail_path)
+                    t_road_2 = ci["distance"] / config.road_speed
+                    t_travel = t_road_1 + t_rail + t_road_2 + 60.0
                     start_time = od.get("time_window_start", 0.0)
-                    # 1.50 multiplier: accounts for rail timetable waiting time
-                    # not captured in det_L (which only sums fuzzy transport times).
-                    od["time_window_end"] = float(round(start_time + det_L * 1.50, 1))
+                    od["time_window_end"] = float(math.ceil((start_time + t_travel) / 12.0) * 12)
 
         # Logger (output goes through Tee → experiment.log)
         logger = Logger(level="INFO", log_file=None)
@@ -325,16 +234,32 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
     raw_time_vals = [r.get('raw_time', 0) for r in results if r.get('status') == 'optimal']
 
     if x_vals:
+        # Format x_label for LaTeX (e.g. 'alpha_max' → r'$\alpha_{max}$')
+        latex_label = label
+        if "_" in label:
+            parts = label.split("_", 1)
+            if parts[0] in ["alpha", "beta", "gamma", "delta", "epsilon", "theta"]:
+                latex_label = rf"$\{parts[0]}_{{{parts[1]}}}$"
+
         chart_path = os.path.join(exp_dir, f"sensitivity_{param_name}")
         try:
-            _plot_dual_y_axis(param_name, label, x_vals, r_risk_vals, r_time_vals, cost_vals, chart_path)
+            dual_y_axis_with_cost_bar(
+                x_label=latex_label, x_vals=x_vals,
+                r_risk_vals=r_risk_vals, r_time_vals=r_time_vals,
+                cost_vals=cost_vals, save_path=chart_path,
+            )
             print(f"Dual Y-axis chart saved to: {chart_path}.png/.tiff")
         except Exception as e:
             print(f"Chart generation failed: {e}")
         try:
-            _plot_dual_y_axis(param_name, label, x_vals, raw_risk_vals, raw_time_vals, cost_vals,
-                              os.path.join(exp_dir, f"sensitivity_{param_name}_raw"),
-                              y1_label=r'Raw Network Risk', y2_label=r'Raw Network Time (h)')
+            dual_y_axis_with_cost_bar(
+                x_label=latex_label, x_vals=x_vals,
+                r_risk_vals=raw_risk_vals, r_time_vals=raw_time_vals,
+                cost_vals=cost_vals,
+                save_path=os.path.join(exp_dir, f"sensitivity_{param_name}_raw"),
+                y1_label='Raw Risk', y2_label='Raw Time (h)',
+                y1_title='Raw Metrics',
+            )
             print(f"Raw dual Y-axis chart saved to: sensitivity_{param_name}_raw.png/.tiff")
         except Exception as e:
             print(f"Raw chart generation failed: {e}")
