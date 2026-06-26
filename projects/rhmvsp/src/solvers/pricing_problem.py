@@ -145,7 +145,6 @@ class PricingProblem:
         q_veh = self.config.q_road
         dual_od = duals.get("od", {}).get(self.od_idx, 0.0)
         dual_v = duals.get("vehicle", {}).get(0, 0.0)
-        dual_veh = duals.get("vehicle", [])
         dual_trans_out = duals.get("trans_out", {}).get(self.od_idx, 0.0)
         dual_trans_in = duals.get("trans_in", {}).get(self.od_idx, 0.0)
 
@@ -174,7 +173,7 @@ class PricingProblem:
         min_time_b = max(od_E, max_L - half_ratio * span)
 
         # Global label cap to prevent join explosion
-        total_labels_limit = 300
+        total_labels_limit = self.config.total_labels_limit
 
         while queue:
             _, _, curr = heapq.heappop(queue)
@@ -572,7 +571,7 @@ class PricingProblem:
                         # Risk penalty removed — no C_consequence parameter
                         midpoint_rc = actual_cost_arc
 
-                        total_time = f_lab.time_upper + (max_L - b_lab.time_upper)
+                        total_time = f_lab.time_upper + dt_arc + (max_L - b_lab.time_upper)
                         total_cost = f_lab.cost + b_lab.cost + actual_cost_arc
                         reduced_cost = f_lab.reduced_cost + b_lab.reduced_cost + duals_base + midpoint_rc
 
