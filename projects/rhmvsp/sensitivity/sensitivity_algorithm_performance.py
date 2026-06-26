@@ -112,7 +112,7 @@ def run_algorithm_performance():
             row = [scale, str(inst_idx)]
             if bap_ok:
                 # 记录完整 solution json (仿照 main_experiment)
-                sol_path = f"data_performance/{scale}/solution_{inst_idx}.json"
+                sol_path = os.path.join(exp_dir, f"solution_{scale}_{inst_idx}.json")
                 with open(sol_path, "w") as f:
                     json.dump(sol, f, indent=2, default=str)
                 print(f"Saved solution instance to {sol_path}")
@@ -168,6 +168,7 @@ def run_algorithm_performance():
         print("Performance plot generated successfully!")
 
     tee.close()
+    sys.stdout = sys.__stdout__
 
 if __name__ == "__main__":
     run_algorithm_performance()

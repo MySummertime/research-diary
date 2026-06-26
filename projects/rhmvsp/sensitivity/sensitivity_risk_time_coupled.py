@@ -28,13 +28,12 @@ import numpy as np
 from config import RHMVSPConfig
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
 from src.utils.logging import Logger
-from src.core.uncertainty import UncertaintyEngine as UE2, TrapezoidalFuzzy as TrapFz
 from sensitivity.plot_helpers import heatmap, discrete_cmap_5, set_style
 from sensitivity.utils import update_od_deadlines as _update_od_deadlines
 
 # ---- Experiment grids ----
-ALPHA_T_VALS    = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-ALPHA_MAX_VALS  = [0.01, 0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.10]
+ALPHA_T_VALS    = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]
+ALPHA_MAX_VALS  = [0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.055, 0.60]
 
 
 def _plot_heatmap(alpha_t_vals, alpha_max_vals, matrix, metric_name,
@@ -116,7 +115,7 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
     cfg_bench.solver_name = "gurobi"
 
     inst_bench = json.loads(json.dumps(instance))
-    _update_od_deadlines(inst_bench, cfg_bench)
+    _update_od_deadlines(inst_bench, cfg_bench, alpha_T_dependent=True)
 
     bench_sub = os.path.join(exp_dir, "benchmark_constant")
     os.makedirs(bench_sub, exist_ok=True)
@@ -178,7 +177,7 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
             cfg.solver_name = "gurobi"
 
             inst = json.loads(json.dumps(instance))
-            _update_od_deadlines(inst, cfg)
+            _update_od_deadlines(inst, cfg, alpha_T_dependent=True)
 
             sub = os.path.join(exp_dir, f"aMax={a_max:.3f}_aT={aT:.2f}")
             os.makedirs(sub, exist_ok=True)
@@ -308,6 +307,7 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
 
     print(f"\nAll outputs saved in: {exp_dir}")
     tee.close()
+    sys.stdout = sys.__stdout__
     return results
 
 

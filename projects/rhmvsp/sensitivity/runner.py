@@ -17,7 +17,8 @@ from sensitivity.plot_helpers import dual_y_axis_with_cost_bar
 
 def run_sensitivity(param_name: str, param_values: list, param_attr_path: str, 
                     instance_path: str, label: str, time_limit: int = 60,
-                    output_root: str = "results", config_setter=None):
+                    output_root: str = "results", config_setter=None,
+                    use_alpha_T_overhead: bool = False):
     """
     Run sensitivity analysis for one parameter.
     
@@ -95,8 +96,16 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                             return visited[arc["j"]]
                         queue.append(arc["j"])
             return None
-        # --- Same formula as real_data_generator.py ---
-        # Compute physical travel time + 60h overhead per OD.
+        # --- Time window overhead ---
+        if use_alpha_T_overhead:
+            # α_T-dependent: tighter α_T → tighter time window → binding time reliability.
+            _overhead_min = 40.0    # empirical: must be ≥45 for α_T=1.0 feasibility
+            _overhead_max = 60.0
+            _ratio = (1.0 - config.alpha_T) ** 0.5
+            _overhead = _overhead_min + _ratio * (_overhead_max - _overhead_min)
+        else:
+            # Fixed overhead for experiments that don't sweep α_T
+            _overhead = 60.0
         for od in inst["od_pairs"]:
             od["alpha_T_od"] = config.alpha_T
             od_o, od_d = od["origin"], od["destination"]
@@ -110,7 +119,7 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                     t_road_1 = co["distance"] / config.road_speed
                     t_rail = sum(arc["distance"] / config.rail_speed for arc in rail_path)
                     t_road_2 = ci["distance"] / config.road_speed
-                    t_travel = t_road_1 + t_rail + t_road_2 + 60.0
+                    t_travel = t_road_1 + t_rail + t_road_2 + _overhead
                     start_time = od.get("time_window_start", 0.0)
                     od["time_window_end"] = float(math.ceil((start_time + t_travel) / 12.0) * 12)
 
@@ -265,4 +274,5 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
             print(f"Raw chart generation failed: {e}")
 
     tee.close()
+    sys.stdout = sys.__stdout__
     return results

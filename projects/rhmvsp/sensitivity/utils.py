@@ -18,7 +18,7 @@ def _haversine_distance(lon1, lat1, lon2, lat2):
     return 6371 * c
 
 
-def update_od_deadlines(instance: dict, config: Any) -> None:
+def update_od_deadlines(instance: dict, config: Any, alpha_T_dependent: bool = False) -> None:
     """Recompute L_od for each OD pair based on current alpha_T and delta_T.
 
     Uses physical travel time + 60h overhead (same formula as real_data_generator.py).
@@ -64,15 +64,23 @@ def update_od_deadlines(instance: dict, config: Any) -> None:
             rail_path = _bfs_rail(co["j"], ci["i"])
 
             if rail_path:
-                # --- Time window based on physical travel time (fixed, independent of delta_T) ---
+                # --- Time window overhead ---
+                if alpha_T_dependent:
+                    # α_T-dependent: tighter α_T → tighter time window → binding time reliability.
+                    _overhead_min = 40.0
+                    _overhead_max = 60.0
+                    _ratio = (1.0 - config.alpha_T) ** 0.5
+                    _overhead = _overhead_min + _ratio * (_overhead_max - _overhead_min)
+                else:
+                    # Fixed overhead for experiments that don't sweep α_T
+                    _overhead = 60.0
+
                 # Physical travel time: road1 + rail + road2
                 t_road_1 = co["distance"] / config.road_speed
                 t_rail = sum(arc["distance"] / config.rail_speed for arc in rail_path)
                 t_road_2 = ci["distance"] / config.road_speed
                 t_travel_raw = t_road_1 + t_rail + t_road_2
-
-                # Overhead: transfers (2 × 14h) + rail waiting (~32h) = 60h
-                t_travel = t_travel_raw + 60.0
+                t_travel = t_travel_raw + _overhead
 
                 start_time = od.get("time_window_start", 0.0)
                 od["time_window_end"] = float(math.ceil((start_time + t_travel) / 12.0) * 12)

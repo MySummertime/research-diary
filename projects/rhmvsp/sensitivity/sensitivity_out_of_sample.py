@@ -8,7 +8,7 @@ Design (solve-on-original, evaluate-on-perturbed):
   4. Re-solve both models on each perturbed scenario
   5. Compare 4 reliability metrics: raw_risk, raw_time, R_risk, R_time
 
-Output: 4 enhanced box-plots comparing reliability metric distributions.
+Output: 5 enhanced box-plots (4 reliability metrics + total cost) comparing BAP vs LP Relaxation.
 """
 import sys, os, json
 from datetime import datetime
@@ -32,7 +32,7 @@ C_BAP = COLOURS["C1"]  # Warm Terracotta — BAP (our method)
 C_LP  = COLOURS["C2"]  # Celadon Green   — LP Relaxation (benchmark)
 
 # ── Experiment parameters ─────────────────────────────────────────────────────
-N_SCENARIOS = 10          # scenarios per group (reduced for faster testing)
+N_SCENARIOS = 100          # scenarios per group (reduced for faster testing)
 INSTANCE_PATH = "data_real_case/instance.json"
 
 # 4 parameter combinations for quick test
@@ -183,16 +183,16 @@ def run_out_of_sample():
 
             # Store aligned — NaN for failed runs keeps index correspondence
             bap_costs[label].append(r_bap["cost"] if r_bap["cost"] is not None else float("nan"))
-            bap_raw_risk[label].append(r_bap.get("raw_risk", float("nan")))
-            bap_raw_time[label].append(r_bap.get("raw_time", float("nan")))
-            bap_R_risk[label].append(r_bap.get("R_risk", float("nan")))
-            bap_R_time[label].append(r_bap.get("R_time", float("nan")))
+            bap_raw_risk[label].append(r_bap.get("raw_risk") if r_bap.get("raw_risk") is not None else float("nan"))
+            bap_raw_time[label].append(r_bap.get("raw_time") if r_bap.get("raw_time") is not None else float("nan"))
+            bap_R_risk[label].append(r_bap.get("R_risk") if r_bap.get("R_risk") is not None else float("nan"))
+            bap_R_time[label].append(r_bap.get("R_time") if r_bap.get("R_time") is not None else float("nan"))
 
             lp_costs[label].append(r_lp["cost"] if r_lp["cost"] is not None else float("nan"))
-            lp_raw_risk[label].append(r_lp.get("raw_risk", float("nan")))
-            lp_raw_time[label].append(r_lp.get("raw_time", float("nan")))
-            lp_R_risk[label].append(r_lp.get("R_risk", float("nan")))
-            lp_R_time[label].append(r_lp.get("R_time", float("nan")))
+            lp_raw_risk[label].append(r_lp.get("raw_risk") if r_lp.get("raw_risk") is not None else float("nan"))
+            lp_raw_time[label].append(r_lp.get("raw_time") if r_lp.get("raw_time") is not None else float("nan"))
+            lp_R_risk[label].append(r_lp.get("R_risk") if r_lp.get("R_risk") is not None else float("nan"))
+            lp_R_time[label].append(r_lp.get("R_time") if r_lp.get("R_time") is not None else float("nan"))
 
             with open(csv_path, "a", newline="") as f:
                 row = [label, aT, a_max, s_id, "LP", r_lp["cost"]]
@@ -219,6 +219,7 @@ def run_out_of_sample():
     from scipy.stats import wilcoxon as _wilcoxon
 
     metrics = [
+        ("total_cost", bap_costs,     lp_costs,     r"Total Cost (CNY)",             "total_cost_boxplot"),
         ("raw_risk",  bap_raw_risk,  lp_raw_risk,  r"Raw Risk ($\sum (1-R_{ij})$)", "raw_risk_boxplot"),
         ("raw_time",  bap_raw_time,  lp_raw_time,  r"Raw Time (h)",                 "raw_time_boxplot"),
         ("R_risk",    bap_R_risk,    lp_R_risk,    r"Risk Reliability ($R_{risk}$)",  "R_risk_boxplot"),
@@ -247,6 +248,9 @@ def run_out_of_sample():
     print("\n=== Summary ===")
     for metric_name, bap_data, lp_data, y_label, _ in metrics:
         print(f"\n--- {y_label} ---")
+        # Adaptive format: cost metrics use comma-separated integers, others use 4 decimals
+        is_cost = metric_name == "total_cost"
+        fmt = ",.0f" if is_cost else ".4f"
         for lbl in group_labels:
             b = np.array(bap_data[lbl], dtype=float)
             l = np.array(lp_data[lbl], dtype=float)
@@ -261,22 +265,23 @@ def run_out_of_sample():
                 elif _p < 0.01:  sig = "**"
                 elif _p < 0.05:  sig = "*"
                 else:            sig = "ns"
-                print(f"  {lbl:>10s}  BAP={b_med:>10.4f}  LP={l_med:>10.4f}  "
+                print(f"  {lbl:>10s}  BAP={b_med:>14{fmt}}  LP={l_med:>14{fmt}}  "
                       f"n={n}  p={_p:.4f} {sig}")
             elif n > 0:
-                print(f"  {lbl:>10s}  BAP={b_med:>10.4f}  LP={l_med:>10.4f}  (n={n})")
+                print(f"  {lbl:>10s}  BAP={b_med:>14{fmt}}  LP={l_med:>14{fmt}}  (n={n})")
             else:
                 print(f"  {lbl:>10s}  No data")
 
     print(f"\nResults saved to {exp_dir}/")
     tee.close()
+    sys.stdout = sys.__stdout__
     return exp_dir
 
 
 if __name__ == "__main__":
     print(f"Out-of-Sample Sensitivity Analysis: BAP vs LP Relaxation")
     print(f"  N={N_SCENARIOS} scenarios × {len(PARAM_GRID)} groups")
-    print(f"  Metrics: raw_risk, raw_time, R_risk, R_time")
+    print(f"  Metrics: total_cost, raw_risk, raw_time, R_risk, R_time")
     print("=" * 65)
     exp_dir = run_out_of_sample()
     print(f"\nDone!  Open {exp_dir}/ for 4 boxplots.")
