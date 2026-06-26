@@ -74,6 +74,7 @@ class ODPair:
     time_window_start: float = 0.0              # Delivery time window lower bound
     time_window_end: float = 48.0             # Delivery time window upper bound
     alpha_T_od: float = 0.8        # Time reliability threshold
+    origin_hub: int = -1           # Hub ID for west-side origin hub (fleet base)
     destination_hub: int = -1       # Hub ID for east-side delivery
 
 
@@ -162,6 +163,7 @@ class MultimodalNetwork:
                 time_window_start=od_data.get("time_window_start", 0.0),
                 time_window_end=od_data.get("time_window_end", 48.0),
                 alpha_T_od=od_data.get("alpha_T_od", 0.8),
+                origin_hub=od_data.get("origin_hub", -1),
                 destination_hub=od_data.get("destination_hub", -1),
             )
             net.od_pairs.append(od)

@@ -488,12 +488,7 @@ class UncertaintyEngine:
                 elif r <= 0.5 + 1e-9:
                     t_r = b  # plateau start
                 else:
-                    # Map r from (0.5, 1] to plateau + right slope
-                    r_adj = (r - 0.5) * 2.0  # [0, 1]
-                    if r_adj <= 0.5:
-                        t_r = b + 2.0 * r_adj * (c - b)
-                    else:
-                        t_r = c + 2.0 * (r_adj - 0.5) * (d - c)
+                    t_r = d - 2.0 * (1.0 - r) * (d - c)
                 avg_phi = self._integrate_risk_multiplier(start_time, start_time + t_r)
                 effective_alpha_k = alpha * avg_phi
                 total_alpha += effective_alpha_k

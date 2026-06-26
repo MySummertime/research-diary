@@ -251,10 +251,11 @@ class ReliabilityAnalyzer:
             if prev_mode is not None and prev_mode != mode:
                 if transfer_idx < len(transfer_nodes):
                     tn = transfer_nodes[transfer_idx]
-                    tri = TriangularFuzzy(
+                    tri = TrapezoidalFuzzy(
                         a=tn.transfer_time_a,
                         b=tn.transfer_time_b,
-                        c=tn.transfer_time_c
+                        c=tn.transfer_time_c,
+                        d=tn.transfer_time_d
                     )
                     t_arr = arrival_times[k - 1] if k > 0 else 0
 

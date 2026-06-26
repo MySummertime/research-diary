@@ -317,7 +317,7 @@ class InstanceGenerator:
 			transfer_time = 1.0
 			wait_time_est = interval
 			t_expected = time_window_start + t_road_1 + transfer_time + wait_time_est + t_rail + transfer_time + t_road_2
-			time_window_end = float(round(t_expected + self.config.prep_time_hours + self.config.dispatch_buffer_hours + self.config.time_window_end_buffer_hours, 1))
+			time_window_end = float(round(t_expected + self.config.prep_time_same_hours + self.config.dispatch_buffer_hours + self.config.time_window_end_buffer_hours, 1))
 			self.config.T_max = max(self.config.T_max, time_window_end + 12.0)
 
 			od_pairs.append({
