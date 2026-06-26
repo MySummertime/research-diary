@@ -74,7 +74,48 @@ def generate_instances(num_instances, seeds, scales, output_dir):
                 num_od_pairs=num_od_pairs,
                 num_vehicles=num_vehicles,
             )
-            
+
+            # ---- Post-process: add origin_hub / destination_hub to OD pairs ----
+            transfer_hub_ids = [tn["node_id"] for tn in inst["network"].get("transfer_nodes", [])]
+            # Build a mapping from node_id to its coordinates
+            node_coords = {}
+            for n in inst["network"].get("nodes", []):
+                node_coords[n["id"]] = (n.get("x", 0), n.get("y", 0))
+            hub_coords = {h: node_coords.get(h, (0, 0)) for h in transfer_hub_ids}
+
+            for od in inst["od_pairs"]:
+                origin = od["origin"]
+                destination = od["destination"]
+                # Find nearest hub to origin
+                if transfer_hub_ids and origin in node_coords:
+                    ox, oy = node_coords[origin]
+                    best_h = min(transfer_hub_ids, key=lambda h: (hub_coords[h][0]-ox)**2 + (hub_coords[h][1]-oy)**2)
+                    od["origin_hub"] = best_h
+                elif transfer_hub_ids:
+                    od["origin_hub"] = transfer_hub_ids[0]
+                else:
+                    od["origin_hub"] = -1
+                # Find nearest hub to destination
+                if transfer_hub_ids and destination in node_coords:
+                    dx, dy = node_coords[destination]
+                    best_h = min(transfer_hub_ids, key=lambda h: (hub_coords[h][0]-dx)**2 + (hub_coords[h][1]-dy)**2)
+                    od["destination_hub"] = best_h
+                elif transfer_hub_ids:
+                    od["destination_hub"] = transfer_hub_ids[-1]
+                else:
+                    od["destination_hub"] = -1
+
+            # ---- Post-process: add hub_fleet_size ----
+            hub_fleet = {}
+            for h in transfer_hub_ids:
+                hub_fleet[str(h)] = max(5, num_vehicles // max(1, len(transfer_hub_ids)))
+            inst["hub_fleet_size"] = hub_fleet
+
+            # ---- Post-process: add num_vehicles_west / num_vehicles_east ----
+            half = num_vehicles // 2
+            inst["num_vehicles_west"] = half
+            inst["num_vehicles_east"] = num_vehicles - half
+
             file_path = f"{output_dir}/{scale}/instance_{inst_idx}.json"
             with open(file_path, "w") as f:
                 json.dump(inst, f, indent=4)

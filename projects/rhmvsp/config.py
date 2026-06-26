@@ -57,7 +57,7 @@ class RHMVSPConfig:
 	# 同样，转运设施启动费等 resource 成本也应由基建方承担，予以剔除
 	c_hub: float = 0.0  # Transfer facility setup cost (¥)
 	c_unmet_penalty: float = 5000.0 # Base opportunity cost for unfulfilled demand (¥/ton)
-	c_vehicle_idle: float = 10.0  # Vehicle idle/waiting cost per ton-hour during reposition gap (¥/ton·h)
+	c_vehicle_idle_daily: float = 50.0  # Base vehicle daily depreciation/idle cost (¥/day)
 	crane_daily_lifts: int = 200  # Daily lifts per crane
 	max_hubs: int | None = None  # Max active transfer hubs (None means unlimited)
 
@@ -69,7 +69,18 @@ class RHMVSPConfig:
 	alpha_T: float = 0.8  # Time reliability threshold (alpha_T > 0.5)
 
 	# ============================================================
-	# Risk Parameters (§2.2)	# ============================================================
+	# Risk Parameters (§2.2)
+	# ============================================================
+	c_residual_risk_per_km: float = 2.0  # Residual risk cost for unwashed HazMat tanker (¥/km)
+
+	# ============================================================
+	# Driver Fatigue Limits
+	# ============================================================
+	driver_fatigue_limit_day_hours: float = 4.0   # Max continuous driving hours in daytime
+	driver_fatigue_limit_night_hours: float = 2.0  # Max continuous driving hours at night
+	driver_rest_hours: float = 0.33  # Minimum mandatory rest per stop (hours, ~20 min)
+	night_start_hour: float = 22.0   # Night period start (22:00)
+	night_end_hour: float = 6.0      # Night period end (06:00)
 
 	# ============================================================
 	# Fuzzy Variable Parameters (§3.2)	# ============================================================
@@ -84,10 +95,13 @@ class RHMVSPConfig:
 	# Bidirectional label correction overlap ratio (§4.5)
 	pricing_overlap_ratio: float = 0.75  # each direction covers this fraction of time span
 
-	prep_time_hours: float = 4.0  # Empty vehicle preparation time (inspection, cleaning, driver rest)
+	# Hazardous material compatibility penalty (same / different cargo)
+	prep_time_same_hours: float = 0.0   # Preparation time for compatible cargo (no wash needed)
+	c_prep_reposition_same: float = 0.0  # Preparation cost for compatible cargo (¥)
+	prep_time_diff_hours: float = 4.0   # Wash-out time for incompatible cargo
+	c_prep_reposition_diff: float = 1500.0  # Incompatible cargo high wash cost (¥)
 	dispatch_buffer_hours: float = 2.0  # Cross-station dispatch buffer
 	time_window_end_buffer_hours: float = 6.0  # Buffer for computing OD delivery deadline from expected arrival
-	c_prep_reposition: float = 300.0  # Fixed preparation cost per reposition event (¥)
 
 	# ============================================================
 	# Time Uncertainty Parameter
@@ -117,7 +131,8 @@ class RHMVSPConfig:
 	bap_stabilization: bool = True  # Interior point stabilization
 	stabilization_mu: float = 0.5  # Smoothing factor for duals
 	max_labels_exact: int = 500  # Bound ESPPRC label count to prevent explosion
-	max_labels_heuristic: int = 20  # Max labels to keep in heuristic pricing
+	max_labels_heuristic: int = 50  # Max labels to keep in heuristic pricing
+	total_labels_limit: int = 500  # Global label cap across all nodes in pricing
 
 	# ============================================================
 	# Paths & System
