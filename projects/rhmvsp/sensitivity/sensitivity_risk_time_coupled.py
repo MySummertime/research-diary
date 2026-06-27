@@ -33,7 +33,7 @@ from sensitivity.utils import update_od_deadlines as _update_od_deadlines
 
 # ---- Experiment grids ----
 ALPHA_T_VALS    = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]
-ALPHA_MAX_VALS  = [0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.055, 0.60]
+ALPHA_MAX_VALS  = [0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.055, 0.06]
 
 
 def _plot_heatmap(alpha_t_vals, alpha_max_vals, matrix, metric_name,
@@ -65,7 +65,7 @@ def _plot_heatmap(alpha_t_vals, alpha_max_vals, matrix, metric_name,
                            edgecolors='none', zorder=2)
 
     ax.set_xticks(np.arange(len(xlabels)))
-    ax.set_xticklabels(xlabels, fontsize=10, rotation=45, ha='right')
+    ax.set_xticklabels(xlabels, fontsize=10)
     ax.set_yticks(np.arange(len(ylabels)))
     ax.set_yticklabels(ylabels, fontsize=10)
     ax.set_xlabel(r'$\alpha_{max}$ (Risk Reliability Limit)', fontsize=13)

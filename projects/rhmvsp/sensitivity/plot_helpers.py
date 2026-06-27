@@ -85,7 +85,7 @@ def dual_y_axis(x_label: str, x_vals, r_risk_vals, r_time_vals,
                       markersize=5, linewidth=1.8,
                       label=r'Risk Reliability ($R_{risk}$)', zorder=5)
     ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(x_labels, fontsize=11, rotation=45, ha='right')
+    ax1.set_xticklabels(x_labels, fontsize=11)
     ax1.tick_params(axis='x', direction='in', labelsize=11)
     ax1.tick_params(axis='y', direction='in', labelcolor=c1, labelsize=11)
     ax1.yaxis.grid(True, linestyle='--', color='gray', alpha=0.5)
@@ -235,7 +235,7 @@ def dual_y_axis_with_cost_bar(x_label: str, x_vals, r_risk_vals, r_time_vals,
     ax1.set_xlabel(x_label, fontsize=14)
     ax1.set_ylabel(y1_title, fontsize=14)
     ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(_fmt_values(x_vals), fontsize=11, rotation=45, ha='right')
+    ax1.set_xticklabels(_fmt_values(x_vals), fontsize=11)
 
     line1, = ax1.plot(x_pos, r_risk_vals, color=c1, marker='o',
                       markersize=5, linewidth=1.8,
@@ -294,7 +294,7 @@ def heatmap(data_2d, xlabels, ylabels, xlabel, ylabel, save_path,
     im = ax.imshow(data_2d, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax, origin='lower')
 
     ax.set_xticks(np.arange(len(xlabels)))
-    ax.set_xticklabels(xlabels, fontsize=10, rotation=45, ha='right')
+    ax.set_xticklabels(xlabels, fontsize=10)
     ax.set_yticks(np.arange(len(ylabels)))
     ax.set_yticklabels(ylabels, fontsize=10)
     ax.set_xlabel(xlabel, fontsize=13)
@@ -513,7 +513,7 @@ def enhanced_boxplot(group_labels, bap_costs, bench_costs, save_path,
 
     # ── X-axis labels ─────────────────────────────────────────────────────────
     ax.set_xticks(group_x)
-    ax.set_xticklabels(group_labels, fontsize=11, rotation=30, ha="right")
+    ax.set_xticklabels(group_labels, fontsize=11)
     ax.set_xlabel(x_label, fontsize=13)
     ax.set_ylabel(y_label, fontsize=13)
 
