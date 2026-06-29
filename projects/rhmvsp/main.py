@@ -323,12 +323,14 @@ def main():
 		# Write summary CSV with cost, sub-costs, reliability and raw values
 		csv_path = os.path.join(args.output, "summary.csv")
 		sol = solution
+		from sensitivity.utils import format_routing_summary
+		route_sum = format_routing_summary(sol, instance)
 		cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "transfer_cost",
 				 "reposition_cost", "total_prep_cost", "idle_cost", "unmet_penalty"]
 		with open(csv_path, "w", newline="") as csv_f:
 			w = csv.writer(csv_f)
 			w.writerow(["Status", "Cost"] + cost_cols +
-					   ["R_risk", "R_time", "Raw_Risk", "Raw_Time"])
+					   ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "Routes"])
 			w.writerow([
 				sol.get("status", "unknown"),
 				f"{sol.get('total_cost', 0):.2f}",
@@ -337,6 +339,7 @@ def main():
 				f"{sol.get('R_net_time', 0):.6f}",
 				f"{sol.get('raw_net_risk', 0):.2f}",
 				f"{sol.get('raw_net_time', 0):.2f}",
+				route_sum,
 			])
 		logger.info(f"Summary CSV saved to: {csv_path}")
 

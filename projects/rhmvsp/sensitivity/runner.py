@@ -135,6 +135,7 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
         try:
             solver = BAPSolver(config, inst, logger)
             sol = solver.solve()
+            from sensitivity.utils import print_od_routing; print_od_routing(sol, inst, f"{label}={val}")
 
             # Save solution.json
             if sol and sol.get("status") != "infeasible":
@@ -149,6 +150,8 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                 raw_time = sol.get("raw_net_time", 0.0)
                 cost = sol.get("total_cost", 0)
                 gap_pct = sol.get("gap_pct", 0.0)
+                from sensitivity.utils import format_routing_summary
+                route_sum = format_routing_summary(sol, inst)
                 results.append({
                     "param": val, "status": "optimal",
                     "cost": cost, "R_risk": r_risk, "R_time": r_time,
@@ -163,6 +166,7 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                     "idle_cost": sol.get("idle_cost", 0),
                     "unmet_penalty": sol.get("unmet_penalty", 0),
                     "od_details": sol.get("od_reliability_details", {}),
+                    "routes": route_sum,
                 })
                 logger.info(f"\nResult: {label}={val}: Cost=¥{cost:,.0f}, R_risk={r_risk:.4f}, R_time={r_time:.4f}")
                 logger.info(f"  Sub-Costs: Deploy=¥{sol.get('deploy_cost',0):,.0f}, Hub=¥{sol.get('hub_cost',0):,.0f}, Transport=¥{sol.get('transport_cost',0):,.0f}, Transfer=¥{sol.get('transfer_cost',0):,.0f}, Repo=¥{sol.get('reposition_cost',0):,.0f}, Prep=¥{sol.get('total_prep_cost',0):,.0f}, Idle=¥{sol.get('idle_cost',0):,.0f}, Unmet=¥{sol.get('unmet_penalty',0):,.0f}")
@@ -210,7 +214,7 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
         f.write(f"{param_name},status,cost,{','.join(cost_cols)},R_risk,R_time,Raw_Risk,Raw_Time,Gap_pct")
         for od_idx in range(5):
             f.write(f",R_od_{od_idx+1}_risk,R_od_{od_idx+1}_time,Raw_od_{od_idx+1}_risk,Raw_od_{od_idx+1}_time")
-        f.write("\n")
+        f.write(",Routes\n")
         for r in results:
             f.write(f"{r['param']},{r.get('status','?')}")
             if r.get("status") == "optimal":
@@ -222,14 +226,17 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                 for od_idx in range(5):
                     od_r = od_details.get(od_idx, {})
                     f.write(f",{od_r.get('R_od_risk', 0):.4f},{od_r.get('R_od_time', 0):.4f},{od_r.get('raw_risk', 0):.4f},{od_r.get('raw_time', 0):.4f}")
+                f.write(f",{r.get('routes','')}\n")
             else:
                 f.write(",")  # empty cost
                 for col in cost_cols:
                     f.write(",")
-                f.write(",,,,")  # R_risk, R_time, Raw_Risk, Raw_Time
+                f.write(",,")  # R_risk, R_time
+                f.write(",,")  # Raw_Risk, Raw_Time
                 f.write(",")  # Gap_pct
                 for od_idx in range(5):
                     f.write(",,,,")  # 4 per-OD columns
+                f.write(",")  # Routes (empty for infeasible)
             f.write("\n")
     print(f"Summary CSV saved to: {csv_path}")
 
