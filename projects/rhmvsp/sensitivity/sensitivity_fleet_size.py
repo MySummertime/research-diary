@@ -40,6 +40,7 @@ def _run_single(config, inst, logger):
     import time
     t0 = time.time()
     sol = solver.solve()
+    from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol, inst)
     elapsed = time.time() - t0
 
     status = sol.get("status", "unknown")
@@ -53,7 +54,8 @@ def _run_single(config, inst, logger):
               "raw_time": sol.get("raw_net_time", 0.0) if ok else None,
               "status": status, "elapsed": round(elapsed, 2),
               "vehicles_used": sol.get("num_vehicles_used", 0),
-              "repositions": sol.get("num_repositions", 0)}
+              "repositions": sol.get("num_repositions", 0),
+              "routes": format_routing_summary(sol, inst)}
     for col in cost_cols:
         result[col] = sol.get(col, 0) if ok else None
     return result
@@ -101,7 +103,7 @@ def run_fleet_size_sensitivity():
             ["group_label", "fleet_scale", "fleet_2", "fleet_5", "fleet_38",
              "model", "cost"] + cost_cols +
             ["R_risk", "R_time", "Raw_Risk", "Raw_Time",
-             "vehicles_used", "repositions", "status", "elapsed_s"]
+             "vehicles_used", "repositions", "status", "elapsed_s", "Routes"]
         )
 
     for scale in FLEET_SCALE_VALUES:
@@ -142,7 +144,7 @@ def run_fleet_size_sensitivity():
             row += [r.get("R_risk"), r.get("R_time"),
                     r.get("raw_risk"), r.get("raw_time"),
                     r.get("vehicles_used"), r.get("repositions"),
-                    r["status"], r["elapsed"]]
+                    r["status"], r["elapsed"], r.get("routes", "")]
             csv.writer(f).writerow(row)
 
         # Progress
@@ -155,6 +157,8 @@ def run_fleet_size_sensitivity():
         print(f"  [{done}/{total}]  Cost={c_str}  R_risk={rr_str}  "
               f"R_time={rt_str}  Vehicles={v_str}  "
               f"({r['elapsed']:.1f}s)")
+
+    print(f"CSV saved → {csv_path}")
 
     # ── Plot dual Y-axis chart ──────────────────────────────────────────────
     x_vals = [float(s.replace("x", "")) for s in group_labels]

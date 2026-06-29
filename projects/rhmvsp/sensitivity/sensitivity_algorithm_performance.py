@@ -197,6 +197,7 @@ def run_algorithm_performance():
             "CMIP_EnumTime", "CMIP_MIPTime",
             "Gap_Time_NoStab%", "Gap_Iter_NoStab%",
             "Gap_Time_CMIP%", "Gap_Iter_CMIP%",
+            "BAP_Routes", "NoStab_Routes",
         ])
 
     rows = []
@@ -237,11 +238,13 @@ def run_algorithm_performance():
                 print("  Solving with BAP (stabilized)...")
                 sol_bap = _run_bap(inst, cfg, logger)
                 m_bap = _extract_metrics(sol_bap, "bap")
+                from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol_bap, inst, f"BAP {label}")
 
                 # ── Run BAP-NoStab (standard BAP) ───────────────────────
                 print("  Solving with BAP-NoStab...")
                 sol_nostab = _run_bap_nostab(inst, cfg, logger)
                 m_nostab = _extract_metrics(sol_nostab, "bap_nostab")
+                from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol_nostab, inst, f"NoStab {label}")
 
                 # ── Run Compact MIP ─────────────────────────────────────
                 print("  Solving with Compact MIP...")
@@ -279,6 +282,8 @@ def run_algorithm_performance():
                 def _fmt(v, f):
                     return f"{v:{f}}" if v is not None else "N/A"
 
+                bap_routes = format_routing_summary(sol_bap, inst)
+                nostab_routes = format_routing_summary(sol_nostab, inst)
                 row = [
                     inst_tag, inst_size, aT, a_max,
                     f"{m_bap['time']:.2f}", str(m_bap["iter"]),
@@ -293,6 +298,7 @@ def run_algorithm_performance():
                     _fmt(gap_i_ns, ".2f"),
                     _fmt(gap_t_cmip, ".2f"),
                     _fmt(gap_i_cmip, ".2f"),
+                    bap_routes, nostab_routes,
                 ]
                 rows.append(row)
 
@@ -312,6 +318,7 @@ def run_algorithm_performance():
     # ── Write CSV ────────────────────────────────────────────────────────────
     with open(csv_path, "a", newline="") as f:
         csv.writer(f).writerows(rows)
+    print(f"CSV saved \u2192 {csv_path}")
 
     # ── Plot ─────────────────────────────────────────────────────────────────
     if x_labels:

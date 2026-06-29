@@ -45,10 +45,13 @@ PARAM_GRID = [
 
 
 def _run_single(config, inst, logger) -> dict:
-    """Run BAP solve and return metrics dict."""
+    """Run BAP solve and return metrics dict + routing summary."""
     t0 = time.time()
     solver = BAPSolver(config, inst, logger)
     sol = solver.solve()
+    from sensitivity.utils import format_routing_summary, print_od_routing
+    route_sum = format_routing_summary(sol, inst)
+    print_od_routing(sol, inst)
     elapsed = time.time() - t0
 
     ok = sol.get("status") not in ("infeasible", "error", None)
@@ -63,6 +66,7 @@ def _run_single(config, inst, logger) -> dict:
         "deploy_cost": sol.get("deploy_cost") if ok else None,
         "transport_cost": sol.get("transport_cost") if ok else None,
         "transfer_cost": sol.get("transfer_cost") if ok else None,
+        "routes": route_sum,
         "reposition_cost": sol.get("reposition_cost") if ok else None,
         "unmet_penalty": sol.get("unmet_penalty") if ok else None,
         "iterations": sol.get("iterations", 0),
@@ -113,6 +117,7 @@ def run_value_of_reliability():
             "MW_R_risk", "MW_R_time", "MW_RawRisk", "MW_RawTime",
             "Gap_Cost(%)", "Gap_RawRisk(%)", "Gap_RawTime(%)",
             "Gap_R_risk(%)", "Gap_R_time(%)",
+            "MR_Routes", "MW_Routes",
         ])
 
     group_labels = []
@@ -191,12 +196,14 @@ def run_value_of_reliability():
             _f(r_norel["raw_risk"], ".2f"), _f(r_norel["raw_time"], ".2f"),
             _f(gap_cost, ".4f"), _f(gap_raw_risk, ".4f"), _f(gap_raw_time, ".4f"),
             _f(gap_r_risk, ".4f"), _f(gap_r_time, ".4f"),
+            r_full.get("routes", ""), r_norel.get("routes", ""),
         ]
 
         with open(csv_path, "a", newline="") as f:
             csv.writer(f).writerow(row)
 
         # Print summary
+        print(f"CSV saved \u2192 {csv_path}")
         f_str = f"¥{r_full['cost']:,.0f}" if r_full['cost'] else r_full['status']
         n_str = f"¥{r_norel['cost']:,.0f}" if r_norel['cost'] else r_norel['status']
         print(f"  MR:  Cost={f_str}  R_risk={_f(r_full['R_risk'],'.4f')}  R_time={_f(r_full['R_time'],'.4f')}")

@@ -159,7 +159,8 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
                     ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "Gap_pct", "iterations",
                      "cost_bench", "R_risk_bench", "R_time_bench",
                      "Raw_Risk_bench", "Raw_Time_bench",
-                     "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%"])
+                     "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%",
+                     "Routes"])
 
     results = []
     n = len(ALPHA_MAX_VALS) * len(ALPHA_T_VALS)
@@ -188,8 +189,11 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
             try:
                 solver = BAPSolver(cfg, inst, logger)
                 sol = solver.solve()
+                from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol, inst, f"aMax={a_max}_aT={aT}")
+                routes_str = format_routing_summary(sol, inst)
 
                 if sol and sol.get("status") != "infeasible":
+                    rec["routes"] = routes_str
                     rec.update({
                         "status": sol.get("status", "optimal"),
                         "cost": sol.get("total_cost", 0),
@@ -258,6 +262,7 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
                     f"{bench_raw_risk:.4f}" if bench_raw_risk else "",
                     f"{bench_raw_time:.4f}" if bench_raw_time else "",
                     cost_g, rr_g, rt_g,
+                    rec.get("routes", ""),
                 ]
                 w.writerow(row)
 

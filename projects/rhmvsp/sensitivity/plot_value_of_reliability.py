@@ -164,15 +164,16 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
             ax2.plot([x_pos[gi], x_pos[gi]], [0, vals[gi]],
                      color=metric_colors[mi], linewidth=0.8, alpha=0.4,
                      solid_capstyle='round')
-        # Lollipop heads (uniform size)
-        ax2.scatter(x_pos, vals, s=60, c=metric_colors[mi],
+        # Lollipop heads (size ∝ |gap|, min s=60)
+        sizes = np.maximum(60, np.abs(vals) * 10)
+        ax2.scatter(x_pos, vals, s=sizes, c=metric_colors[mi],
                     alpha=0.85, edgecolors='white', linewidth=0.3,
                     label=gap_names[mi], zorder=3)
 
     ax2.axhline(0, color='black', linewidth=0.7)
     ax2.set_xticks(np.arange(n_gaps))
     ax2.set_xticklabels(x_labels, fontsize=9)
-    ax2.set_ylabel("Gap (%)  (MW − MR) / |MR|", fontsize=12)
+    ax2.set_ylabel("Gap (%)  (MW - MR) / |MR|", fontsize=12)
     ax2.tick_params(axis='y', direction='in', labelsize=10)
     ax2.yaxis.grid(True, linestyle='--', color='gray', alpha=0.3)
     ax2.spines['top'].set_visible(False)
@@ -180,8 +181,6 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
     ax2.set_xlabel(r"($\alpha_T$, $\alpha_{max}$)", fontsize=11)
     ax2.legend(frameon=False, fontsize=8, loc='lower center',
                bbox_to_anchor=(0.5, 1.02), ncol=5)
-
-    gaps_name = os.path.join(output_dir, "value_of_reliability_gaps")
 
     gaps_name = os.path.join(output_dir, "value_of_reliability_gaps")
     for ext in ["png", "tiff"]:

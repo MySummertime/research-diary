@@ -50,6 +50,7 @@ def _run_single(config, inst, model_tag):
     import time
     t0 = time.time()
     sol = solver.solve()
+    from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol, inst, model_tag)
     elapsed = time.time() - t0
 
     status = sol.get("status", "unknown")
@@ -63,6 +64,7 @@ def _run_single(config, inst, model_tag):
         "status": status,
         "elapsed": round(elapsed, 2),
         "model": model_tag,
+        "routes": format_routing_summary(sol, inst),
     }
 
 
@@ -131,7 +133,7 @@ def run_out_of_sample():
         csv.writer(f).writerow(
             ["group_label", "alpha_T", "alpha_max", "scenario_id",
              "model", "cost"] + cost_cols +
-            ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "status", "elapsed_s"]
+            ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "status", "elapsed_s", "Routes"]
         )
 
     for aT, a_max in PARAM_GRID:
@@ -164,7 +166,7 @@ def run_out_of_sample():
                     row.append(r_mr.get(col) if r_mr["cost"] is not None else None)
                 row += [r_mr.get("R_risk"), r_mr.get("R_time"),
                         r_mr.get("raw_risk"), r_mr.get("raw_time"),
-                        r_mr["status"], r_mr["elapsed"]]
+                        r_mr["status"], r_mr["elapsed"], r_mr.get("routes", "")]
                 csv.writer(f).writerow(row)
 
             # ── MW (Model Without reliability) ──────────────────────────────
@@ -199,7 +201,7 @@ def run_out_of_sample():
                     row.append(r_mw.get(col) if r_mw["cost"] is not None else None)
                 row += [r_mw.get("R_risk"), r_mw.get("R_time"),
                         r_mw.get("raw_risk"), r_mw.get("raw_time"),
-                        r_mw["status"], r_mw["elapsed"]]
+                        r_mw["status"], r_mw["elapsed"], r_mw.get("routes", "")]
                 csv.writer(f).writerow(row)
 
             # Progress
@@ -209,6 +211,8 @@ def run_out_of_sample():
             mw_str = f"CNY {r_mw['cost']:,.0f}" if r_mw["cost"] is not None else r_mw["status"]
             print(f"  [{done:3d}/{total}]  MR={mr_str:>14s}  MW={mw_str:>14s}  "
                   f"({r_mr['elapsed']:.1f}s / {r_mw['elapsed']:.1f}s)")
+
+    print(f"CSV saved → {csv_path}")
 
     # ── Generate plots: primary = Total Cost violin+boxplot ─────────────────
     from scipy.stats import wilcoxon as _wilcoxon
