@@ -1,12 +1,12 @@
 """
-Sensitivity: Algorithm Performance Comparison (BAP vs BAP-NoStab vs Compact MIP).
+Sensitivity: Algorithm Performance Comparison (BAP vs Branch-and-Cut vs Benders Decomposition).
 
-Grid: (Instance × α_T × α_max) × (BAP vs BAP-NoStab vs Compact MIP)
+Grid: (Instance × α_T × α_max) × (BAP vs Branch-and-Cut vs Benders Decomposition)
 
 For each combination:
   - Solve with BAP (full stabilization)                 → time, iter, cost
-  - Solve with BAP-NoStab (no dual stabilization)       → time, iter, cost
-  - Solve with Compact MIP (enumeration + direct MIP)   → time, iter, cost
+  - Solve with Branch-and-Cut                           → time, iter, cost
+  - Solve with Benders Decomposition                    → time, iter, cost
 
 Reference: Wang et al. (2025) §5.2 — compares C&CG vs BD algorithm across
 different instance sizes and parameter settings.
@@ -16,10 +16,9 @@ from datetime import datetime
 
 import matplotlib
 matplotlib.use('Agg')
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle as MPLRect
-from matplotlib.lines import Line2D as MPLLine
-from matplotlib.ticker import MaxNLocator
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,23 +33,21 @@ from sensitivity.compact_mip_benchmark import solve_compact_mip
 # ── Colour constants (used in _plot_dual_algorithm) ─────────────────────────
 
 # ── Experiment grid ─────────────────────────────────────────────────────────
-# 3 levels × 2 instances per level = 6 instances total.
-# Each level has 2 different node-count instances.
-# All instances share the same (α_T, α_max) grid.
+# NOTE: medium/large commented out — only small instances for current experiments
 INSTANCES = [
     # (tag, path, size_label)
     ("small_inst1", "data_performance/small/instance_1.json",  "small"),
     ("small_inst2", "data_performance/small/instance_2.json",  "small"),
-    ("medium_inst1", "data_performance/medium/instance_1.json", "medium"),
-    ("medium_inst2", "data_performance/medium/instance_2.json", "medium"),
-    ("large_inst1", "data_performance/large/instance_1.json",  "large"),
-    ("large_inst2", "data_performance/large/instance_2.json",  "large"),
+    # ("medium_inst1", "data_performance/medium/instance_1.json", "medium"),
+    # ("medium_inst2", "data_performance/medium/instance_2.json", "medium"),
+    # ("large_inst1", "data_performance/large/instance_1.json",  "large"),
+    # ("large_inst2", "data_performance/large/instance_2.json",  "large"),
 ]
 
 # Same (α_T, α_max) grid for ALL instances
 ALPHA_T_VALS   = [0.5, 0.8]
 ALPHA_MAX_VALS = [0.015, 0.03, 0.05]
-TIME_LIMIT = 3600  # generous for compact MIP
+TIME_LIMIT = 3600  # generous for Benders Decomposition
 
 
 def _run_bap(instance, config, logger) -> dict:
@@ -75,7 +72,7 @@ def _run_bap_nostab(instance, config, logger) -> dict:
     elapsed = time.time() - t0
     sol["solve_wall_time"] = elapsed
     sol["solve_cpu_time"] = elapsed
-    sol["solver"] = "bap_nostab"
+    sol["solver"] = "branch_and_cut"
     return sol
 
 
@@ -100,74 +97,59 @@ def _extract_metrics(sol: dict, solver_tag: str) -> dict:
     }
 
 
-def _plot_dual_algorithm(bap_times, nostab_times, cmip_times,
-                          bap_iters, nostab_iters, cmip_iters, gap_times,
-                          param_labels, save_path):
+def _plot_algorithm_bar_line(bap_times, bap_iters,
+                              bnc_times, bnc_iters,
+                              bd_times, bd_iters,
+                              param_labels, inst_order,
+                              save_path):
     """
-    Grouped bar (time) + marker (iter) chart for 3 algorithms.
-
-    Bars: BAP / BAP-NoStab / Compact MIP side by side per (α_T, α_max) combo
-    Markers: iter values overlaid
-    Legend above the figure.
+    Horizontal grouped bar chart (BAP, BnC, BD)
     """
     set_style()
-    n_params = len(param_labels)
-    x_idx = np.arange(n_params)
-    n_algos = 3
+    n_inst = len(inst_order)
+    unique_params = list(dict.fromkeys(param_labels))
+    n_params = len(unique_params)
+
+    algo_colors = {"BAP": COLOURS["C1"], "BnC": COLOURS["C4"], "BD": COLOURS["C2"]}
+
+    fig, ax = plt.subplots(figsize=(8, max(5, n_params * 1.0)))
+
+    bap_avgs, bnc_avgs, bd_avgs = [], [], []
+    for pi in range(n_params):
+        bap_slice = [bap_times[inst_idx + pi * n_inst]   for inst_idx in range(n_inst)
+                     if inst_idx + pi * n_inst < len(bap_times)]
+        bnc_slice = [bnc_times[inst_idx + pi * n_inst]  for inst_idx in range(n_inst)
+                     if inst_idx + pi * n_inst < len(bnc_times)]
+        bd_slice  = [bd_times[inst_idx + pi * n_inst]    for inst_idx in range(n_inst)
+                     if inst_idx + pi * n_inst < len(bd_times)]
+
+        bap_avgs.append(float(np.mean(bap_slice)) if bap_slice else 0.0)
+        bnc_avgs.append(float(np.mean(bnc_slice)) if bnc_slice else 0.0)
+        bd_avgs.append(float(np.mean(bd_slice)) if bd_slice else 0.0)
+
+    y_idx = np.arange(n_params)
     total_width = 0.8
-    bar_w = total_width / n_algos
-    offsets = np.linspace(-total_width/2 + bar_w/2, total_width/2 - bar_w/2, n_algos)
+    bar_w = total_width / 3
+    offsets = np.linspace(-total_width/2 + bar_w/2, total_width/2 - bar_w/2, 3)
 
-    algo_data = [
-        (np.array(bap_times).ravel(),    np.array(bap_iters).ravel(),    COLOURS["C1"], "BAP (Optimized)"),
-        (np.array(nostab_times).ravel(), np.array(nostab_iters).ravel(), COLOURS["C4"], "BAP (Standard)"),
-        (np.array(cmip_times).ravel(),   np.array(cmip_iters).ravel(),   COLOURS["C2"], "Compact MIP"),
-    ]
+    ax.barh(y_idx + offsets[0], bap_avgs, height=bar_w, color=algo_colors["BAP"], alpha=0.85, label="BAP", zorder=2)
+    ax.barh(y_idx + offsets[1], bnc_avgs, height=bar_w, color=algo_colors["BnC"], alpha=0.85, label="BnC", zorder=2)
+    ax.barh(y_idx + offsets[2], bd_avgs,  height=bar_w, color=algo_colors["BD"],  alpha=0.85, label="BD",  zorder=2)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax2 = ax.twinx()
+    ax.set_yticks(y_idx)
+    ax.set_yticklabels(unique_params, fontsize=10)
+    
+    ax.set_ylim(-0.6, n_params - 0.4)
+    ax.invert_yaxis()
 
-    for i, (t_vals, i_vals, c, lbl) in enumerate(algo_data):
-        ax.bar(x_idx + offsets[i], t_vals, width=bar_w,
-               color=c, alpha=0.85, label=f"{lbl} (Time)", zorder=2)
-        ax2.plot(x_idx + offsets[i], i_vals,
-                 'o' if i == 0 else 's' if i == 1 else '^',
-                 color=c, markersize=7, linewidth=0,
-                 label=f"{lbl} (Iter)", zorder=5)
-
-    ax.set_ylabel("Run Time (s)", fontsize=13)
-    ax.tick_params(axis='y', direction='in', labelsize=11)
-    ax.yaxis.grid(True, linestyle='--', color='gray', alpha=0.4)
+    ax.set_ylabel(r"($\alpha_T$, $\alpha_{max}$)", fontsize=12)
+    ax.set_xlabel("Run Time (s)", fontsize=13)
+    ax.tick_params(axis='x', direction='in', labelsize=11)
+    ax.xaxis.grid(True, linestyle='--', color='gray', alpha=0.4)
     ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
-    ax2.set_ylabel("Iterations", fontsize=13)
-    ax2.tick_params(axis='y', direction='in', labelsize=11)
-    ax2.spines['top'].set_visible(False)
-    # Force integer ticks on iteration axis, range [0, max_iter+1]
-    all_iters = np.concatenate([np.array(bap_iters).ravel(),
-                                np.array(nostab_iters).ravel(),
-                                np.array(cmip_iters).ravel()])
-    max_iter = int(np.ceil(np.nanmax(all_iters))) if len(all_iters) > 0 else 5
-    ax2.set_ylim(0, max_iter + 1)
-    ax2.yaxis.set_major_locator(MaxNLocator(integer=True, min_n_ticks=1))
-
-    # Legend above
-    handles = []
-    for i, (_, _, c, lbl) in enumerate(algo_data):
-        handles.append(MPLRect((0,0), 1, 1, color=c, alpha=0.85,
-                                label=f"{lbl} (Time)"))
-    markers = ['o', 's', '^']
-    for i, (_, _, c, lbl) in enumerate(algo_data):
-        handles.append(MPLLine([0], [0], marker=markers[i], color=c,
-                               linestyle='None', markersize=7,
-                               label=f"{lbl} (Iter)"))
-    ax.legend(handles=handles, frameon=False, fontsize=7,
-              loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
-
-    ax.set_xticks(x_idx)
-    ax.set_xticklabels(param_labels, fontsize=10)
-    ax.set_xlim(-0.6, n_params - 0.4)
-    ax.set_xlabel(r"($\alpha_T$, $\alpha_{max}$)", fontsize=12)
+    ax.legend(frameon=False, fontsize=10, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
 
     plt.tight_layout()
     for ext in ["png", "tiff"]:
@@ -192,18 +174,18 @@ def run_algorithm_performance():
         w.writerow([
             "Instance", "Instance_Size", "alpha_T", "alpha_max",
             "BAP_Time", "BAP_Iter", "BAP_Cost", "BAP_Status",
-            "NoStab_Time", "NoStab_Iter", "NoStab_Cost", "NoStab_Status",
-            "CMIP_Time", "CMIP_Iter", "CMIP_Cost", "CMIP_Status",
-            "CMIP_EnumTime", "CMIP_MIPTime",
-            "Gap_Time_NoStab%", "Gap_Iter_NoStab%",
-            "Gap_Time_CMIP%", "Gap_Iter_CMIP%",
-            "BAP_Routes", "NoStab_Routes",
+            "BnC_Time", "BnC_Iter", "BnC_Cost", "BnC_Status",
+            "BD_Time", "BD_Iter", "BD_Cost", "BD_Status",
+            "BD_EnumTime", "BD_MIPTime",
+            "Gap_Time_BnC%", "Gap_Iter_BnC%",
+            "Gap_Time_BD%", "Gap_Iter_BD%",
+            "BAP_Routes", "BnC_Routes", "BD_Routes",
         ])
 
     rows = []
     x_labels = []
-    bap_times, cmip_times, nostab_times = [], [], []
-    bap_iters, cmip_iters, nostab_iters = [], [], []
+    bap_times, bd_times, bnc_times = [], [], []
+    bap_iters, bd_iters, bnc_iters = [], [], []
     gap_times_ns = []
 
     total = len(INSTANCES) * len(ALPHA_T_VALS) * len(ALPHA_MAX_VALS)
@@ -240,21 +222,28 @@ def run_algorithm_performance():
                 m_bap = _extract_metrics(sol_bap, "bap")
                 from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol_bap, inst, f"BAP {label}")
 
-                # ── Run BAP-NoStab (standard BAP) ───────────────────────
-                print("  Solving with BAP-NoStab...")
-                sol_nostab = _run_bap_nostab(inst, cfg, logger)
-                m_nostab = _extract_metrics(sol_nostab, "bap_nostab")
-                from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol_nostab, inst, f"NoStab {label}")
+                # ── Run Branch-and-Cut ───────────────────────────────────
+                print("  Solving with Branch-and-Cut...")
+                sol_bnc = _run_bap_nostab(inst, cfg, logger)
+                m_bnc = _extract_metrics(sol_bnc, "branch_and_cut")
+                from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol_bnc, inst, f"BnC {label}")
 
-                # ── Run Compact MIP ─────────────────────────────────────
-                print("  Solving with Compact MIP...")
-                sol_cmip = _run_compact_mip(inst, cfg, logger)
-                m_cmip = _extract_metrics(sol_cmip, "compact_mip")
+                # ── Run Benders Decomposition (only for small_inst1) ────
+                run_bd = (inst_tag == "small_inst1")
+                if run_bd:
+                    print("  Solving with Benders Decomposition...")
+                    sol_bd = _run_compact_mip(inst, cfg, logger)
+                else:
+                    print("  Skipping Benders Decomposition (small_inst1 only)...")
+                    sol_bd = {"status": "skipped", "total_cost": None,
+                            "solve_wall_time": 0.0, "iterations": 0,
+                            "enumeration_time": 0.0, "mip_solve_time": 0.0}
+                m_bd = _extract_metrics(sol_bd, "compact_mip")
 
                 # ── Compute gaps ────────────────────────────────────────
                 ok_bap = m_bap["status"] == "optimal"
-                ok_nostab = m_nostab["status"] == "optimal"
-                ok_cmip = m_cmip["status"] == "optimal"
+                ok_bnc = m_bnc["status"] == "optimal"
+                ok_bd = m_bd["status"] == "optimal"
 
                 def _gap_time(a, b):
                     if a is not None and b is not None and b > 0:
@@ -266,86 +255,122 @@ def run_algorithm_performance():
                         return (a - b) / b * 100
                     return None
 
-                gap_t_ns = _gap_time(m_bap["time"], m_nostab["time"])
-                gap_i_ns = _gap_iter(m_bap["iter"], m_nostab["iter"])
-                gap_t_cmip = _gap_time(m_bap["time"], m_cmip["time"])
-                gap_i_cmip = _gap_iter(m_bap["iter"], m_cmip["iter"])
+                gap_t_bnc = _gap_time(m_bap["time"], m_bnc["time"])
+                gap_i_bnc = _gap_iter(m_bap["iter"], m_bnc["iter"])
+                gap_t_bd = _gap_time(m_bap["time"], m_bd["time"])
+                gap_i_bd = _gap_iter(m_bap["iter"], m_bd["iter"])
 
                 bap_times.append(m_bap["time"])
-                nostab_times.append(m_nostab["time"])
-                cmip_times.append(m_cmip["time"])
+                bnc_times.append(m_bnc["time"])
+                bd_times.append(m_bd["time"])
                 bap_iters.append(m_bap["iter"])
-                nostab_iters.append(m_nostab["iter"])
-                cmip_iters.append(m_cmip["iter"])
-                gap_times_ns.append(gap_t_ns if gap_t_ns is not None else 0.0)
+                bnc_iters.append(m_bnc["iter"])
+                bd_iters.append(m_bd["iter"])
+                gap_times_ns.append(gap_t_bnc if gap_t_bnc is not None else 0.0)
 
                 def _fmt(v, f):
                     return f"{v:{f}}" if v is not None else "N/A"
 
                 bap_routes = format_routing_summary(sol_bap, inst)
-                nostab_routes = format_routing_summary(sol_nostab, inst)
+                bnc_routes = format_routing_summary(sol_bnc, inst)
+                bd_routes  = format_routing_summary(sol_bd, inst)
                 row = [
                     inst_tag, inst_size, aT, a_max,
                     f"{m_bap['time']:.2f}", str(m_bap["iter"]),
                     _fmt(m_bap["cost"], ",.0f"), m_bap["status"],
-                    f"{m_nostab['time']:.2f}", str(m_nostab["iter"]),
-                    _fmt(m_nostab["cost"], ",.0f"), m_nostab["status"],
-                    f"{m_cmip['time']:.2f}", str(m_cmip["iter"]),
-                    _fmt(m_cmip["cost"], ",.0f"), m_cmip["status"],
-                    f"{sol_cmip.get('enumeration_time', 0):.2f}",
-                    f"{sol_cmip.get('mip_solve_time', 0):.2f}",
-                    _fmt(gap_t_ns, ".2f"),
-                    _fmt(gap_i_ns, ".2f"),
-                    _fmt(gap_t_cmip, ".2f"),
-                    _fmt(gap_i_cmip, ".2f"),
-                    bap_routes, nostab_routes,
+                    f"{m_bnc['time']:.2f}", str(m_bnc["iter"]),
+                    _fmt(m_bnc["cost"], ",.0f"), m_bnc["status"],
+                    f"{m_bd['time']:.2f}", str(m_bd["iter"]),
+                    _fmt(m_bd["cost"], ",.0f"), m_bd["status"],
+                    f"{sol_bd.get('enumeration_time', 0):.2f}",
+                    f"{sol_bd.get('mip_solve_time', 0):.2f}",
+                    _fmt(gap_t_bnc, ".2f"),
+                    _fmt(gap_i_bnc, ".2f"),
+                    _fmt(gap_t_bd, ".2f"),
+                    _fmt(gap_i_bd, ".2f"),
+                    bap_routes, bnc_routes, bd_routes,
                 ]
                 rows.append(row)
 
                 bap_s = f"¥{m_bap['cost']:,.0f}" if m_bap["cost"] else m_bap["status"]
-                ns_s = f"¥{m_nostab['cost']:,.0f}" if m_nostab["cost"] else m_nostab["status"]
-                cmip_s = f"¥{m_cmip['cost']:,.0f}" if m_cmip["cost"] else m_cmip["status"]
+                bnc_s = f"¥{m_bnc['cost']:,.0f}" if m_bnc["cost"] else m_bnc["status"]
+                bd_s  = f"¥{m_bd['cost']:,.0f}" if m_bd["cost"] else m_bd["status"]
                 print(f"  BAP:     Time={m_bap['time']:.1f}s  Iter={m_bap['iter']}  Cost={bap_s}")
-                print(f"  NoStab:  Time={m_nostab['time']:.1f}s  Iter={m_nostab['iter']}  Cost={ns_s}")
-                print(f"  CMIP:    Time={m_cmip['time']:.1f}s  Iter={m_cmip['iter']}  Cost={cmip_s}")
-                gt_ns = f"{gap_t_ns:.1f}%" if gap_t_ns is not None else "N/A"
-                gi_ns = f"{gap_i_ns:.1f}%" if gap_i_ns is not None else "N/A"
-                gt_cmip = f"{gap_t_cmip:.1f}%" if gap_t_cmip is not None else "N/A"
-                gi_cmip = f"{gap_i_cmip:.1f}%" if gap_i_cmip is not None else "N/A"
-                print(f"  Gap(BAP-NoStab): Time={gt_ns}  Iter={gi_ns}")
-                print(f"  Gap(BAP-CMIP):   Time={gt_cmip}  Iter={gi_cmip}")
+                print(f"  BnC:     Time={m_bnc['time']:.1f}s  Iter={m_bnc['iter']}  Cost={bnc_s}")
+                print(f"  BD:     Time={m_bd['time']:.1f}s  Iter={m_bd['iter']}  Cost={bd_s}")
+                gt_bnc = f"{gap_t_bnc:.1f}%" if gap_t_bnc is not None else "N/A"
+                gi_bnc = f"{gap_i_bnc:.1f}%" if gap_i_bnc is not None else "N/A"
+                gt_bd  = f"{gap_t_bd:.1f}%" if gap_t_bd is not None else "N/A"
+                gi_bd  = f"{gap_i_bd:.1f}%" if gap_i_bd is not None else "N/A"
+                print(f"  Gap(BAP-BnC): Time={gt_bnc}  Iter={gi_bnc}")
+                print(f"  Gap(BAP-BD):  Time={gt_bd}  Iter={gi_bd}")
 
     # ── Write CSV ────────────────────────────────────────────────────────────
     with open(csv_path, "a", newline="") as f:
         csv.writer(f).writerows(rows)
     print(f"CSV saved \u2192 {csv_path}")
 
-    # ── Plot ─────────────────────────────────────────────────────────────────
+    # ── Plot (raw data, all instances on same figure) ─────────────────
     if x_labels:
-        instance_tags = [tag for tag, _, _ in INSTANCES]
-        param_labels = [f"({t}, {m})" for t in ALPHA_T_VALS for m in ALPHA_MAX_VALS]
+        from collections import OrderedDict
+        # Detect unique instances from rows (CSV column "Instance" at index 0)
+        inst_order = list(OrderedDict.fromkeys(r[0] for r in rows))
+        n_inst = len(inst_order)
+        # Detect unique parameter combos (alpha_T, alpha_max) at indices 2,3
+        param_keys = sorted(set((r[2], r[3]) for r in rows))
+        n_params = len(param_keys)
+        # Build data matrix: for each param key, for each instance, collect metrics
+        # Index into rows: 0=inst, 1=size, 2=aT, 3=a_max,
+        #                 4=BAP_T, 5=BAP_I, 6=BAP_Cost, 7=BAP_Status,
+        #                 8=BnC_T, 9=BnC_I, 10=BnC_Cost, 11=BnC_Status,
+        #                 12=BD_T, 13=BD_I, 14=BD_Cost, 15=BD_Status,
+        #                 16=BD_EnumT, 17=BD_MIPT,
+        #                 18=Gap_T_BnC%, 19=Gap_I_BnC%,
+        #                 20=Gap_T_BD%, 21=Gap_I_BD%,
+        #                 22=Routes_BAP, 23=Routes_BnC, 24=Routes_BD
+        lookup = {}
+        for r in rows:
+            lookup[(r[0], r[2], r[3])] = r
 
-        _plot_dual_algorithm(
-            bap_times=bap_times,
-            nostab_times=nostab_times,
-            cmip_times=cmip_times,
-            bap_iters=bap_iters,
-            nostab_iters=nostab_iters,
-            cmip_iters=cmip_iters,
-            gap_times=gap_times_ns,
-            param_labels=param_labels,
+        bap_t_list, bap_i_list = [], []
+        bnc_t_list, bnc_i_list = [], []
+        bd_t_list, bd_i_list = [], []
+        param_label_list = []
+
+        for aT, a_max in param_keys:
+            for inst in inst_order:
+                r = lookup.get((inst, aT, a_max))
+                if r is None:
+                    continue
+                param_label_list.append(f"({aT}, {a_max})")
+                bap_t_list.append(float(r[4]))
+                bap_i_list.append(int(r[5]))
+                bnc_t_list.append(float(r[8]))
+                bnc_i_list.append(int(r[9]))
+                bd_t_list.append(float(r[12]) if r[12] not in ("N/A", "skipped") else 0.0)
+                bd_i_list.append(int(r[13]) if r[13].isdigit() else 0)
+
+        _plot_algorithm_bar_line(
+            bap_times=bap_t_list,
+            bap_iters=bap_i_list,
+            bnc_times=bnc_t_list,
+            bnc_iters=bnc_i_list,
+            bd_times=bd_t_list,
+            bd_iters=bd_i_list,
+            param_labels=param_label_list,
+            inst_order=inst_order,
             save_path=os.path.join(exp_dir, "algorithm_performance"),
         )
         print(f"\nPlot → {exp_dir}/algorithm_performance.png/.tiff")
 
     # ── Summary table (Wang-style) ──────────────────────────────────────────
     print("\n" + "=" * 90)
-    print("ALGORITHM PERFORMANCE: BAP vs BAP-NoStab vs Compact MIP")
+    print("ALGORITHM PERFORMANCE: BAP vs Branch-and-Cut vs Benders Decomposition")
     print(f"Results: {exp_dir}/")
     print("=" * 90)
     hdr = (f"{'Inst':>8s} {'α_T':>5s} {'α_max':>7s} "
-           f"{'BAP_T':>7s} {'NS_T':>7s} {'CMIP_T':>8s} "
-           f"{'G_NS%':>7s} {'G_CM%':>7s}")
+           f"{'BAP_T':>7s} {'BnC_T':>7s} {'BD_T':>8s} "
+           f"{'G_BnC%':>7s} {'G_BD%':>7s}")
     print(hdr)
     print("-" * 70)
     for row in rows:
@@ -356,10 +381,10 @@ def run_algorithm_performance():
     ok_all = sum(1 for r in rows if r[7] == "optimal" and r[11] == "optimal" and r[15] == "optimal")
     print(f"\nAll optimal: {ok_all}/{len(rows)}")
     # Averages
-    bap_t = np.mean([float(r[4]) for r in rows])
-    ns_t = np.mean([float(r[8]) for r in rows])
-    cmip_t = np.mean([float(r[12]) for r in rows])
-    print(f"Avg Time: BAP={bap_t:.2f}s  NoStab={ns_t:.2f}s  CMIP={cmip_t:.2f}s")
+    bap_avg = np.mean([float(r[4]) for r in rows])
+    bnc_avg = np.mean([float(r[8]) for r in rows])
+    bd_avg = np.mean([float(r[12]) for r in rows])
+    print(f"Avg Time: BAP={bap_avg:.2f}s  BnC={bnc_avg:.2f}s  BD={bd_avg:.2f}s")
 
     tee.close()
     sys.stdout = sys.__stdout__
