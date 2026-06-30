@@ -2,11 +2,11 @@
 Standalone plotting script for Algorithm Performance experiment.
 
 Reads an existing algorithm_performance.csv and generates per-instance-size
-grouped bar charts (BAP vs BAP-NoStab vs Compact MIP).
+charts (BAP vs Branch-and-Cut vs Benders Decomposition).
 
 Usage:
     conda run -n rhmvsp python sensitivity/plot_algorithm_performance.py
-    conda run -n rhmvsp python sensitivity/plot_algorithm_performance.py --csv results/alg_perf_20260626_125254/algorithm_performance.csv
+    conda run -n rhmvsp python sensitivity/plot_algorithm_performance.py --csv results/algorithm_performance/algorithm_performance.csv
 """
 
 import argparse
@@ -17,10 +17,9 @@ from collections import defaultdict
 
 import matplotlib
 matplotlib.use('Agg')
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle as MPLRect
-from matplotlib.lines import Line2D as MPLLine
-from matplotlib.ticker import MaxNLocator
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -50,87 +49,49 @@ def _derive_size(row: dict) -> str:
 
 def _plot_size_group(size_rows, size_label, save_path):
     """
-    Create a grouped bar chart for one instance size group.
-
-    Parameters
-    ----------
-    size_rows : list of dict
-        Each dict has keys: inst, aT, a_max, bap_t, bap_i, nostab_t,
-        nostab_i, cmip_t, cmip_i
-    size_label : str
-        Label for this size group (e.g. "Small", "Medium", "Large")
-    save_path : str
-        Output path (without extension) for .png and .tiff
+    Horizontal grouped bar chart (BAP, BnC, BD) per (α_T, α_max) combo.
     """
     set_style()
-    n = len(size_rows)
-    x_idx = np.arange(n)
-    n_algos = 3
+    from collections import OrderedDict
+    param_keys = sorted(set((r["aT"], r["a_max"]) for r in size_rows))
+    n_params = len(param_keys)
+
+    fig, ax = plt.subplots(figsize=(8, max(5, n_params * 1.0)))
+    algo_colors = {"BAP": COLOURS["C1"], "BnC": COLOURS["C4"], "BD": COLOURS["C2"]}
+
+    bap_avgs, bnc_avgs, bd_avgs = [], [], []
+    for pi, (aT, a_max) in enumerate(param_keys):
+        bap_vals = [r["bap_t"] for r in size_rows if r["aT"] == aT and r["a_max"] == a_max]
+        bnc_vals = [r["bnc_t"] for r in size_rows if r["aT"] == aT and r["a_max"] == a_max]
+        bd_vals  = [r["bd_t"]  for r in size_rows if r["aT"] == aT and r["a_max"] == a_max]
+        
+        bap_avgs.append(float(np.mean(bap_vals)) if bap_vals else 0.0)
+        bnc_avgs.append(float(np.mean(bnc_vals)) if bnc_vals else 0.0)
+        bd_avgs.append(float(np.mean(bd_vals)) if bd_vals else 0.0)
+
+    y_idx = np.arange(n_params)
     total_width = 0.8
-    bar_w = total_width / n_algos
-    offsets = np.linspace(-total_width / 2 + bar_w / 2,
-                          total_width / 2 - bar_w / 2, n_algos)
+    bar_w = total_width / 3
+    offsets = np.linspace(-total_width/2 + bar_w/2, total_width/2 - bar_w/2, 3)
 
-    bap_t = np.array([r["bap_t"] for r in size_rows])
-    bap_i = np.array([r["bap_i"] for r in size_rows])
-    ns_t = np.array([r["nostab_t"] for r in size_rows])
-    ns_i = np.array([r["nostab_i"] for r in size_rows])
-    cmip_t = np.array([r["cmip_t"] for r in size_rows])
-    cmip_i = np.array([r["cmip_i"] for r in size_rows])
+    ax.barh(y_idx + offsets[0], bap_avgs, height=bar_w, color=algo_colors["BAP"], alpha=0.85, label="BAP", zorder=2)
+    ax.barh(y_idx + offsets[1], bnc_avgs, height=bar_w, color=algo_colors["BnC"], alpha=0.85, label="BnC", zorder=2)
+    ax.barh(y_idx + offsets[2], bd_avgs,  height=bar_w, color=algo_colors["BD"],  alpha=0.85, label="BD",  zorder=2)
 
-    algo_data = [
-        (bap_t, bap_i, COLOURS["C1"], "BAP (Optimized)"),
-        (ns_t, ns_i, COLOURS["C4"], "BAP (Standard)"),
-        (cmip_t, cmip_i, COLOURS["C2"], "Compact MIP"),
-    ]
+    ax.set_yticks(y_idx)
+    ax.set_yticklabels([f"({t:.1f}, {m:.3f})" for t, m in param_keys], fontsize=10)
+    
+    ax.set_ylim(-0.6, n_params - 0.4)
+    ax.invert_yaxis()
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax2 = ax.twinx()
-
-    for i, (t_vals, i_vals, c, lbl) in enumerate(algo_data):
-        ax.bar(x_idx + offsets[i], t_vals, width=bar_w,
-               color=c, alpha=0.85, label=f"{lbl} (Time)", zorder=2)
-        marker = 'o' if i == 0 else 's' if i == 1 else '^'
-        ax2.plot(x_idx + offsets[i], i_vals, marker,
-                 color=c, markersize=7, linewidth=0,
-                 label=f"{lbl} (Iter)", zorder=5)
-
-    ax.set_ylabel("Run Time (s)", fontsize=13)
-    ax.tick_params(axis='y', direction='in', labelsize=11)
-    ax.yaxis.grid(True, linestyle='--', color='gray', alpha=0.4)
+    ax.set_ylabel(r"($\alpha_T$, $\alpha_{max}$)", fontsize=12)
+    ax.set_xlabel("Run Time (s)", fontsize=13)
+    ax.tick_params(axis='x', direction='in', labelsize=11)
+    ax.xaxis.grid(True, linestyle='--', color='gray', alpha=0.4)
     ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
-    ax2.set_ylabel("Iterations", fontsize=13)
-    ax2.tick_params(axis='y', direction='in', labelsize=11)
-    ax2.spines['top'].set_visible(False)
-    # Integer ticks on iteration axis
-    all_iters = np.concatenate([bap_i, ns_i, cmip_i])
-    all_iters = all_iters[~np.isnan(all_iters)]
-    max_iter = int(np.ceil(np.nanmax(all_iters))) if len(all_iters) > 0 else 5
-    ax2.set_ylim(0, max_iter + 1)
-    ax2.yaxis.set_major_locator(MaxNLocator(integer=True, min_n_ticks=1))
-
-    # Legend above figure
-    handles = []
-    markers = ['o', 's', '^']
-    for i, (_, _, c, lbl) in enumerate(algo_data):
-        handles.append(MPLRect((0, 0), 1, 1, color=c, alpha=0.85,
-                               label=f"{lbl} (Time)"))
-    for i, (_, _, c, lbl) in enumerate(algo_data):
-        handles.append(MPLLine([0], [0], marker=markers[i], color=c,
-                               linestyle='None', markersize=7,
-                               label=f"{lbl} (Iter)"))
-    ax.legend(handles=handles, frameon=False, fontsize=7,
-              loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
-
-    # X-axis labels: "Instance (α_T, α_max)"
-    param_labels = [
-        f"{r['inst']}\n({r['aT']}, {r['a_max']})" for r in size_rows
-    ]
-    ax.set_xticks(x_idx)
-    ax.set_xticklabels(param_labels, fontsize=9)
-    ax.set_xlim(-0.6, n - 0.4)
-    ax.set_xlabel(f"Instance Size: {size_label.capitalize()}", fontsize=12)
+    ax.legend(frameon=False, fontsize=10, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
 
     plt.tight_layout()
     for ext in ["png", "tiff"]:
@@ -170,20 +131,22 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
     # ── Group by instance size ───────────────────────────────────────────
     groups = defaultdict(list)
     for row in rows:
+        if not row.get("alpha_T") or not str(row["alpha_T"]).strip():
+            continue
         size = _derive_size(row)
         groups[size].append({
-            "inst": inst,
+            "inst": row["Instance"],
             "aT": float(row["alpha_T"]),
             "a_max": float(row["alpha_max"]),
             "bap_t": float(row["BAP_Time"]),
             "bap_i": int(row["BAP_Iter"]),
-            "nostab_t": float(row["NoStab_Time"]),
-            "nostab_i": int(row["NoStab_Iter"]),
-            "cmip_t": float(row["CMIP_Time"]),
-            "cmip_i": int(row["CMIP_Iter"]),
+            "bnc_t": float(row["BnC_Time"]),
+            "bnc_i": int(row["BnC_Iter"]),
+            "bd_t": float(row["BD_Time"]),
+            "bd_i": int(row["BD_Iter"]),
         })
 
-    # ── Plot per size ────────────────────────────────────────────────────
+    # ── Plot per size (all instances combined) ─────────────────────────
     size_order = ["small", "medium", "large"]
     for size in size_order:
         if size not in groups:
@@ -198,7 +161,7 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
     print("\n" + "=" * 70)
     print("SUMMARY: Per-size average times")
     print("=" * 70)
-    print(f"{'Size':>8s} {'Count':>6s} {'BAP_T':>8s} {'NS_T':>8s} {'CMIP_T':>8s}")
+    print(f"{'Size':>8s} {'Count':>6s} {'BAP_T':>8s} {'BnC_T':>8s} {'BD_T':>8s}")
     print("-" * 46)
     for size in size_order:
         if size not in groups:
@@ -206,9 +169,9 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
         grp = groups[size]
         n = len(grp)
         bap_avg = np.mean([r["bap_t"] for r in grp])
-        ns_avg = np.mean([r["nostab_t"] for r in grp])
-        cmip_avg = np.mean([r["cmip_t"] for r in grp])
-        print(f"{size:>8s} {n:>6d} {bap_avg:>8.2f}s {ns_avg:>8.2f}s {cmip_avg:>8.2f}s")
+        bnc_avg = np.mean([r["bnc_t"] for r in grp])
+        bd_avg  = np.mean([r["bd_t"]  for r in grp])
+        print(f"{size:>8s} {n:>6d} {bap_avg:>8.2f}s {bnc_avg:>8.2f}s {bd_avg:>8.2f}s")
 
     print(f"\nAll plots saved to: {output_dir}/")
 
