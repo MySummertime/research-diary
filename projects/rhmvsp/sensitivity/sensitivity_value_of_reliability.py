@@ -213,108 +213,11 @@ def run_value_of_reliability():
         if gap_cost is not None:
             print(f"  Gap_Cost={gap_cost:.2f}%  Gap_R_risk={gap_r_risk:.2f}%  Gap_R_time={gap_r_time:.2f}%")
 
-    # ── Plot: 3-panel grouped bar chart (Cost, RawRisk, RawTime) ────────────
-    set_style()
-    x_labels = [f"({t}, {m})" for t, m in PARAM_GRID]
-    x_idx = np.arange(len(x_labels))
-    bar_width = 0.3
-
-    fig, axes = plt.subplots(3, 1, figsize=(8, 10),
-                              gridspec_kw={'hspace': 0.45},
-                              constrained_layout=True)
-
-    # Extract data
-    mr_costs  = [m["cost"] or 0 for m in full_metrics]
-    mw_costs  = [m["cost"] or 0 for m in norel_metrics]
-    mr_raw_risk = [m["raw_risk"] or 0 for m in full_metrics]
-    mw_raw_risk = [m["raw_risk"] or 0 for m in norel_metrics]
-    mr_raw_time = [m["raw_time"] or 0 for m in full_metrics]
-    mw_raw_time = [m["raw_time"] or 0 for m in norel_metrics]
-
-    def _format_panel(ax, x_idx, bar_width, ylabel, x_labels):
-        ax.set_xticks(x_idx)
-        ax.set_xticklabels(x_labels, fontsize=9)
-        ax.set_ylabel(ylabel, fontsize=12)
-        ax.tick_params(axis='y', direction='in', labelsize=10)
-        ax.yaxis.grid(True, linestyle='--', color='gray', alpha=0.4)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        # Legend above the subplot
-        ax.legend(frameon=False, fontsize=10, loc='lower center',
-                  bbox_to_anchor=(0.5, 1.02), ncol=2)
-
-    panels = [
-        (mr_costs,  mw_costs,  "Total Cost (CNY)"),
-        (mr_raw_risk, mw_raw_risk,  r"Raw Risk"),
-        (mr_raw_time, mw_raw_time,  r"Raw Time (h)"),
-    ]
-
-    for idx, (mr_data, mw_data, ylabel) in enumerate(panels):
-        ax = axes[idx]
-        ax.bar(x_idx - bar_width/2, mr_data, width=bar_width,
-               color=C_FULL, alpha=0.8, label="MR")
-        ax.bar(x_idx + bar_width/2, mw_data, width=bar_width,
-               color=C_NOREL, alpha=0.8, label="MW")
-        _format_panel(ax, x_idx, bar_width, ylabel, x_labels)
-
-    # Only bottom panel shows x-axis tick labels
-    for ax in axes[:-1]:
-        ax.set_xticklabels([])
-
-    for ext in ["png", "tiff"]:
-        fig.savefig(f"{exp_dir}/value_of_reliability.{ext}",
-                    dpi=600, bbox_inches='tight', format=ext)
-    plt.close(fig)
-    print(f"\nPlots saved to {exp_dir}/value_of_reliability.png/.tiff")
-
-    # ── Gap bar chart ───────────────────────────────────────────────────────
-    # Recompute gaps from metrics for the plot
-    def _calc_gap(mr_v, mw_v):
-        if mr_v is not None and mw_v is not None and mr_v != 0:
-            return (mw_v - mr_v) / abs(mr_v) * 100
-        return 0.0
-
-    gap_cost_vals     = [_calc_gap(m["cost"], n["cost"]) for m, n in zip(full_metrics, norel_metrics)]
-    gap_raw_risk_vals = [_calc_gap(m["raw_risk"], n["raw_risk"]) for m, n in zip(full_metrics, norel_metrics)]
-    gap_raw_time_vals = [_calc_gap(m["raw_time"], n["raw_time"]) for m, n in zip(full_metrics, norel_metrics)]
-    gap_r_risk_vals   = [_calc_gap(m["R_risk"], n["R_risk"]) for m, n in zip(full_metrics, norel_metrics)]
-    gap_r_time_vals   = [_calc_gap(m["R_time"], n["R_time"]) for m, n in zip(full_metrics, norel_metrics)]
-
-    fig2, ax2 = plt.subplots(figsize=(8, 5))
-    n_gaps = len(x_labels)
-    gap_idx = np.arange(n_gaps)
-    gap_bar_w = 0.18
-    gap_offsets = np.linspace(-0.36, 0.36, 5)
-
-    gap_datasets = [
-        (gap_cost_vals,     "Cost %",     COLOURS["C1"]),
-        (gap_raw_risk_vals, "Raw Risk %", COLOURS["C2"]),
-        (gap_raw_time_vals, "Raw Time %", COLOURS["C3"]),
-        (gap_r_risk_vals,   "R_risk %",   COLOURS["C4"]),
-        (gap_r_time_vals,   "R_time %",   COLOURS["C5"]),
-    ]
-
-    for i, (vals, lbl, c) in enumerate(gap_datasets):
-        ax2.bar(gap_idx + gap_offsets[i], vals, width=gap_bar_w,
-                color=c, alpha=0.8, label=lbl)
-
-    ax2.axhline(0, color='gray', linewidth=0.8, linestyle='-')
-    ax2.set_xticks(gap_idx)
-    ax2.set_xticklabels(x_labels, fontsize=9)
-    ax2.set_ylabel("Gap (%)  (MW − MR) / |MR|", fontsize=12)
-    ax2.tick_params(axis='y', direction='in', labelsize=10)
-    ax2.yaxis.grid(True, linestyle='--', color='gray', alpha=0.4)
-    ax2.spines['top'].set_visible(False)
-    ax2.spines['right'].set_visible(False)
-    ax2.set_xlabel(r"($\alpha_T$, $\alpha_{max}$)", fontsize=12)
-    ax2.legend(frameon=False, fontsize=9, loc='lower center',
-               bbox_to_anchor=(0.5, 1.02), ncol=5)
-
-    for ext in ["png", "tiff"]:
-        fig2.savefig(f"{exp_dir}/value_of_reliability_gaps.{ext}",
-                     dpi=600, bbox_inches='tight', format=ext)
-    plt.close(fig2)
-    print(f"  Saved → {exp_dir}/value_of_reliability_gaps.png/.tiff")
+    # ── Plotting ─────────────────────────────────────────────────────────────
+    from sensitivity.plot_value_of_reliability import plot_from_csv
+    
+    print("\nGenerating plots from CSV...")
+    plot_from_csv(csv_path, exp_dir)
 
     # ── Summary ──────────────────────────────────────────────────────────────
     print("\n" + "=" * 90)
