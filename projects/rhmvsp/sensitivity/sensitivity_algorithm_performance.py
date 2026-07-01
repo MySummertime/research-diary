@@ -24,11 +24,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import RHMVSPConfig
-from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
-from src.utils.logging import Logger
-from sensitivity.plot_helpers import set_style, COLOURS
-from sensitivity.utils import update_od_deadlines as _update_od_deadlines
-from sensitivity.compact_mip_benchmark import solve_compact_mip
+from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver, BAPNode
 
 # ── Colour constants (used in _plot_dual_algorithm) ─────────────────────────
 
@@ -76,9 +72,128 @@ def _run_bap_nostab(instance, config, logger) -> dict:
     return sol
 
 
-def _run_compact_mip(instance, config, logger) -> dict:
-    """Run Compact MIP and return solution dict with timing."""
-    return solve_compact_mip(instance, config, logger, time_limit=TIME_LIMIT)
+def _run_benders(instance, config, logger) -> dict:
+    """
+    Run Benders Decomposition.
+    Uses BAP's own infrastructure (pricing + master) but skips the dynamic
+    column generation loop — all paths are enumerated upfront, then the
+    master is solved as an integer MIP.
+    """
+    time_limit = TIME_LIMIT
+    solve_t0 = time.time()
+
+    cfg = copy.deepcopy(config)
+    cfg.time_limit = time_limit
+    cfg.solver_name = "gurobi"
+
+    # ── 1. Create BAP controller (provides network, engine, pp, mp) ────────
+    bap = BAPSolver(cfg, instance, logger)
+
+    # ── 2. Enumerate ALL feasible columns per OD pair ──────────────────────
+    big_m = getattr(cfg, 'big_m', 1e6)
+    high_duals = {
+        "od": {i: big_m for i in range(len(bap.network.od_pairs))},
+        "vehicle": {},
+        "trans_out": {},
+        "trans_in": {},
+        "hub": {},
+    }
+
+    orig_exact = cfg.max_labels_exact
+    orig_heur = cfg.max_labels_heuristic
+    cfg.max_labels_exact = 50000
+    cfg.max_labels_heuristic = 20000
+
+    all_columns = []
+    existing_fingerprints: set = set()
+
+    for od_idx, od in enumerate(bap.network.od_pairs):
+        logger.info(f"  Enumerating paths for OD {od_idx+1} (origin={od.origin}, dest={od.destination}) ...")
+        for exact_flag in [False, True]:
+            phase = "Exact" if exact_flag else "Heuristic"
+            labels = bap.pp.solve(
+                od.origin, od.destination, od_idx, high_duals,
+                od.time_window_start, od.time_window_end, od.alpha_T_od,
+                branch_constraints=[], exact=exact_flag,
+            )
+            cols_added = 0
+            for lab in labels:
+                fp = tuple((a.i, a.j, a.arc_id) for a in lab.arc_sequence)
+                if fp not in existing_fingerprints:
+                    existing_fingerprints.add(fp)
+                    col = bap._label_to_column(lab, od_idx)
+                    if col is not None:
+                        all_columns.append(col)
+                        cols_added += 1
+            logger.info(f"    {phase}: {cols_added} new columns")
+
+    import random as _random
+    _random.seed(42)
+    n_extra_passes = 3
+    n_od = len(bap.network.od_pairs)
+
+    for pass_i in range(n_extra_passes):
+        perturbed_duals = {
+            "od": {i: big_m * _random.uniform(0.5, 1.5) for i in range(n_od)},
+            "vehicle": {}, "trans_out": {}, "trans_in": {}, "hub": {},
+        }
+        total_added = 0
+        for od_idx, od in enumerate(bap.network.od_pairs):
+            labels = bap.pp.solve(
+                od.origin, od.destination, od_idx, perturbed_duals,
+                od.time_window_start, od.time_window_end, od.alpha_T_od,
+                branch_constraints=[], exact=False,
+            )
+            for lab in labels:
+                fp = tuple((a.i, a.j, a.arc_id) for a in lab.arc_sequence)
+                if fp not in existing_fingerprints:
+                    existing_fingerprints.add(fp)
+                    col = bap._label_to_column(lab, od_idx)
+                    if col is not None:
+                        all_columns.append(col)
+                        total_added += 1
+        logger.info(f"    Random pass {pass_i+1}/{n_extra_passes}: {total_added} new columns")
+
+    cfg.max_labels_exact = orig_exact
+    cfg.max_labels_heuristic = orig_heur
+
+    enum_time = time.time() - solve_t0
+    logger.info(f"  Enumerated {len(all_columns)} total columns ({enum_time:.1f}s)")
+
+    if not all_columns:
+        logger.warning("  No columns enumerated — instance infeasible")
+        return {"status": "infeasible"}
+
+    # ── 3. Solve as MIP via BAP's extraction ───────────────────────────────
+    mock_node = BAPNode(
+        lower_bound=0.0,
+        depth=0,
+        node_id=0,
+        columns=all_columns,
+    )
+
+    try:
+        mip_t0 = time.time()
+        sol = bap._extract_solution(mock_node)
+        mip_time = time.time() - mip_t0
+    except Exception as e:
+        logger.error(f"  MIP solve / extraction failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"status": "error", "error": str(e)}
+
+    # ── 4. Augment with timing info ────────────────────────────────────────
+    total_time = time.time() - solve_t0
+    sol["solve_wall_time"] = total_time
+    sol["solve_cpu_time"] = total_time
+    sol["enumeration_time"] = enum_time
+    sol["mip_solve_time"] = mip_time
+    sol["solver"] = "benders"
+    sol.setdefault("gap_pct", 0.0)
+    sol.setdefault("iterations", 1)
+    sol.setdefault("num_repositions", 0)
+
+    return sol
 
 
 def _extract_metrics(sol: dict, solver_tag: str) -> dict:
@@ -97,64 +212,7 @@ def _extract_metrics(sol: dict, solver_tag: str) -> dict:
     }
 
 
-def _plot_algorithm_bar_line(bap_times, bap_iters,
-                              bnc_times, bnc_iters,
-                              bd_times, bd_iters,
-                              param_labels, inst_order,
-                              save_path):
-    """
-    Horizontal grouped bar chart (BAP, BnC, BD)
-    """
-    set_style()
-    n_inst = len(inst_order)
-    unique_params = list(dict.fromkeys(param_labels))
-    n_params = len(unique_params)
 
-    algo_colors = {"BAP": COLOURS["C1"], "BnC": COLOURS["C4"], "BD": COLOURS["C2"]}
-
-    fig, ax = plt.subplots(figsize=(8, max(5, n_params * 1.0)))
-
-    bap_avgs, bnc_avgs, bd_avgs = [], [], []
-    for pi in range(n_params):
-        bap_slice = [bap_times[inst_idx + pi * n_inst]   for inst_idx in range(n_inst)
-                     if inst_idx + pi * n_inst < len(bap_times)]
-        bnc_slice = [bnc_times[inst_idx + pi * n_inst]  for inst_idx in range(n_inst)
-                     if inst_idx + pi * n_inst < len(bnc_times)]
-        bd_slice  = [bd_times[inst_idx + pi * n_inst]    for inst_idx in range(n_inst)
-                     if inst_idx + pi * n_inst < len(bd_times)]
-
-        bap_avgs.append(float(np.mean(bap_slice)) if bap_slice else 0.0)
-        bnc_avgs.append(float(np.mean(bnc_slice)) if bnc_slice else 0.0)
-        bd_avgs.append(float(np.mean(bd_slice)) if bd_slice else 0.0)
-
-    y_idx = np.arange(n_params)
-    total_width = 0.8
-    bar_w = total_width / 3
-    offsets = np.linspace(-total_width/2 + bar_w/2, total_width/2 - bar_w/2, 3)
-
-    ax.barh(y_idx + offsets[0], bap_avgs, height=bar_w, color=algo_colors["BAP"], alpha=0.85, label="BAP", zorder=2)
-    ax.barh(y_idx + offsets[1], bnc_avgs, height=bar_w, color=algo_colors["BnC"], alpha=0.85, label="BnC", zorder=2)
-    ax.barh(y_idx + offsets[2], bd_avgs,  height=bar_w, color=algo_colors["BD"],  alpha=0.85, label="BD",  zorder=2)
-
-    ax.set_yticks(y_idx)
-    ax.set_yticklabels(unique_params, fontsize=10)
-    
-    ax.set_ylim(-0.6, n_params - 0.4)
-    ax.invert_yaxis()
-
-    ax.set_ylabel(r"($\alpha_T$, $\alpha_{max}$)", fontsize=12)
-    ax.set_xlabel("Run Time (s)", fontsize=13)
-    ax.tick_params(axis='x', direction='in', labelsize=11)
-    ax.xaxis.grid(True, linestyle='--', color='gray', alpha=0.4)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-
-    ax.legend(frameon=False, fontsize=10, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
-
-    plt.tight_layout()
-    for ext in ["png", "tiff"]:
-        fig.savefig(f"{save_path}.{ext}", dpi=600, bbox_inches='tight', format=ext)
-    plt.close(fig)
 
 
 def run_algorithm_performance():
@@ -232,13 +290,13 @@ def run_algorithm_performance():
                 run_bd = (inst_tag == "small_inst1")
                 if run_bd:
                     print("  Solving with Benders Decomposition...")
-                    sol_bd = _run_compact_mip(inst, cfg, logger)
+                    sol_bd = _run_benders(inst, cfg, logger)
                 else:
                     print("  Skipping Benders Decomposition (small_inst1 only)...")
                     sol_bd = {"status": "skipped", "total_cost": None,
                             "solve_wall_time": 0.0, "iterations": 0,
                             "enumeration_time": 0.0, "mip_solve_time": 0.0}
-                m_bd = _extract_metrics(sol_bd, "compact_mip")
+                m_bd = _extract_metrics(sol_bd, "benders")
 
                 # ── Compute gaps ────────────────────────────────────────
                 ok_bap = m_bap["status"] == "optimal"
@@ -310,58 +368,11 @@ def run_algorithm_performance():
         csv.writer(f).writerows(rows)
     print(f"CSV saved \u2192 {csv_path}")
 
-    # ── Plot (raw data, all instances on same figure) ─────────────────
-    if x_labels:
-        from collections import OrderedDict
-        # Detect unique instances from rows (CSV column "Instance" at index 0)
-        inst_order = list(OrderedDict.fromkeys(r[0] for r in rows))
-        n_inst = len(inst_order)
-        # Detect unique parameter combos (alpha_T, alpha_max) at indices 2,3
-        param_keys = sorted(set((r[2], r[3]) for r in rows))
-        n_params = len(param_keys)
-        # Build data matrix: for each param key, for each instance, collect metrics
-        # Index into rows: 0=inst, 1=size, 2=aT, 3=a_max,
-        #                 4=BAP_T, 5=BAP_I, 6=BAP_Cost, 7=BAP_Status,
-        #                 8=BnC_T, 9=BnC_I, 10=BnC_Cost, 11=BnC_Status,
-        #                 12=BD_T, 13=BD_I, 14=BD_Cost, 15=BD_Status,
-        #                 16=BD_EnumT, 17=BD_MIPT,
-        #                 18=Gap_T_BnC%, 19=Gap_I_BnC%,
-        #                 20=Gap_T_BD%, 21=Gap_I_BD%,
-        #                 22=Routes_BAP, 23=Routes_BnC, 24=Routes_BD
-        lookup = {}
-        for r in rows:
-            lookup[(r[0], r[2], r[3])] = r
-
-        bap_t_list, bap_i_list = [], []
-        bnc_t_list, bnc_i_list = [], []
-        bd_t_list, bd_i_list = [], []
-        param_label_list = []
-
-        for aT, a_max in param_keys:
-            for inst in inst_order:
-                r = lookup.get((inst, aT, a_max))
-                if r is None:
-                    continue
-                param_label_list.append(f"({aT}, {a_max})")
-                bap_t_list.append(float(r[4]))
-                bap_i_list.append(int(r[5]))
-                bnc_t_list.append(float(r[8]))
-                bnc_i_list.append(int(r[9]))
-                bd_t_list.append(float(r[12]) if r[12] not in ("N/A", "skipped") else 0.0)
-                bd_i_list.append(int(r[13]) if r[13].isdigit() else 0)
-
-        _plot_algorithm_bar_line(
-            bap_times=bap_t_list,
-            bap_iters=bap_i_list,
-            bnc_times=bnc_t_list,
-            bnc_iters=bnc_i_list,
-            bd_times=bd_t_list,
-            bd_iters=bd_i_list,
-            param_labels=param_label_list,
-            inst_order=inst_order,
-            save_path=os.path.join(exp_dir, "algorithm_performance"),
-        )
-        print(f"\nPlot → {exp_dir}/algorithm_performance.png/.tiff")
+    # ── Plotting ─────────────────────────────────────────────────────────────
+    from sensitivity.plot_algorithm_performance import plot_radar
+    
+    print("\nGenerating plots from CSV...")
+    plot_radar(csv_path, exp_dir)
 
     # ── Summary table (Wang-style) ──────────────────────────────────────────
     print("\n" + "=" * 90)

@@ -22,95 +22,31 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle as MPLRect
 import numpy as np
 
+# Set font to Times New Roman globally
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
+plt.rcParams['mathtext.fontset'] = 'custom'
+plt.rcParams['mathtext.rm'] = 'Times New Roman'
+plt.rcParams['mathtext.it'] = 'Times New Roman:italic'
+plt.rcParams['mathtext.bf'] = 'Times New Roman:bold'
+
+# Strict colour palette from docs/colour set2.txt
+COLORS = {
+    "terracotta": "#C26B48",
+    "celadon": "#94C1B7",
+    "sage": "#ABBCAA",
+    "sand": "#DDBF91",
+    "lime": "#DDE4B6"
+}
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sensitivity.plot_helpers import set_style, COLOURS
 
 
-def _parse_cost(val: str):
-    """Parse a cost string like '5,175,941' or 'N/A' to float or None."""
-    if val is None or val.strip().upper() == "N/A":
-        return None
-    return float(val.replace(",", ""))
 
 
-def _derive_size(row: dict) -> str:
-    """Derive instance size from Instance_Size column (preferred) or instance name."""
-    if "Instance_Size" in row and row["Instance_Size"].strip():
-        return row["Instance_Size"].strip().lower()
-    name = row["Instance"].strip().lower()
-    if name.startswith("small"):
-        return "small"
-    if name.startswith("medium"):
-        return "medium"
-    if name.startswith("large"):
-        return "large"
-    return "unknown"
 
-
-def _plot_size_group(size_rows, size_label, save_path):
-    """
-    Horizontal grouped bar chart (BAP, BnC, BD) per (α_T, α_max) combo.
-    """
-    set_style()
-    from collections import OrderedDict
-    param_keys = sorted(set((r["aT"], r["a_max"]) for r in size_rows))
-    n_params = len(param_keys)
-
-    fig, ax = plt.subplots(figsize=(8, max(5, n_params * 1.0)))
-    algo_colors = {"BAP": COLOURS["C1"], "BnC": COLOURS["C4"], "BD": COLOURS["C2"]}
-
-    bap_avgs, bnc_avgs, bd_avgs = [], [], []
-    for pi, (aT, a_max) in enumerate(param_keys):
-        bap_vals = [r["bap_t"] for r in size_rows if r["aT"] == aT and r["a_max"] == a_max]
-        bnc_vals = [r["bnc_t"] for r in size_rows if r["aT"] == aT and r["a_max"] == a_max]
-        bd_vals  = [r["bd_t"]  for r in size_rows if r["aT"] == aT and r["a_max"] == a_max]
-        
-        bap_avgs.append(float(np.mean(bap_vals)) if bap_vals else 0.0)
-        bnc_avgs.append(float(np.mean(bnc_vals)) if bnc_vals else 0.0)
-        bd_avgs.append(float(np.mean(bd_vals)) if bd_vals else 0.0)
-
-    y_idx = np.arange(n_params)
-    total_width = 0.8
-    bar_w = total_width / 3
-    offsets = np.linspace(-total_width/2 + bar_w/2, total_width/2 - bar_w/2, 3)
-
-    ax.barh(y_idx + offsets[0], bap_avgs, height=bar_w, color=algo_colors["BAP"], alpha=0.85, label="BAP", zorder=2)
-    ax.barh(y_idx + offsets[1], bnc_avgs, height=bar_w, color=algo_colors["BnC"], alpha=0.85, label="BnC", zorder=2)
-    ax.barh(y_idx + offsets[2], bd_avgs,  height=bar_w, color=algo_colors["BD"],  alpha=0.85, label="BD",  zorder=2)
-
-    ax.set_yticks(y_idx)
-    ax.set_yticklabels([f"({t:.1f}, {m:.3f})" for t, m in param_keys], fontsize=10)
-    
-    ax.set_ylim(-0.6, n_params - 0.4)
-    ax.invert_yaxis()
-
-    ax.set_ylabel(r"($\alpha_T$, $\alpha_{max}$)", fontsize=12)
-    ax.set_xlabel("Run Time (s)", fontsize=13)
-    ax.tick_params(axis='x', direction='in', labelsize=11)
-    ax.xaxis.grid(True, linestyle='--', color='gray', alpha=0.4)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-
-    ax.legend(frameon=False, fontsize=10, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
-
-    plt.tight_layout()
-    for ext in ["png", "tiff"]:
-        fig.savefig(f"{save_path}.{ext}", dpi=600, bbox_inches='tight', format=ext)
-    plt.close(fig)
-    print(f"  Saved → {save_path}.png/.tiff")
-
-
-def plot_from_csv(csv_path: str, output_dir: str = None):
-    """
-    Read algorithm_performance.csv and generate per-size plots.
-
-    Parameters
-    ----------
-    csv_path : str
-        Path to the CSV file.
-    output_dir : str, optional
-        Output directory for plots. If None, uses the CSV's parent directory.
-    """
+def plot_radar(csv_path: str, output_dir: str = None):
     if not os.path.exists(csv_path):
         print(f"ERROR: CSV not found: {csv_path}")
         sys.exit(1)
@@ -119,61 +55,110 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
         output_dir = os.path.dirname(csv_path)
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── Read CSV ─────────────────────────────────────────────────────────
+    # 1. Read Data
     rows = []
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            if not row.get("alpha_T") or not str(row["alpha_T"]).strip():
+                continue
             rows.append(row)
 
-    print(f"Read {len(rows)} rows from {csv_path}")
-
-    # ── Group by instance size ───────────────────────────────────────────
-    groups = defaultdict(list)
-    for row in rows:
-        if not row.get("alpha_T") or not str(row["alpha_T"]).strip():
-            continue
-        size = _derive_size(row)
-        groups[size].append({
-            "inst": row["Instance"],
-            "aT": float(row["alpha_T"]),
-            "a_max": float(row["alpha_max"]),
-            "bap_t": float(row["BAP_Time"]),
-            "bap_i": int(row["BAP_Iter"]),
-            "bnc_t": float(row["BnC_Time"]),
-            "bnc_i": int(row["BnC_Iter"]),
-            "bd_t": float(row["BD_Time"]),
-            "bd_i": int(row["BD_Iter"]),
-        })
-
-    # ── Plot per size (all instances combined) ─────────────────────────
+    # Group by instance size to maintain order (Small -> Medium -> Large)
     size_order = ["small", "medium", "large"]
-    for size in size_order:
-        if size not in groups:
-            print(f"  No {size} instances found, skipping.")
-            continue
-        grp = groups[size]
-        print(f"\n{size.capitalize()}: {len(grp)} data points")
-        save_path = os.path.join(output_dir, f"algorithm_performance_{size}")
-        _plot_size_group(grp, size, save_path)
+    grouped = {s: [] for s in size_order}
+    for row in rows:
+        size = row["Instance_Size"].strip().lower() if "Instance_Size" in row and row["Instance_Size"].strip() else row["Instance"].strip().lower().split("_")[0]
+        if size in grouped:
+            grouped[size].append(row)
+        else:
+            grouped["small"].append(row) # Fallback
 
-    # ── Summary ──────────────────────────────────────────────────────────
-    print("\n" + "=" * 70)
-    print("SUMMARY: Per-size average times")
-    print("=" * 70)
-    print(f"{'Size':>8s} {'Count':>6s} {'BAP_T':>8s} {'BnC_T':>8s} {'BD_T':>8s}")
-    print("-" * 46)
     for size in size_order:
-        if size not in groups:
+        size_rows = grouped[size]
+        
+        if not size_rows:
             continue
-        grp = groups[size]
-        n = len(grp)
-        bap_avg = np.mean([r["bap_t"] for r in grp])
-        bnc_avg = np.mean([r["bnc_t"] for r in grp])
-        bd_avg  = np.mean([r["bd_t"]  for r in grp])
-        print(f"{size:>8s} {n:>6d} {bap_avg:>8.2f}s {bnc_avg:>8.2f}s {bd_avg:>8.2f}s")
+            
+        fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
+            
+        n_inst = len(size_rows)
+        angles = np.linspace(0, 2 * np.pi, n_inst, endpoint=False)
+        angles_closed = np.concatenate((angles, [angles[0]]))
 
-    print(f"\nAll plots saved to: {output_dir}/")
+        bap_ratios = []
+        bnc_ratios = []
+        bd_ratios = []
+        labels = []
+
+        for row in size_rows:
+            inst_num = row['Instance'].split('_')[1].replace('inst', '')
+            labels.append(f"i{inst_num}({float(row['alpha_T']):.1f}, {float(row['alpha_max']):.3f})")
+            
+            bap_t = float(row["BAP_Time"]) if row["BAP_Time"] != "N/A" else np.nan
+            bnc_t = float(row["BnC_Time"]) if row["BnC_Time"] != "N/A" else np.nan
+            bd_t = float(row["BD_Time"]) if row["BD_Time"] not in ("N/A", "skipped") else np.nan
+
+            if np.isnan(bap_t) or bap_t <= 0:
+                bap_ratios.append(np.nan)
+                bnc_ratios.append(np.nan)
+                bd_ratios.append(np.nan)
+            else:
+                bap_ratios.append(1.0)
+                bnc_ratios.append(bnc_t / bap_t if not np.isnan(bnc_t) else np.nan)
+                bd_ratios.append(bd_t / bap_t if not np.isnan(bd_t) else np.nan)
+
+        bap_ratios_c = np.concatenate((bap_ratios, [bap_ratios[0]]))
+        bnc_ratios_c = np.concatenate((bnc_ratios, [bnc_ratios[0]]))
+        bd_ratios_c = np.concatenate((bd_ratios, [bd_ratios[0]]))
+
+        # Log scale
+        ax.set_yscale('log')
+        all_vals = [v for v in np.concatenate((bap_ratios_c, bnc_ratios_c, bd_ratios_c)) if not np.isnan(v) and v > 0]
+        min_v = np.min(all_vals)
+        max_v = np.max(all_vals)
+        ax.set_ylim(bottom=min_v * 0.4, top=max_v * 2.5)
+        
+        # Select appropriate ticks
+        candidate_ticks = [0.01, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+        ticks = [t for t in candidate_ticks if min_v * 0.4 <= t <= max_v * 2.5]
+        if 1 not in ticks:
+            ticks.append(1)
+            ticks = sorted(ticks)
+            
+        ax.set_yticks(ticks)
+        ax.set_yticklabels([f"{t}x" for t in ticks], color="gray", size=9)
+
+        # Draw lines
+        ax.plot(angles_closed, bap_ratios_c, color=COLORS["terracotta"], linewidth=2, linestyle='-', label='BAP')
+        ax.plot(angles_closed, bnc_ratios_c, color=COLORS["celadon"], linewidth=2, marker='s', markersize=6, label='BnC')
+        ax.plot(angles_closed, bd_ratios_c, color=COLORS["sage"], linewidth=2, marker='^', markersize=6, label='BD')
+
+        # Angles for ticks
+        ax.set_xticks(angles)
+        ax.set_xticklabels(labels, fontsize=10)
+        
+        for label, angle in zip(ax.get_xticklabels(), angles):
+            if angle in (0, np.pi):
+                label.set_horizontalalignment('center')
+            elif 0 < angle < np.pi:
+                label.set_horizontalalignment('left')
+            else:
+                label.set_horizontalalignment('right')
+
+        ax.grid(color='lightgray', linestyle='--', linewidth=0.5)
+        ax.spines['polar'].set_visible(False)
+
+        # Add legend
+        ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=3, frameon=False, fontsize=12)
+
+        plt.tight_layout()
+        
+        save_path = os.path.join(output_dir, f"algorithm_performance_radar_{size}")
+        for ext in ["png", "tiff"]:
+            fig.savefig(f"{save_path}.{ext}", dpi=600, bbox_inches='tight', format=ext)
+        plt.close(fig)
+        print(f"Saved radar chart to {save_path}.png")
 
 
 def main():
@@ -193,7 +178,7 @@ def main():
         help="Output directory for plots (default: same as CSV directory)",
     )
     args = parser.parse_args()
-    plot_from_csv(args.csv, args.output)
+    plot_radar(args.csv, args.output)
 
 
 if __name__ == "__main__":
