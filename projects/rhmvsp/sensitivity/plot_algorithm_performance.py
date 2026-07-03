@@ -86,7 +86,8 @@ def plot_radar(csv_path: str, output_dir: str = None):
         angles = np.linspace(0, 2 * np.pi, n_inst, endpoint=False)
         angles_closed = np.concatenate((angles, [angles[0]]))
 
-        bap_ratios = []
+        opt_bap_ratios = []
+        std_bap_ratios = []
         bnc_ratios = []
         bd_ratios = []
         labels = []
@@ -95,26 +96,30 @@ def plot_radar(csv_path: str, output_dir: str = None):
             inst_num = row['Instance'].split('_')[1].replace('inst', '')
             labels.append(f"i{inst_num}({float(row['alpha_T']):.1f}, {float(row['alpha_max']):.3f})")
             
-            bap_t = float(row["BAP_Time"]) if row["BAP_Time"] != "N/A" else np.nan
+            opt_bap_t = float(row["Optimized_BAP_Time"]) if row["Optimized_BAP_Time"] != "N/A" else np.nan
+            std_bap_t = float(row["Standard_BAP_Time"]) if row["Standard_BAP_Time"] != "N/A" else np.nan
             bnc_t = float(row["BnC_Time"]) if row["BnC_Time"] != "N/A" else np.nan
             bd_t = float(row["BD_Time"]) if row["BD_Time"] not in ("N/A", "skipped") else np.nan
 
-            if np.isnan(bap_t) or bap_t <= 0:
-                bap_ratios.append(np.nan)
+            if np.isnan(opt_bap_t) or opt_bap_t <= 0:
+                opt_bap_ratios.append(np.nan)
+                std_bap_ratios.append(np.nan)
                 bnc_ratios.append(np.nan)
                 bd_ratios.append(np.nan)
             else:
-                bap_ratios.append(1.0)
-                bnc_ratios.append(bnc_t / bap_t if not np.isnan(bnc_t) else np.nan)
-                bd_ratios.append(bd_t / bap_t if not np.isnan(bd_t) else np.nan)
+                opt_bap_ratios.append(1.0)
+                std_bap_ratios.append(std_bap_t / opt_bap_t if not np.isnan(std_bap_t) else np.nan)
+                bnc_ratios.append(bnc_t / opt_bap_t if not np.isnan(bnc_t) else np.nan)
+                bd_ratios.append(bd_t / opt_bap_t if not np.isnan(bd_t) else np.nan)
 
-        bap_ratios_c = np.concatenate((bap_ratios, [bap_ratios[0]]))
+        opt_bap_ratios_c = np.concatenate((opt_bap_ratios, [opt_bap_ratios[0]]))
+        std_bap_ratios_c = np.concatenate((std_bap_ratios, [std_bap_ratios[0]]))
         bnc_ratios_c = np.concatenate((bnc_ratios, [bnc_ratios[0]]))
         bd_ratios_c = np.concatenate((bd_ratios, [bd_ratios[0]]))
 
         # Log scale
         ax.set_yscale('log')
-        all_vals = [v for v in np.concatenate((bap_ratios_c, bnc_ratios_c, bd_ratios_c)) if not np.isnan(v) and v > 0]
+        all_vals = [v for v in np.concatenate((opt_bap_ratios_c, std_bap_ratios_c, bnc_ratios_c, bd_ratios_c)) if not np.isnan(v) and v > 0]
         min_v = np.min(all_vals)
         max_v = np.max(all_vals)
         ax.set_ylim(bottom=min_v * 0.4, top=max_v * 2.5)
@@ -130,9 +135,10 @@ def plot_radar(csv_path: str, output_dir: str = None):
         ax.set_yticklabels([f"{t}x" for t in ticks], color="gray", size=9)
 
         # Draw lines
-        ax.plot(angles_closed, bap_ratios_c, color=COLORS["terracotta"], linewidth=2, linestyle='-', label='BAP')
-        ax.plot(angles_closed, bnc_ratios_c, color=COLORS["celadon"], linewidth=2, marker='s', markersize=6, label='BnC')
-        ax.plot(angles_closed, bd_ratios_c, color=COLORS["sage"], linewidth=2, marker='^', markersize=6, label='BD')
+        ax.plot(angles_closed, opt_bap_ratios_c, color=COLORS["terracotta"], linewidth=3, linestyle='-', label='Opt. BAP')
+        ax.plot(angles_closed, std_bap_ratios_c, color=COLORS["sand"], linewidth=3, marker='o', markersize=6, label='Std. BAP')
+        ax.plot(angles_closed, bnc_ratios_c, color=COLORS["celadon"], linewidth=3, marker='s', markersize=6, label='BnC')
+        ax.plot(angles_closed, bd_ratios_c, color=COLORS["sage"], linewidth=3, marker='^', markersize=6, label='BD')
 
         # Angles for ticks
         ax.set_xticks(angles)
@@ -150,7 +156,7 @@ def plot_radar(csv_path: str, output_dir: str = None):
         ax.spines['polar'].set_visible(False)
 
         # Add legend
-        ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=3, frameon=False, fontsize=12)
+        ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=4, frameon=False, fontsize=12)
 
         plt.tight_layout()
         
