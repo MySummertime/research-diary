@@ -191,9 +191,9 @@ def run_fleet_size_sensitivity():
         r_time_vals=raw_time_vals,
         cost_vals=cost_vals,
         save_path=os.path.join(exp_dir, "fleet_sensitivity_raw"),
-        y1_label=r'Raw Risk',
-        y2_label=r'Raw Time (h)',
-        y1_title=r'Raw Risk / Time',
+        y1_label=r'Risk',
+        y2_label=r'Time (h)',
+        y1_title=r'Risk / Time',
         y2_title=r'Total Cost (CNY)',
     )
     print(f"Chart saved to: {exp_dir}/fleet_sensitivity_raw.png/.tiff")

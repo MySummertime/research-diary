@@ -32,7 +32,7 @@ C_MR  = COLOURS["C1"]  # Warm Terracotta — MR (Model with Reliability)
 C_MW = COLOURS["C2"]  # Celadon Green  — MW (Model Without reliability)
 
 # ── Experiment parameters ───────────────────────────────────────────────────
-N_SCENARIOS = 100          # scenarios per group (Wang uses 200)
+N_SCENARIOS = 200          # scenarios per group (Wang uses 200)
 INSTANCE_PATH = "data_real_case/instance.json"
 
 # Parameter combinations (α_T, α_max)
@@ -238,9 +238,9 @@ def run_out_of_sample():
     # Supplementary: 4 reliability metrics
     supp_metrics = [
         ("raw_risk",  mr_raw_risk, mw_raw_risk,
-         r"Raw Risk", "oos_raw_risk"),
+         r"Risk", "oos_raw_risk"),
         ("raw_time",  mr_raw_time, mw_raw_time,
-         r"Raw Time (h)", "oos_raw_time"),
+         r"Time (h)", "oos_raw_time"),
         ("R_risk",    mr_R_risk,   mw_R_risk,
          r"Risk Reliability ($R_{risk}$)", "oos_R_risk"),
         ("R_time",    mr_R_time,   mw_R_time,

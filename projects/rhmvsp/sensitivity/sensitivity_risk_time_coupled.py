@@ -291,22 +291,22 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
                   save_path=os.path.join(exp_dir, "heatmap_cost"))
 
     _plot_heatmap(ALPHA_T_VALS, ALPHA_MAX_VALS, r_risk_matrix,
-                  r"Network Risk Reliability ($R_{risk}$)",
+                  r"Risk Reliability ($R_{risk}$)",
                   fmt_func=lambda v: f'{v:.3f}',
                   save_path=os.path.join(exp_dir, "heatmap_R_risk"))
 
     _plot_heatmap(ALPHA_T_VALS, ALPHA_MAX_VALS, r_time_matrix,
-                  r"Network Time Reliability ($R_{time}$)",
+                  r"Time Reliability ($R_{time}$)",
                   fmt_func=lambda v: f'{v:.3f}',
                   save_path=os.path.join(exp_dir, "heatmap_R_time"))
 
     _plot_heatmap(ALPHA_T_VALS, ALPHA_MAX_VALS, raw_risk_matrix,
-                  "Raw Network Risk",
+                  "Risk",
                   fmt_func=lambda v: f'{v:.1f}',
                   save_path=os.path.join(exp_dir, "heatmap_raw_risk"))
 
     _plot_heatmap(ALPHA_T_VALS, ALPHA_MAX_VALS, raw_time_matrix,
-                  "Raw Network Time (h)",
+                  "Time (h)",
                   fmt_func=lambda v: f'{v:.1f}',
                   save_path=os.path.join(exp_dir, "heatmap_raw_time"))
 

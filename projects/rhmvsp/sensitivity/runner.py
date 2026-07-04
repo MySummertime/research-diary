@@ -273,8 +273,8 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
                 r_risk_vals=raw_risk_vals, r_time_vals=raw_time_vals,
                 cost_vals=cost_vals,
                 save_path=os.path.join(exp_dir, f"sensitivity_{param_name}_raw"),
-                y1_label='Raw Risk', y2_label='Raw Time (h)',
-                y1_title='Raw Metrics',
+                y1_label='Risk', y2_label='Time (h)',
+                y1_title='Metrics',
             )
             print(f"Raw dual Y-axis chart saved to: sensitivity_{param_name}_raw.png/.tiff")
         except Exception as e:
