@@ -214,9 +214,7 @@ class Visualizer:
 
 
 		self._add_basemap(ax)
-		self._format_axes(ax)
-		ax.set_xlabel(PlotProperties.LABEL_X_AXIS, fontsize=PlotProperties.FONT_SIZE_AXIS_LABEL, fontweight=PlotProperties.FONT_WEIGHT_BOLD, fontfamily=PlotProperties.FONT_FAMILY)
-		ax.set_ylabel(PlotProperties.LABEL_Y_AXIS, fontsize=PlotProperties.FONT_SIZE_AXIS_LABEL, fontweight=PlotProperties.FONT_WEIGHT_BOLD, fontfamily=PlotProperties.FONT_FAMILY)
+		ax.set_axis_off()
 
 		legend_handles = [
 			Line2D([0], [0], marker=PlotProperties.NODE_SHAPE_HUB, color=PlotProperties.LEGEND_MARKER_FACE_WHITE, label=PlotProperties.LABEL_LEGEND_HUB, markerfacecolor=style_hub["color"], markeredgecolor=style_hub["edgecolor"], markersize=PlotProperties.LEGEND_MARKER_SIZE_HUB, markeredgewidth=PlotProperties.LEGEND_MARKER_EDGE_WIDTH_HUB),
