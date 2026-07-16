@@ -37,12 +37,9 @@ ENV/
 
 # Project Specific
 results/
-data/instance_*.json
 .DS_Store
 **/*.docx
 **/*.png
 **/*.tiff
-**/.agents
-data_performance/
 ai_scripts/
-data_real_case/
+**/*.zip
