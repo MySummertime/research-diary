@@ -1,0 +1,6 @@
+id,origin,destination,demand,time_window_start,time_window_end,time_window_start_fmt,time_window_end_fmt,alpha_T_od,origin_hub,destination_hub,dist_road_1,dist_rail,dist_road_2
+1,6,13,150.0,48.0,168.0,Day 3 00:00,Day 8 00:00,0.8,2,5,2466.37,2125.62,84.0
+2,10,41,240.0,48.0,168.0,Day 3 00:00,Day 8 00:00,0.8,2,5,2132.4,2125.62,104.2
+3,9,47,360.0,60.0,180.0,Day 3 12:00,Day 8 12:00,0.8,2,5,2116.99,2125.62,117.3
+4,8,37,320.0,60.0,168.0,Day 3 12:00,Day 8 00:00,0.8,2,38,1649.36,1972.96,105.12
+5,7,42,270.0,60.0,168.0,Day 3 12:00,Day 8 00:00,0.8,2,38,1159.86,1972.96,118.65
