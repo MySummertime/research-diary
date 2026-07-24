@@ -18,7 +18,8 @@ from sensitivity.plot_helpers import dual_y_axis_with_cost_bar
 def run_sensitivity(param_name: str, param_values: list, param_attr_path: str, 
                     instance_path: str, label: str, time_limit: int = 60,
                     output_root: str = "results", config_setter=None,
-                    use_alpha_T_overhead: bool = False):
+                    use_alpha_T_overhead: bool = False,
+                    invert_param: bool = False):
     """
     Run sensitivity analysis for one parameter.
     
@@ -51,14 +52,18 @@ def run_sensitivity(param_name: str, param_values: list, param_attr_path: str,
     for val in param_values:
         config = RHMVSPConfig()
         # Set the parameter
+        if invert_param:
+            solver_val = 1.0 - val  # reliability threshold → unreliability for solver
+        else:
+            solver_val = val
         if config_setter:
-            config_setter(config, val)
+            config_setter(config, solver_val)
         else:
             parts = param_attr_path.split(".")
             obj = config
             for p in parts[:-1]:
                 obj = getattr(obj, p)
-            setattr(obj, parts[-1], val)
+            setattr(obj, parts[-1], solver_val)
         config.solver_name = "gurobi"
         config.time_limit = time_limit
 
