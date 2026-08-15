@@ -1,10 +1,9 @@
 # projects/risk-equity-adaptive/environment.yml
 
-name: paper1_risk_equity
+name: riskequity
 channels:
-  - defaults
   - conda-forge
-  - anaconda
+  - defaults
 dependencies:
   # --- Conda packages ---
   - python
