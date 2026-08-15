@@ -1,0 +1,6 @@
+5-colour set (RGB values extracted from 热力图配色.JPG):
+Warm Orange: #F2BB77 (242, 187, 119)
+Pale Beige: #F1DDB2 (241, 221, 178)
+Light Cyan: #B6E1ED (182, 225, 237)
+Deep Slate Blue: #455073 (69, 80, 115)
+Near Black: #19171A (25, 23, 26)

@@ -24,28 +24,49 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import LinearSegmentedColormap, PowerNorm
 
 from config import RHMVSPConfig
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
 from src.utils.logging import Logger
-from sensitivity.plot_helpers import heatmap, discrete_cmap_5, set_style
-from sensitivity.utils import update_od_deadlines as _update_od_deadlines
+from sensitivity.plot_helpers import set_style
 
 # ---- Experiment grids ----
-ALPHA_T_VALS    = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]
-ALPHA_MAX_VALS  = [0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.055, 0.06]
+ALPHA_T_VALS    = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.8]
+ALPHA_MAX_VALS  = [0.945, 0.950, 0.955, 0.960, 0.965, 0.970, 0.975, 0.980, 0.985]
+
+# Heatmap palette extracted from docs/colour set3.txt.
+# Ordered from low to high values to match the reference colour bar.
+SET3_HEATMAP_COLOURS = [
+    '#19171A',  # Near Black
+    '#455073',  # Deep Slate Blue
+    '#B6E1ED',  # Light Cyan
+    '#F1DDB2',  # Pale Beige
+    '#F2BB77',  # Warm Orange
+]
+
+# Values below 1 expand colour differences near the lower and middle part of
+# the range, making neighbouring values easier to distinguish visually.
+HEATMAP_CONTRAST_GAMMA = 0.55
+
+
+def _set3_heatmap_cmap():
+    """Return the continuous five-colour map used by these heatmaps."""
+    return LinearSegmentedColormap.from_list(
+        'set3_heatmap', SET3_HEATMAP_COLOURS, N=256
+    )
 
 
 def _plot_heatmap(alpha_t_vals, alpha_max_vals, matrix, metric_name,
                   fmt_func=None, save_path=None):
-    """Render a 2-D bubble scatter chart (uniform-size circles, colour only) using set2 colourmap."""
+    """Render a 2-D bubble scatter chart using the set3 colourmap."""
     fmt = fmt_func if fmt_func else lambda v: f'{v:.2f}'
 
     xlabels = [f'{v:.3f}' for v in alpha_max_vals]
     ylabels = [f'{v:.2f}' for v in alpha_t_vals]
 
     set_style()
-    cmap = discrete_cmap_5()
+    cmap = _set3_heatmap_cmap()
     fig, ax = plt.subplots(figsize=(max(6, len(xlabels) * 0.9),
                                     max(4, len(ylabels) * 0.6)))
 
@@ -53,9 +74,12 @@ def _plot_heatmap(alpha_t_vals, alpha_max_vals, matrix, metric_name,
     vmax = np.nanmax(matrix)
     if vmin == vmax:
         vmax = vmin + 1e-9
-    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+    norm = PowerNorm(gamma=HEATMAP_CONTRAST_GAMMA, vmin=vmin, vmax=vmax)
 
-    bubble_size = 300  # uniform for all cells (2.5× previous)
+    # Marker area in points².  420 remains below the horizontal and vertical
+    # grid spacing for the current figure sizing, so neighbouring bubbles do
+    # not overlap while appearing more prominent than the previous size.
+    bubble_size = 420
 
     for i in range(len(ylabels)):
         for j in range(len(xlabels)):
@@ -68,7 +92,7 @@ def _plot_heatmap(alpha_t_vals, alpha_max_vals, matrix, metric_name,
     ax.set_xticklabels(xlabels, fontsize=10)
     ax.set_yticks(np.arange(len(ylabels)))
     ax.set_yticklabels(ylabels, fontsize=10)
-    ax.set_xlabel(r'$\alpha_{max}$ (Risk Reliability Limit)', fontsize=13)
+    ax.set_xlabel(r'$\alpha_{max}$ (Risk Reliability Threshold)', fontsize=13)
     ax.set_ylabel(r'$\alpha_T$ (Time Reliability Threshold)', fontsize=13)
     ax.set_xlim(-0.5, len(xlabels) - 0.5)
     ax.set_ylim(-0.5, len(ylabels) - 0.5)
@@ -92,7 +116,7 @@ def _plot_heatmap(alpha_t_vals, alpha_max_vals, matrix, metric_name,
 #                       MAIN EXPERIMENT
 # ======================================================================
 def run_risk_time_coupled(instance_path="data_real_case/instance.json",
-                          time_limit=None,
+                          time_limit=3600,
                           output_root="results"):
     """Run the α_max × α_T coupled experiment."""
     with open(instance_path) as f:
@@ -115,7 +139,8 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
     cfg_bench.solver_name = "gurobi"
 
     inst_bench = json.loads(json.dumps(instance))
-    _update_od_deadlines(inst_bench, cfg_bench, alpha_T_dependent=True)
+    for od in inst_bench.get("od_pairs", []):
+        od["alpha_T_od"] = cfg_bench.alpha_T
 
     bench_sub = os.path.join(exp_dir, "benchmark_constant")
     os.makedirs(bench_sub, exist_ok=True)
@@ -172,13 +197,14 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
 
             cfg = RHMVSPConfig()
             cfg.alpha_T = aT          # sweep variable
-            cfg.alpha_max = a_max
+            cfg.alpha_max = 1.0 - a_max
             if time_limit:
                 cfg.time_limit = time_limit
             cfg.solver_name = "gurobi"
 
             inst = json.loads(json.dumps(instance))
-            _update_od_deadlines(inst, cfg, alpha_T_dependent=True)
+            for od in inst.get("od_pairs", []):
+                od["alpha_T_od"] = cfg.alpha_T
 
             sub = os.path.join(exp_dir, f"aMax={a_max:.3f}_aT={aT:.2f}")
             os.makedirs(sub, exist_ok=True)
@@ -321,5 +347,5 @@ if __name__ == "__main__":
     print("RISK–TIME COUPLED SENSITIVITY ANALYSIS")
     print("α_max × α_T  →  Cost / R_risk / R_time Bubble Heatmaps")
     print("=" * 60)
-    run_risk_time_coupled(time_limit=120)
+    run_risk_time_coupled(time_limit=3600)
     print("Done.")

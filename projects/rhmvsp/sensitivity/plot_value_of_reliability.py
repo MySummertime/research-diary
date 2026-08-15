@@ -97,8 +97,8 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
 
     panels = [
         (mr_costs,  mw_costs,  "Total Cost (CNY)"),
-        (mr_raw_risk, mw_raw_risk,  r"Raw Risk"),
-        (mr_raw_time, mw_raw_time,  r"Raw Time (h)"),
+        (mr_raw_risk, mw_raw_risk,  r"Risk"),
+        (mr_raw_time, mw_raw_time,  r"Time"),
     ]
 
     for idx, (mr_data, mw_data, ylabel) in enumerate(panels):
@@ -131,7 +131,7 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
 
     # One metric per lollipop "track", separated vertically by metric.
     # Cost, Raw Risk, Raw Time, R_risk, R_time
-    gap_names  = ["Cost", "Raw Risk", "Raw Time", "$R_{risk}$", "$R_{time}$"]
+    gap_names  = ["Cost", "Risk", "Time", "Risk reliability", "Time reliability"]
     gap_all    = [gap_cost, gap_raw_risk, gap_raw_time, gap_r_risk, gap_r_time]
 
     # Build a 2D grid: rows = metrics, columns = (α_T, α_max)
@@ -139,7 +139,7 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
     gap_arr = np.array(gap_all)  # shape (n_metrics, n_gaps)
 
     # ── Plot 2: Single lollipop chart (5 metrics per (α_T, α_max) cluster) ─
-    gap_names  = ["Cost", "Raw Risk", "Raw Time", "$R_{risk}$", "$R_{time}$"]
+    gap_names  = ["Cost", "Risk", "Time", "Risk reliability", "Time reliability"]
     gap_all    = [gap_cost, gap_raw_risk, gap_raw_time, gap_r_risk, gap_r_time]
     gap_arr    = np.array(gap_all)  # shape (5, 6)
 
