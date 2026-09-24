@@ -5,7 +5,7 @@ from itertools import count
 
 from config import RHMVSPConfig
 from ..core.network import Arc, MultimodalNetwork
-from ..core.uncertainty import TrapezoidalFuzzy, TriangularFuzzy, UncertaintyEngine
+from ..core.uncertainty import ZigzagUncertainVariable, UncertaintyEngine
 
 
 @dataclass
@@ -21,7 +21,9 @@ class Label:
     node: int = -1
     path: tuple = ()  # sequence of (node, mode)
     arc_sequence: tuple = ()
+    rail_services: tuple = ()  # 按行驶顺序保存所选铁路班次
     prev_mode: int = 0
+    continuous_drive: float = 0.0
     feasible: bool = True
     rail_started: bool = False  # True once a rail arc has been traversed
     rail_ended: bool = False    # True once a road arc is traversed AFTER rail_started
@@ -52,8 +54,6 @@ class PricingProblem:
         self.logger = logger
         # S2-6: time-keyed arc reliability cache: (arc_id, hour_bin) -> R
         self._arc_R_cache: dict[tuple, float] = {}
-        # S2-6: transfer node time cache: (node_id, hour_bin) -> transfer_time
-        self._transfer_time_cache: dict[tuple, float] = {}
         # Timers for exact ESPPRC execution profiling
         self.total_espprc_cpu_time = 0.0
         self.total_espprc_wall_time = 0.0
@@ -72,24 +72,23 @@ class PricingProblem:
             tri = self.engine.make_transport_time(arc.distance, arc.mode)
             self._arc_R_cache[cache_key] = self.engine.arc_reliability(
                 arc.alpha, start_time=time_bin,
-                fuzzy_duration=(tri.a, tri.b, tri.c, tri.d),
+                fuzzy_duration=(tri.a, tri.b, tri.c),
                 time_dependent=True,
             )
         return self._arc_R_cache[cache_key]
 
-    def _get_transfer_time(self, tn, alpha_T: float) -> float:
-        """
-        Transfer time from the instance transfer node definition.
-        Uses the deterministic-equivalent at alpha_T for consistency with
-        the reliability evaluator's fuzzy accumulation.
+    @staticmethod
+    def _combine_risk_reliabilities(
+        partial_reliabilities: tuple[float, ...],
+        component_reliabilities: tuple[float, ...],
+    ) -> float:
+        """Combine series-system component reliabilities by the minimum rule."""
+        values = partial_reliabilities + component_reliabilities
+        return min(values) if values else 1.0
 
-        Transfer trapezoid: (a, b, c, d) → det_equiv = (2α-1)*d + 2(1-α)*c  when α ≥ 0.5
-        """
-        a, b, c, d = tn.transfer_time_a, tn.transfer_time_b, tn.transfer_time_c, tn.transfer_time_d
-        if alpha_T < 0.5:
-            return a + 2.0 * alpha_T * (b - a)
-        else:
-            return (2.0 * alpha_T - 1.0) * d + 2.0 * (1.0 - alpha_T) * c
+    def _get_transfer_time(self, previous_mode: int, next_mode: int) -> float:
+        """Return the fixed transfer duration for the modal transition."""
+        return self.config.transfer_time_hours(previous_mode, next_mode)
 
     def solve(self, origin: int, destination: int, od_idx: int, duals: dict,
               od_E: float, od_L: float, alpha_T: float, branch_constraints: list = None,
@@ -97,6 +96,7 @@ class PricingProblem:
         """
         Solve bidirectional ESPPRC, optionally heuristically (exact=False).
         """
+        self._exact_pricing = exact
         self.origin = origin
         self.destination = destination
         self.od_idx = od_idx
@@ -228,7 +228,14 @@ class PricingProblem:
     def _extend(self, parent: Label, arc: Arc, duals: dict, alpha_T: float, forward: bool) -> list[Label]:
         """Extend label along arc, generating multiple labels for all valid rail timetable branches."""
         tri = self.engine.make_transport_time(arc.distance, arc.mode)
-        dt = getattr(tri, 'c', tri.b)  # Expected worst-case peak time
+        # All feasibility, timetable, and risk clocks use the same
+        # alpha_T-quantile schedule.
+        dt = tri.deterministic_equivalent_upper(alpha_T)
+        if arc.mode == 1:
+            prior_drive = parent.continuous_drive if parent.prev_mode == 1 else 0.0
+            rest_time, new_continuous_drive = self.engine.road_drive_transition(prior_drive, dt)
+        else:
+            rest_time, new_continuous_drive = 0.0, 0.0
 
         q_veh = self.config.q_road
         q_rail = self.config.q_rail
@@ -236,41 +243,23 @@ class PricingProblem:
         transfer_cost = 0.0
         transfer_time = 0.0
         node_R = 1.0
-        dual_hub = 0.0
 
         # Safe transfer hub extraction
-        if parent.prev_mode != 0 and parent.prev_mode != arc.mode:
-            for c_type, c_data in self.branch_constraints:
-                if c_type == "hub_close" and parent.node == c_data:
-                    return []
+        if parent.prev_mode != 0 and not (parent.prev_mode == 1 and arc.mode == 1):
             tn = self.network.transfer_nodes.get(parent.node)
             if tn is None:
                 return []
-            transfer_time = self._get_transfer_time(tn, alpha_T)
-            transfer_cost = tn.unit_transfer_cost * q_veh
-            node_R = 1.0 - tn.gamma
-            dual_hub = duals.get("hub", {}).get(parent.node, 0.0)
+            transfer_time = self._get_transfer_time(parent.prev_mode, arc.mode)
+            transfer_cost = self.config.transfer_unit_cost(parent.prev_mode, arc.mode)
+            transfer_belief = tn.gamma_rr if parent.prev_mode == arc.mode == 2 else tn.gamma_ir
+            node_R = 1.0 - transfer_belief
 
-        if arc.mode == 2:
-            c_rail_base_fixed = self.config.c_rail_base_fixed
-            c_rail_base_var = self.config.c_rail_base_var
-            c_rail_hazmat_markup = self.config.c_rail_hazmat_markup
-            c_rail_fund = self.config.c_rail_fund
-            dist = arc.distance
-            actual_unit_cost = round(
-                (c_rail_base_fixed + c_rail_base_var * dist) * (1 + c_rail_hazmat_markup)
-                + c_rail_fund * dist, 2
-            )
-        else:
-            actual_unit_cost = arc.unit_cost
+        actual_unit_cost = arc.unit_cost
 
-        ratio = (q_veh / q_rail) if arc.mode == 2 else 1.0
-        arc_deploy_cost = arc.deploy_cost * arc.min_units * ratio
         transport_cost_run = actual_unit_cost * q_veh
+        actual_cost_run = transport_cost_run + transfer_cost
 
-        actual_cost_run = arc_deploy_cost + transport_cost_run + transfer_cost
-
-        # S4-1: Risk penalty removed — no C_consequence parameter
+        # S4-1: 事故信度仅用于可靠性约束，不计入成本
         risk_penalty_ext = 0.0
 
         next_node = arc.j if forward else arc.i
@@ -317,9 +306,11 @@ class PricingProblem:
             if arc.mode == 2:
                 runs = getattr(self.network, 'timetable', {}).get((arc.i, arc.j), [])
                 valid_runs = sorted(
-                    [r for r in runs if r["departure_time"] >= t_arr and r["departure_time"] <= t_arr + 48.0],
+                    [r for r in runs if r["departure_time"] >= t_arr],
                     key=lambda x: x["departure_time"]
-                )[:2]
+                )
+                if not self._exact_pricing:
+                    valid_runs = valid_runs[:2]
                 if not valid_runs:
                     return []
                 for r in valid_runs:
@@ -328,47 +319,52 @@ class PricingProblem:
                     # S2-6: use time-keyed cache
                     arc_R = self._get_arc_R(arc, t_start, alpha_T)
                     
+                    rail_dual = duals.get("rail", {}).get(r.get("train_id"), 0.0)
                     actual_cost_total = actual_cost_run + risk_penalty_ext
                     
                     new_cost_base = parent.cost + actual_cost_total
-                    new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
+                    new_rc_base = parent.reduced_cost + actual_cost_total - rail_dual * q_veh
                     
-                    new_risk = min(parent.risk_R, arc_R, node_R)
-                    if self.config.skip_risk_constraint or new_risk >= self.config.beta_od:
+                    new_risk = self._combine_risk_reliabilities((parent.risk_R,), (arc_R, node_R))
+                    if self.config.skip_risk_constraint or new_risk >= self.config.alpha_R:
                         new_labels.append(Label(
                             cost=new_cost_base, reduced_cost=new_rc_base,
                             time_upper=new_time, time_lower=new_time, risk_R=new_risk,
                             visited=parent.visited | {next_node}, ng_memory=new_ng, node=next_node,
                             path=parent.path + ((next_node, arc.mode),),
-                            arc_sequence=parent.arc_sequence + (arc,), prev_mode=arc.mode, feasible=True, rail_started=new_rail_started, rail_ended=new_rail_ended
+                            arc_sequence=parent.arc_sequence + (arc,), rail_services=parent.rail_services + (r,),
+                            prev_mode=arc.mode, continuous_drive=0.0, feasible=True, rail_started=new_rail_started, rail_ended=new_rail_ended
                         ))
             else:
                 t_start = t_arr
-                new_time = t_start + dt
+                new_time = t_start + dt + rest_time
                 arc_R = self._get_arc_R(arc, t_start, alpha_T)
                 
                 actual_cost_total = actual_cost_run + risk_penalty_ext
                 new_cost_base = parent.cost + actual_cost_total
-                new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
+                new_rc_base = parent.reduced_cost + actual_cost_total
                 
-                new_risk = min(parent.risk_R, arc_R, node_R)
-                if self.config.skip_risk_constraint or new_risk >= self.config.beta_od:
+                new_risk = self._combine_risk_reliabilities((parent.risk_R,), (arc_R, node_R))
+                if self.config.skip_risk_constraint or new_risk >= self.config.alpha_R:
                     new_labels.append(Label(
                         cost=new_cost_base, reduced_cost=new_rc_base,
                         time_upper=new_time, time_lower=new_time, risk_R=new_risk,
                         visited=parent.visited | {next_node}, ng_memory=new_ng, node=next_node,
                         path=parent.path + ((next_node, arc.mode),),
-                        arc_sequence=parent.arc_sequence + (arc,), prev_mode=arc.mode, feasible=True, rail_started=new_rail_started, rail_ended=new_rail_ended
+                        arc_sequence=parent.arc_sequence + (arc,), rail_services=parent.rail_services,
+                        prev_mode=arc.mode, continuous_drive=new_continuous_drive, feasible=True, rail_started=new_rail_started, rail_ended=new_rail_ended
                     ))
         else:
             t_dep_latest = parent.time_upper - transfer_time
             if arc.mode == 2:
                 runs = getattr(self.network, 'timetable', {}).get((arc.i, arc.j), [])
                 valid_runs = sorted(
-                    [r for r in runs if r["arrival_time"] <= t_dep_latest and r["arrival_time"] >= t_dep_latest - 48.0],
+                    [r for r in runs if r["arrival_time"] <= t_dep_latest],
                     key=lambda x: x["arrival_time"],
                     reverse=True
-                )[:2]
+                )
+                if not self._exact_pricing:
+                    valid_runs = valid_runs[:2]
                 if not valid_runs:
                     return []
                 for r in valid_runs:
@@ -376,34 +372,37 @@ class PricingProblem:
                     arc_R = self._get_arc_R(arc, new_time, alpha_T)
                     
                     t_end = r["arrival_time"]
+                    rail_dual = duals.get("rail", {}).get(r.get("train_id"), 0.0)
                     actual_cost_total = actual_cost_run + risk_penalty_ext
                     new_cost_base = parent.cost + actual_cost_total
-                    new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
-                    new_risk = min(parent.risk_R, arc_R, node_R)
-                    if (self.config.skip_risk_constraint or new_risk >= self.config.beta_od) and new_time >= self.od_E:
+                    new_rc_base = parent.reduced_cost + actual_cost_total - rail_dual * q_veh
+                    new_risk = self._combine_risk_reliabilities((parent.risk_R,), (arc_R, node_R))
+                    if (self.config.skip_risk_constraint or new_risk >= self.config.alpha_R) and new_time >= self.od_E:
                         new_labels.append(Label(
                             cost=new_cost_base, reduced_cost=new_rc_base,
                             time_upper=new_time, time_lower=new_time, risk_R=new_risk,
                             visited=parent.visited | {next_node}, ng_memory=new_ng, node=next_node,
                             path=parent.path + ((next_node, arc.mode),),
-                            arc_sequence=(arc,) + parent.arc_sequence, prev_mode=arc.mode, feasible=True, rail_started=new_rail_started, rail_ended=new_rail_ended
+                            arc_sequence=(arc,) + parent.arc_sequence, rail_services=(r,) + parent.rail_services,
+                            prev_mode=arc.mode, continuous_drive=0.0, feasible=True, rail_started=new_rail_started, rail_ended=new_rail_ended
                         ))
             else:
-                new_time = t_dep_latest - dt
+                new_time = t_dep_latest - dt - rest_time
                 arc_R = self._get_arc_R(arc, new_time, alpha_T)
                 
                 t_end = t_dep_latest
                 actual_cost_total = actual_cost_run + risk_penalty_ext
                 new_cost_base = parent.cost + actual_cost_total
-                new_rc_base = parent.reduced_cost + actual_cost_total - dual_hub
-                new_risk = min(parent.risk_R, arc_R, node_R)
-                if (self.config.skip_risk_constraint or new_risk >= self.config.beta_od) and new_time >= self.od_E:
+                new_rc_base = parent.reduced_cost + actual_cost_total
+                new_risk = self._combine_risk_reliabilities((parent.risk_R,), (arc_R, node_R))
+                if (self.config.skip_risk_constraint or new_risk >= self.config.alpha_R) and new_time >= self.od_E:
                     new_labels.append(Label(
                         cost=new_cost_base, reduced_cost=new_rc_base,
                         time_upper=new_time, time_lower=new_time, risk_R=new_risk,
                         visited=parent.visited | {next_node}, ng_memory=new_ng, node=next_node,
                         path=parent.path + ((next_node, arc.mode),),
-                        arc_sequence=(arc,) + parent.arc_sequence, prev_mode=arc.mode, feasible=True, rail_started=new_rail_started, rail_ended=new_rail_ended
+                        arc_sequence=(arc,) + parent.arc_sequence, rail_services=parent.rail_services,
+                        prev_mode=arc.mode, continuous_drive=new_continuous_drive, feasible=True, rail_started=new_rail_started, rail_ended=new_rail_ended
                     ))
 
         return new_labels
@@ -462,24 +461,26 @@ class PricingProblem:
                         transfer_time = 0.0
                         transfer_cost = 0.0
                         node_R = 1.0
-                        if f_lab.prev_mode != 0 and f_lab.prev_mode != arc.mode:
+                        if f_lab.prev_mode != 0 and not (f_lab.prev_mode == 1 and arc.mode == 1):
                             tn = self.network.transfer_nodes.get(i)
                             if tn is None:
                                 continue
-                            transfer_time = self._get_transfer_time(tn, alpha_T)
-                            transfer_cost = tn.unit_transfer_cost * q_veh
-                            node_R = 1.0 - tn.gamma
+                            transfer_time = self._get_transfer_time(f_lab.prev_mode, arc.mode)
+                            transfer_cost = self.config.transfer_unit_cost(f_lab.prev_mode, arc.mode)
+                            transfer_belief = tn.gamma_rr if f_lab.prev_mode == arc.mode == 2 else tn.gamma_ir
+                            node_R = 1.0 - transfer_belief
 
                         transfer_time_j = 0.0
                         transfer_cost_j = 0.0
                         node_R_j = 1.0
-                        if b_lab.prev_mode != 0 and b_lab.prev_mode != arc.mode:
+                        if b_lab.prev_mode != 0 and not (b_lab.prev_mode == 1 and arc.mode == 1):
                             tn_j = self.network.transfer_nodes.get(j)
                             if tn_j is None:
                                 continue
-                            transfer_time_j = self._get_transfer_time(tn_j, alpha_T)
-                            transfer_cost_j = tn_j.unit_transfer_cost * q_veh
-                            node_R_j = 1.0 - tn_j.gamma
+                            transfer_time_j = self._get_transfer_time(arc.mode, b_lab.prev_mode)
+                            transfer_cost_j = self.config.transfer_unit_cost(arc.mode, b_lab.prev_mode)
+                            transfer_belief_j = tn_j.gamma_rr if arc.mode == b_lab.prev_mode == 2 else tn_j.gamma_ir
+                            node_R_j = 1.0 - transfer_belief_j
 
                         t_arrive_i = f_lab.time_upper + transfer_time
                         if arc.mode == 2:
@@ -494,13 +495,18 @@ class PricingProblem:
                             t_start_arc = t_arrive_i
                             t_end_arc = t_start_arc + dt_arc + transfer_time_j
 
+                        midpoint_services = (r,) if arc.mode == 2 else ()
+
                         if t_end_arc > b_lab.time_upper:
                             continue
 
                         # S2-6: time-keyed reliability
                         arc_R = self._get_arc_R(arc, t_start_arc, alpha_T)
-                        path_risk = min(f_lab.risk_R, b_lab.risk_R, arc_R, node_R, node_R_j)
-                        if path_risk < self.config.beta_od:
+                        path_risk = self._combine_risk_reliabilities(
+                            (f_lab.risk_R, b_lab.risk_R),
+                            (arc_R, node_R, node_R_j),
+                        )
+                        if not self.config.skip_risk_constraint and path_risk < self.config.alpha_R:
                             continue
 
                         full_visited = f_lab.visited | b_lab.visited
@@ -525,7 +531,7 @@ class PricingProblem:
                         trans_hubs = set()
                         for k in range(len(full_arcs) - 1):
                             a1, a2 = full_arcs[k], full_arcs[k + 1]
-                            if a1.mode != a2.mode:
+                            if not (a1.mode == 1 and a2.mode == 1):
                                 tn_node = self.network.transfer_nodes.get(a1.j)
                                 if tn_node:
                                     trans_hubs.add(a1.j)
@@ -533,12 +539,7 @@ class PricingProblem:
                         if self.branch_constraints:
                             valid_bc = True
                             for bc_type, bc_data in self.branch_constraints:
-                                if bc_type == "hub_close":
-                                    hub_id = bc_data
-                                    if hub_id in trans_hubs:
-                                        valid_bc = False
-                                        break
-                                elif bc_type in ("arc_forbid", "arc_enforce"):
+                                if bc_type in ("arc_forbid", "arc_enforce"):
                                     od_bc, u_bc, v_bc, m_bc = bc_data
                                     if od_bc == self.od_idx:
                                         has_arc = any(a.i == u_bc and a.j == v_bc and a.arc_id == m_bc for a in full_arcs)
@@ -554,32 +555,36 @@ class PricingProblem:
                         max_L = od_L
 
                         # S3-1 FIX: Compute exact midpoint arc cost and combine with labels
-                        if arc.mode == 2:
-                            c_rfx = self.config.c_rail_base_fixed
-                            c_rv = self.config.c_rail_base_var
-                            c_rh = self.config.c_rail_hazmat_markup
-                            c_rf = self.config.c_rail_fund
-                            a_unit = round((c_rfx + c_rv * arc.distance) * (1 + c_rh) + c_rf * arc.distance, 2)
-                        else:
-                            a_unit = arc.unit_cost
-
-                        r_a = (q_veh / q_rail) if arc.mode == 2 else 1.0
-                        arc_deploy_cost = arc.deploy_cost * arc.min_units * r_a
+                        a_unit = arc.unit_cost
                         transport_cost_run = a_unit * q_veh
-                        actual_cost_arc = arc_deploy_cost + transport_cost_run + transfer_cost + transfer_cost_j
+                        actual_cost_arc = transport_cost_run + transfer_cost + transfer_cost_j
 
-                        # Risk penalty removed — no C_consequence parameter
-                        midpoint_rc = actual_cost_arc
+                        # 事故信度仅用于可靠性约束，不计入成本
+                        rail_dual = 0.0
+                        if arc.mode == 2:
+                            rail_dual = duals.get("rail", {}).get(r.get("train_id"), 0.0)
+                        midpoint_rc = actual_cost_arc - rail_dual * q_veh
 
-                        total_time = f_lab.time_upper + dt_arc + (max_L - b_lab.time_upper)
+                        if arc.mode == 1:
+                            prior_drive = f_lab.continuous_drive if f_lab.prev_mode == 1 else 0.0
+                            midpoint_rest, _ = self.engine.road_drive_transition(prior_drive, dt_arc)
+                        else:
+                            midpoint_rest = 0.0
+                        total_time = f_lab.time_upper + dt_arc + midpoint_rest + (max_L - b_lab.time_upper)
                         total_cost = f_lab.cost + b_lab.cost + actual_cost_arc
-                        reduced_cost = f_lab.reduced_cost + b_lab.reduced_cost + duals_base + midpoint_rc
+                        full_services = f_lab.rail_services + midpoint_services + b_lab.rail_services
+                        reduced_cost = (
+                            f_lab.reduced_cost + b_lab.reduced_cost + duals_base
+                            + midpoint_rc
+                        )
 
                         if reduced_cost < -1e-4:
                             complete_paths.append(Label(
                                 cost=total_cost, reduced_cost=reduced_cost,
                                 time_upper=total_time, risk_R=path_risk,
-                                visited=full_visited, arc_sequence=full_arcs, feasible=True, rail_started=True, rail_ended=True
+                                visited=full_visited, arc_sequence=full_arcs,
+                                rail_services=full_services,
+                                feasible=True, rail_started=True, rail_ended=True
                             ))
 
         complete_paths.sort(key=lambda x: (x.reduced_cost, x.cost))
@@ -590,7 +595,7 @@ class PricingProblem:
         S3-3: ng-route dominance rule.
 
         l1 dominates l2 if and only if:
-        (a) l1 has no worse reduced_cost, time_upper, and risk_R, AND
+        (a) l1 has no worse reduced_cost, time_upper, and remaining risk reliability, AND
         (b) l1.ng_memory is a subset of l2.ng_memory
             (l1 has fewer forced non-revisit obligations, so it can be extended
              to at least all paths that l2 can reach without cycling).
@@ -612,6 +617,7 @@ class PricingProblem:
             and l1.risk_R >= l2.risk_R
             and l1.ng_memory <= l2.ng_memory  # S3-3: ng_memory subset check
             and l1.prev_mode == l2.prev_mode
+            and l1.continuous_drive <= l2.continuous_drive
             and l1.rail_started == l2.rail_started
             and l1.rail_ended == l2.rail_ended
         )

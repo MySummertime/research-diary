@@ -41,22 +41,24 @@ def sample_scenario(
     """
     inst = json.loads(json.dumps(base_instance))          # deep copy
 
-    _perturb_demand(inst.get("od_pairs", []), rng, demand_pct)
+    q_road = float(inst.get("config", {}).get("q_road", 1.0))
+    _perturb_demand(inst.get("od_pairs", []), rng, demand_pct, q_road)
     _perturb_arc_times(inst.get("network", {}).get("arcs", []), rng, time_pct)
     _perturb_risk(inst.get("network", {}).get("arcs", []), rng, risk_pct)
+    _perturb_transfer_beliefs(
+        inst.get("network", {}).get("transfer_nodes", []), rng, risk_pct
+    )
 
     return inst
 
 
 # ── internal helpers ──────────────────────────────────────────────────────────
 
-Q_ROAD = 30.0  # Road vehicle capacity (tons) — from config.py
-
-
 def _perturb_demand(
     od_pairs: list[dict],
     rng: np.random.Generator | np.random.RandomState,
     pct: float,
+    q_road: float,
 ) -> None:
     """
     Perturb each OD-pair demand by Uniform(1-pct, 1+pct) and round
@@ -67,7 +69,7 @@ def _perturb_demand(
         noise = rng.uniform(1.0 - pct, 1.0 + pct)
         new_demand = od["demand"] * noise
         # Round up to nearest q_road to keep feasibility (≤ capacity)
-        new_demand = max(Q_ROAD, np.ceil(new_demand / Q_ROAD) * Q_ROAD)
+        new_demand = max(q_road, np.ceil(new_demand / q_road) * q_road)
         od["demand"] = float(new_demand)
 
 
@@ -77,21 +79,20 @@ def _perturb_arc_times(
     pct: float,
 ) -> None:
     """
-    Scale each arc's trapezoidal time support (a, b, c, d) by
+    Scale each arc's triangular support (or legacy four-value support) by
     Uniform(1-pct, 1+pct).  Every arc gets its own independent draw.
     This widens or narrows the fuzzy support while preserving the
-    trapezoidal shape (a ≤ b ≤ c ≤ d).
+    ordered fuzzy shape.
     """
     for arc in arcs:
         noise = rng.uniform(1.0 - pct, 1.0 + pct)
-        for key in ("time_a", "time_b", "time_c", "time_d"):
+        keys = ("time_a", "time_b", "time_c", "time_d") if "time_d" in arc else ("time_a", "time_b", "time_c")
+        for key in keys:
             arc[key] = round(arc[key] * noise, 6)
-        # Guard: ensure a ≤ b ≤ c ≤ d
-        times = [arc["time_a"], arc["time_b"], arc["time_c"], arc["time_d"]]
-        times_sorted = sorted(times)
-        arc["time_a"], arc["time_b"], arc["time_c"], arc["time_d"] = [
-            round(t, 6) for t in times_sorted
-        ]
+        # Preserve ordering for both triangular and legacy collapsed trapezoids.
+        for key, value in zip(keys, sorted(arc[key] for key in keys)):
+            arc[key] = round(value, 6)
+
 
 
 def _perturb_risk(
@@ -102,11 +103,25 @@ def _perturb_risk(
     """
     Perturb each arc's accident belief alpha by Uniform(1-pct, 1+pct).
     Only arcs with alpha > 0 are perturbed.  The result is clamped to
-    (0, 0.95] so that R = 1-alpha stays positive.
+    (0, 1], consistent with the accident-belief definition.
     """
     for arc in arcs:
         if arc.get("alpha", 0) <= 0:
             continue
         noise = rng.uniform(1.0 - pct, 1.0 + pct)
         new_alpha = arc["alpha"] * noise
-        arc["alpha"] = round(max(1e-6, min(0.95, new_alpha)), 5)
+        arc["alpha"] = max(1e-12, min(1.0, new_alpha))
+
+
+def _perturb_transfer_beliefs(
+    transfer_nodes: list[dict],
+    rng: np.random.Generator | np.random.RandomState,
+    pct: float,
+) -> None:
+    """Perturb both rail--rail and intermodal transfer accident beliefs."""
+    for node in transfer_nodes:
+        for key in ("gamma_rr", "gamma_ir"):
+            if node.get(key, 0.0) <= 0.0:
+                continue
+            noise = rng.uniform(1.0 - pct, 1.0 + pct)
+            node[key] = max(1e-12, min(1.0, node[key] * noise))

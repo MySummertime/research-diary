@@ -136,8 +136,9 @@ class Visualizer:
 			try:
 				ctx.add_basemap(
 					ax, 
-					source=ctx.providers.CartoDB.PositronNoLabels, 
-					alpha=0.9
+					#source=ctx.providers.CartoDB.PositronNoLabels,
+					source=ctx.providers.UN.ClearMap,
+					alpha=0.6
 				)
 			except Exception as e:
 				print(f"Warning: Failed to add basemap: {e}")

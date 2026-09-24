@@ -1,9 +1,9 @@
 """Real Geographic Instance Data Generator (Xinjiang - Shanghai Corridor)."""
 
 import math
-import numpy as np
 
-from config import RHMVSPConfig
+from config import RHMVSPConfig, default_empty_reposition_hub_fleet
+from .synthetic_beliefs import arc_belief, draw_belief
 
 def float_to_day_time(time_hours: float) -> str:
     """Convert continuous float hours into Day 1/2 HH:MM real time format."""
@@ -36,7 +36,6 @@ class RealInstanceGenerator:
 
     def __init__(self, config: RHMVSPConfig, seed: int = 42):
         self.config = config
-        self.rng = np.random.RandomState(seed)
 
     def generate(self) -> dict:
         """Generate the real geographic instance."""
@@ -46,47 +45,223 @@ class RealInstanceGenerator:
         #    Three corridors: North (陇海→京沪), Central (京广→沪宁), South (兰渝→成渝→渝贵→渝昆→京九→广深)
         node_defs = {
             # ── 18 Hubs ──
-            1:  {"code": "URC",  "name": "Urumqi",    "type": "Hub", "lon": 87.62,  "lat": 43.83, "region": "North"},
-            2:  {"code": "LHW",  "name": "Lanzhou",    "type": "Hub", "lon": 103.83, "lat": 36.06, "region": "North"},
-            46: {"code": "XNN",  "name": "Xining",     "type": "Hub", "lon": 101.77, "lat": 36.62, "region": "North"},
-            21: {"code": "SIA",  "name": "Xi'an",       "type": "Hub", "lon": 108.94, "lat": 34.26, "region": "North"},
-            3:  {"code": "CGO",  "name": "Zhengzhou",  "type": "Hub", "lon": 113.66, "lat": 34.75, "region": "North"},
-            22: {"code": "WUH",  "name": "Wuhan",       "type": "Hub", "lon": 114.30, "lat": 30.59, "region": "Central"},
-            4:  {"code": "HFE",  "name": "Hefei",      "type": "Hub", "lon": 117.23, "lat": 31.82, "region": "Central"},
-            5:  {"code": "SHA",  "name": "Shanghai",    "type": "Hub", "lon": 121.47, "lat": 31.23, "region": "Central"},
-            12: {"code": "NKG",  "name": "Nanjing",    "type": "Hub", "lon": 118.80, "lat": 32.06, "region": "Central"},
-            14: {"code": "HGH",  "name": "Hangzhou",   "type": "Hub", "lon": 120.12, "lat": 30.22, "region": "South"},
-            29: {"code": "CTU",  "name": "Chengdu",     "type": "Hub", "lon": 104.07, "lat": 30.57, "region": "South"},
-            30: {"code": "CKG",  "name": "Chongqing",   "type": "Hub", "lon": 106.55, "lat": 29.56, "region": "South"},
-            31: {"code": "NCH",  "name": "Nanchang",    "type": "Hub", "lon": 115.86, "lat": 28.68, "region": "South"},
-            33: {"code": "KWE",  "name": "Guiyang",    "type": "Hub", "lon": 106.63, "lat": 26.65, "region": "South"},
-            38: {"code": "GZU",  "name": "Guangzhou",   "type": "Hub", "lon": 113.26, "lat": 23.13, "region": "South"},
-            39: {"code": "NNG",  "name": "Nanning",     "type": "Hub", "lon": 108.37, "lat": 22.82, "region": "South"},
-            44: {"code": "CSX",  "name": "Changsha",   "type": "Hub", "lon": 112.94, "lat": 28.23, "region": "South"},
-            45: {"code": "FOC",  "name": "Fuzhou",     "type": "Hub", "lon": 119.30, "lat": 26.08, "region": "South"},
+            1: {
+                "code": "URC",
+                "name": "Urumqi",
+                "type": "Hub",
+                "lon": 87.62,
+                "lat": 43.83,
+            },
+            2: {
+                "code": "LHW",
+                "name": "Lanzhou",
+                "type": "Hub",
+                "lon": 103.83,
+                "lat": 36.06,
+            },
+            46: {
+                "code": "XNN",
+                "name": "Xining",
+                "type": "Hub",
+                "lon": 101.77,
+                "lat": 36.62,
+            },
+            21: {
+                "code": "SIA",
+                "name": "Xi'an",
+                "type": "Hub",
+                "lon": 108.94,
+                "lat": 34.26,
+            },
+            3: {
+                "code": "CGO",
+                "name": "Zhengzhou",
+                "type": "Hub",
+                "lon": 113.66,
+                "lat": 34.75,
+            },
+            22: {
+                "code": "WUH",
+                "name": "Wuhan",
+                "type": "Hub",
+                "lon": 114.30,
+                "lat": 30.59,
+            },
+            4: {
+                "code": "HFE",
+                "name": "Hefei",
+                "type": "Hub",
+                "lon": 117.23,
+                "lat": 31.82,
+            },
+            5: {
+                "code": "SHA",
+                "name": "Shanghai",
+                "type": "Hub",
+                "lon": 121.47,
+                "lat": 31.23,
+            },
+            12: {
+                "code": "NKG",
+                "name": "Nanjing",
+                "type": "Hub",
+                "lon": 118.80,
+                "lat": 32.06,
+            },
+            14: {
+                "code": "HGH",
+                "name": "Hangzhou",
+                "type": "Hub",
+                "lon": 120.12,
+                "lat": 30.22,
+            },
+            29: {
+                "code": "CTU",
+                "name": "Chengdu",
+                "type": "Hub",
+                "lon": 104.07,
+                "lat": 30.57,
+            },
+            30: {
+                "code": "CKG",
+                "name": "Chongqing",
+                "type": "Hub",
+                "lon": 106.55,
+                "lat": 29.56,
+            },
+            31: {
+                "code": "NCH",
+                "name": "Nanchang",
+                "type": "Hub",
+                "lon": 115.86,
+                "lat": 28.68,
+            },
+            33: {
+                "code": "KWE",
+                "name": "Guiyang",
+                "type": "Hub",
+                "lon": 106.63,
+                "lat": 26.65,
+            },
+            38: {
+                "code": "GZU",
+                "name": "Guangzhou",
+                "type": "Hub",
+                "lon": 113.26,
+                "lat": 23.13,
+            },
+            39: {
+                "code": "NNG",
+                "name": "Nanning",
+                "type": "Hub",
+                "lon": 108.37,
+                "lat": 22.82,
+            },
+            44: {
+                "code": "CSX",
+                "name": "Changsha",
+                "type": "Hub",
+                "lon": 112.94,
+                "lat": 28.23,
+            },
+            45: {
+                "code": "FOC",
+                "name": "Fuzhou",
+                "type": "Hub",
+                "lon": 119.30,
+                "lat": 26.08,
+            },
 
             # ── 10 Spokes ──
-            # 5 Xinjiang origins (petrochemical production)
-            6:  {"code": "KHG",  "name": "Kashgar",    "type": "Spoke", "lon": 75.99,  "lat": 39.47, "region": "North"},   # Xinjiang
-            7:  {"code": "HMI",  "name": "Hami",       "type": "Spoke", "lon": 93.52,  "lat": 42.82, "region": "North"},   # Xinjiang
-            8:  {"code": "KRL",  "name": "Korla",      "type": "Spoke", "lon": 86.17,  "lat": 41.73, "region": "North"},   # Xinjiang
-            9:  {"code": "AKU",  "name": "Aksu",       "type": "Spoke", "lon": 80.27,  "lat": 41.17, "region": "North"},   # Xinjiang
-            10: {"code": "HTN",  "name": "Hotan",      "type": "Spoke", "lon": 79.92,  "lat": 37.11, "region": "North"},   # Xinjiang
-            # 3 Yangtze River Delta destinations
-            13: {"code": "SZV",  "name": "Suzhou",     "type": "Spoke", "lon": 120.59, "lat": 31.30, "region": "YZR"},     # Jiangsu — chemical fibre parks
-            41: {"code": "NTG",  "name": "Nantong",    "type": "Spoke", "lon": 120.86, "lat": 32.01, "region": "YZR"},     # Jiangsu — new chemical zone
-            47: {"code": "WUX",  "name": "Wuxi",       "type": "Spoke", "lon": 120.30, "lat": 31.57, "region": "YZR"},     # Jiangsu — petrochemical base
-            # 2 Pearl River Delta destinations
-            37: {"code": "SZX",  "name": "Shenzhen",   "type": "Spoke", "lon": 114.07, "lat": 22.55, "region": "PRD"},     # Guangdong — port hazmat
-            42: {"code": "HUZ",  "name": "Huizhou",    "type": "Spoke", "lon": 114.42, "lat": 23.11, "region": "PRD"},     # Guangdong — chemical zone
-
+            6: {
+                "code": "KHG",
+                "name": "Kashgar",
+                "type": "Spoke",
+                "lon": 75.99,
+                "lat": 39.47,
+            },
+            7: {
+                "code": "HMI",
+                "name": "Hami",
+                "type": "Spoke",
+                "lon": 93.52,
+                "lat": 42.82,
+            },
+            8: {
+                "code": "KRL",
+                "name": "Korla",
+                "type": "Spoke",
+                "lon": 86.17,
+                "lat": 41.73,
+            },
+            9: {
+                "code": "AKU",
+                "name": "Aksu",
+                "type": "Spoke",
+                "lon": 80.27,
+                "lat": 41.17,
+            },
+            10: {
+                "code": "HTN",
+                "name": "Hotan",
+                "type": "Spoke",
+                "lon": 79.92,
+                "lat": 37.11,
+            },
+            13: {
+                "code": "SZV",
+                "name": "Suzhou",
+                "type": "Spoke",
+                "lon": 120.59,
+                "lat": 31.30,
+            },
+            41: {
+                "code": "NTG",
+                "name": "Nantong",
+                "type": "Spoke",
+                "lon": 120.86,
+                "lat": 32.01,
+            },
+            47: {
+                "code": "WUX",
+                "name": "Wuxi",
+                "type": "Spoke",
+                "lon": 120.30,
+                "lat": 31.57,
+            },
+            37: {
+                "code": "SZX",
+                "name": "Shenzhen",
+                "type": "Spoke",
+                "lon": 114.07,
+                "lat": 22.55,
+            },
+            42: {
+                "code": "HUZ",
+                "name": "Huizhou",
+                "type": "Spoke",
+                "lon": 114.42,
+                "lat": 23.11,
+            },
         }
 
         hub_ids = [k for k, v in node_defs.items() if v["type"] == "Hub"]
-        spoke_ids = [k for k, v in node_defs.items() if v["type"] == "Spoke"]
+        reposition_hub_by_spoke = {
+            6: 1, 7: 1, 8: 1, 9: 1, 10: 1,
+            13: 12, 41: 12, 47: 12,
+            37: 38, 42: 38,
+        }
 
-        nodes = [{"id": k, "x": round(v["lon"], 2), "y": round(v["lat"], 2), "name": v["name"]}
-                 for k, v in node_defs.items()]
+        nodes = [
+            {
+                "id": k,
+                "x": v["lon"],
+                "y": v["lat"],
+                "name": v["name"],
+                "reposition_hub_id": reposition_hub_by_spoke.get(k, k if k in (1, 12, 38) else None),
+            }
+            for k, v in node_defs.items()
+        ]
 
         # ── Rail edges: hub–hub, based on real Chinese railway network ──
         rail_edges = [
@@ -140,12 +315,12 @@ class RealInstanceGenerator:
             (22, 31),      # Wuhan → Nanchang    [武九线]
         ]
 
-        # ── Road edges: spoke→nearest hub(s) + spoke↔spoke within group ──
+        # ── Road edges: each spoke connects to its provincial dispatch capital ──
         road_edges = []
 
         # Spoke-to-hub: each spoke connects to its 1–2 nearest hubs by road
         # Each spoke MUST connect to its provincial-capital Hub
-        spoke_nearest_hubs = {
+        spoke_dispatch_hubs = {
             # Xinjiang origins → Urumqi (sole rail entry)
             6:  [1],       # Kashgar → Urumqi
             7:  [1],       # Hami → Urumqi
@@ -153,27 +328,17 @@ class RealInstanceGenerator:
             9:  [1],       # Aksu → Urumqi
             10: [1],       # Hotan → Urumqi
             # Yangtze River Delta destinations
-            13: [5],       # Suzhou → Shanghai
-            41: [5],       # Nantong → Shanghai
-            47: [5, 12],   # Wuxi → Shanghai, Nanjing
+            13: [12],      # Suzhou → Nanjing
+            41: [12],      # Nantong → Nanjing
+            47: [12],      # Wuxi → Nanjing
             # Pearl River Delta destinations
             37: [38],      # Shenzhen → Guangzhou
             42: [38],      # Huizhou → Guangzhou
         }
-        for spoke, hubs in spoke_nearest_hubs.items():
+        for spoke, hubs in spoke_dispatch_hubs.items():
             for h in hubs:
                 road_edges.append((spoke, h))
 
-        # Spoke↔spoke road mesh within each corridor group
-        spoke_groups = {
-            "North": [6, 7, 8, 9, 10],    # Xinjiang origins
-            "YZR":   [13, 41, 47],         # Yangtze River Delta destinations
-            "PRD":   [37, 42],             # Pearl River Delta destinations
-        }
-        for group_spokes in spoke_groups.values():
-            for i in range(len(group_spokes)):
-                for j in range(i + 1, len(group_spokes)):
-                    road_edges.append((group_spokes[i], group_spokes[j]))
         
         arcs = []
         arc_id = 1
@@ -183,12 +348,9 @@ class RealInstanceGenerator:
             dist = haversine_distance(node_defs[u]["lon"], node_defs[u]["lat"], node_defs[v]["lon"], node_defs[v]["lat"])
             base_time = dist / self.config.rail_speed
             
-            # Rail specific costs
-            discount = 0.85 if dist > 2000 else 1.0 # discount for long-haul
-            unit_cost_rail = ((self.config.c_rail_base_fixed + self.config.c_rail_base_var * dist) * (1 + self.config.c_rail_hazmat_markup) + self.config.c_rail_fund * dist) * discount
+            unit_cost_rail = 0.0
             
-            alpha_rail_val = float(round(self.rng.uniform(0.0005, 0.003), 5))
-            rail_ratios = getattr(self.config, 'rail_fuzzy_time_ratio', (0.9, 1.0, 1.0, 1.3))
+            rail_ratios = getattr(self.config, 'rail_fuzzy_time_ratio', (0.9, 1.0, 1.3))
             
             for src, dst in [(u, v), (v, u)]:
                 arcs.append({
@@ -196,13 +358,9 @@ class RealInstanceGenerator:
                     "time_a": round(float(base_time * rail_ratios[0]), 2),
                     "time_b": round(float(base_time * rail_ratios[1]), 2),
                     "time_c": round(float(base_time * rail_ratios[2]), 2),
-                    "time_d": round(float(base_time * rail_ratios[3]), 2),
-                    "alpha": alpha_rail_val,
-                    "e_window": 0.0, "l_window": 999.0, # Will update max T_max later
-                    "e_window_fmt": float_to_day_time(0.0), "l_window_fmt": float_to_day_time(999.0),
-                    "capacity": float(self.config.q_rail),
+                    "alpha": arc_belief(self.config.seed, arc_id, src, dst, 2,
+                        self.config.road_accident_belief_bounds, self.config.rail_accident_belief_bounds),
                     "unit_cost": round(float(unit_cost_rail), 2),
-                    "deploy_cost": float(self.config.c_deploy_rail), "min_units": 1,
                 })
                 arc_id += 1
 
@@ -210,8 +368,7 @@ class RealInstanceGenerator:
         for u, v in road_edges:
             dist = max(1.0, haversine_distance(node_defs[u]["lon"], node_defs[u]["lat"], node_defs[v]["lon"], node_defs[v]["lat"]))
             base_time = dist / self.config.road_speed
-            alpha_road_val = float(round(self.rng.uniform(0.005, 0.03), 4))
-            road_ratios = getattr(self.config, 'road_fuzzy_time_ratio', (0.8, 1.0, 1.0, 1.5))
+            road_ratios = getattr(self.config, 'road_fuzzy_time_ratio', (0.9, 1.0, 1.5))
             
             for src, dst in [(u, v), (v, u)]:
                 arcs.append({
@@ -219,57 +376,48 @@ class RealInstanceGenerator:
                     "time_a": round(float(base_time * road_ratios[0]), 2),
                     "time_b": round(float(base_time * road_ratios[1]), 2),
                     "time_c": round(float(base_time * road_ratios[2]), 2),
-                    "time_d": round(float(base_time * road_ratios[3]), 2),
-                    "alpha": alpha_road_val,
-                    "e_window": 0.0, "l_window": 999.0,
-                    "e_window_fmt": float_to_day_time(0.0), "l_window_fmt": float_to_day_time(999.0),
-                    "capacity": float(self.config.q_road),
-                    "unit_cost": round(float(self.config.c_road * dist), 2),
-                    "deploy_cost": float(self.config.c_deploy_road), "min_units": 1,
+                    "alpha": arc_belief(self.config.seed, arc_id, src, dst, 1,
+                        self.config.road_accident_belief_bounds, self.config.rail_accident_belief_bounds),
+                    "unit_cost": round(float(self.config.road_loaded_cost(dist)), 2),
                 })
                 arc_id += 1
 
         # 3. Transfer facilities at Hub nodes
         transfer_nodes = []
         for hub in hub_ids:
-            gamma_val = float(round(self.rng.uniform(0.001, 0.01), 5))
             transfer_nodes.append({
-                "node_id": hub, "transfer_time_a": 4.0, "transfer_time_b": 8.0,
-                "transfer_time_c": 12.0, "transfer_time_d": 16.0,
-                "gamma": gamma_val,
-                "unit_transfer_cost": float(self.config.c_transfer),
-                "facility_cost": float(self.config.c_hub),
+                "node_id": hub,
+                "gamma_rr": draw_belief(self.config.seed, f"transfer:{hub}:rr", self.config.transfer_accident_belief_rail_rail_bounds),
+                "gamma_ir": draw_belief(self.config.seed, f"transfer:{hub}:ir", self.config.transfer_accident_belief_intermodal_bounds),
+                "unit_transfer_cost": float(self.config.c_transfer_road_rail),
             })
 
         # 4. Generate Specific OD Pairs (West to East)
-        # All OD pairs route through the hub chain: origin→(road)→Lanzhou→(rail)→...→Shanghai→(road)→destination
-        # origin_hub=2 (Lanzhou) is the network entry hub
+        # All OD pairs route through the hub chain: origin→(road)→Urumqi→(rail)→destination hub→(road)→destination
+        # origin_hub=1 (Urumqi) is the network entry hub
         # destination_hub depends on which hub the destination spoke connects to
         tasks = [
-            {"o": 6,  "d": 13, "dh": 5,  "multiplier": 150.0 / self.config.q_rail},  # OD 1: Kashgar → Suzhou    [→Shanghai hub 5]  (北 corridor)
-            {"o": 10, "d": 41, "dh": 5,  "multiplier": 240.0 / self.config.q_rail},  # OD 2: Hotan → Nantong     [→Shanghai hub 5]  (北 corridor)
-            {"o": 9,  "d": 47, "dh": 5,  "multiplier": 360.0 / self.config.q_rail},  # OD 3: Aksu → Wuxi        [→Shanghai hub 5]  (北 corridor)
-            {"o": 8,  "d": 37, "dh": 38, "multiplier": 320.0 / self.config.q_rail},  # OD 4: Korla → Shenzhen   [→Guangzhou hub 38] (南 corridor)
-            {"o": 7,  "d": 42, "dh": 38, "multiplier": 270.0 / self.config.q_rail},  # OD 5: Hami → Huizhou     [→Guangzhou hub 38] (南 corridor)
+            {"o": 6,  "d": 13, "dh": 12,  "demand": 20.0},
+            {"o": 10, "d": 41, "dh": 12,  "demand": 10.0},
+            {"o": 9,  "d": 47, "dh": 12,  "demand": 12.0},
+            {"o": 8,  "d": 37, "dh": 38, "demand": 18.0},
+            {"o": 7,  "d": 42, "dh": 38, "demand": 14.0},
         ]
 
         od_pairs = []
         max_required_time = 0.0
 
-        # Update T_max globally for this instance to 28 days (672 hours)
-        self.config.T_max = 672.0
-
         for idx, task in enumerate(tasks):
             o, d, dh = task["o"], task["d"], task["dh"]
-            demand = float(round(task["multiplier"] * self.config.q_rail, 0))
+            demand = task["demand"]
 
             # --- Compute total travel time (road1 + rail + road2) for this OD ---
             t_road_1 = haversine_distance(node_defs[o]["lon"], node_defs[o]["lat"],
-                                          node_defs[2]["lon"], node_defs[2]["lat"]) / self.config.road_speed
+                                          node_defs[1]["lon"], node_defs[1]["lat"]) / self.config.road_speed
             t_rail = 0.0
             rail_chains = {
-                5:  [2, 21, 3, 22, 4, 5],       # Lanzhou → Xi'an → … → Shanghai (北 corridor)
-                38: [2, 29, 30, 33, 38],          # Lanzhou → Chengdu → … → Guiyang → Guangzhou (南 corridor)
+                12: [1, 2, 21, 3, 12],
+                38: [1, 2, 29, 30, 33, 38],
             }
             chain = rail_chains.get(dh, [2, 29, 30, 39, 38, 31, 14, 5])
             for k in range(len(chain) - 1):
@@ -279,23 +427,9 @@ class RealInstanceGenerator:
                                           node_defs[d]["lon"], node_defs[d]["lat"]) / self.config.road_speed
             # Physical travel time (road + rail only)
             t_travel_raw = t_road_1 + t_rail + t_road_2
-            # Estimated overhead: transfers + rail waiting.
-            # The reliability evaluator now includes rail waiting in z_d.
-            # 60h gives enough slack for all ODs to be feasible while keeping
-            # R_time < 1.0 for most ODs.
-            t_overhead = 60.0
-            t_travel = t_travel_raw + t_overhead
-
-            # --- Per-OD delivery deadline ---
-            # Deadline = start + t_travel, rounded to 12h grid for nicer windows.
-            # The fuzzy upper bound z_d (now including rail waiting) ≈ 1.3×raw_time,
-            # which should exceed the deadline, giving R_time < 1.0.
-            raw_start = t_road_1 + 10.0 + idx * 6.0
-            time_window_start = float(np.ceil(raw_start / 12.0) * 12)
-            time_window_end = float(np.ceil((time_window_start + t_travel) / 12.0) * 12)
-            tw_width = time_window_end - time_window_start
-
-            max_required_time = max(max_required_time, time_window_end)
+            # 真实案例统一允许从规划期起点发运，并在配置的规划期内完成。
+            time_window_start = 0.0
+            time_window_end = float(self.config.T_max)
 
             od_pairs.append({
                 "id": idx + 1,
@@ -305,10 +439,10 @@ class RealInstanceGenerator:
                 "time_window_start_fmt": float_to_day_time(time_window_start),
                 "time_window_end_fmt": float_to_day_time(time_window_end),
                 "alpha_T_od": float(self.config.alpha_T),
-                "origin_hub": 2,     # Lanzhou — network entry hub
+                "origin_hub": 1,
                 "destination_hub": dh,
                 "dist_road_1": round(haversine_distance(node_defs[o]["lon"], node_defs[o]["lat"],
-                                                       node_defs[2]["lon"], node_defs[2]["lat"]), 2),
+                                                       node_defs[1]["lon"], node_defs[1]["lat"]), 2),
                 "dist_rail": round(sum(
                     haversine_distance(node_defs[chain[k]]["lon"], node_defs[chain[k]]["lat"],
                                        node_defs[chain[k+1]]["lon"], node_defs[chain[k+1]]["lat"])
@@ -318,61 +452,30 @@ class RealInstanceGenerator:
                                                        node_defs[d]["lon"], node_defs[d]["lat"]), 2),
             })
             
-        for arc in arcs:
-            arc["l_window"] = float(self.config.T_max)
-            arc["l_window_fmt"] = float_to_day_time(float(self.config.T_max))
-
         # 5. Railway Timetable
-        # Complete graph: generate 2 trains per day on EACH rail edge
+        # 每条铁路弧的两个方向每天均在 10:00 和 18:00 各发一班。
         railway_timetable = []
         train_id_counter = 1
         
-        # For 28 days
-        for day in range(1, 29):
+        planning_days = int(math.ceil(float(self.config.T_max) / 24.0))
+        for day in range(1, planning_days + 1):
             for u, v in rail_edges:
                 dist = haversine_distance(node_defs[u]["lon"], node_defs[u]["lat"], node_defs[v]["lon"], node_defs[v]["lat"])
-                trip_time = dist / self.config.rail_speed
-                
-                # Network Propagation Delay (Cascading)
-                if u < v: # Eastbound
-                    if u == 1:
-                        offset = 0.0
-                    else:
-                        offset = haversine_distance(node_defs[1]["lon"], node_defs[1]["lat"], node_defs[u]["lon"], node_defs[u]["lat"]) / self.config.rail_speed + 4.0
-                else: # Westbound
-                    if u == 5:
-                        offset = 0.0
-                    else:
-                        offset = haversine_distance(node_defs[5]["lon"], node_defs[5]["lat"], node_defs[u]["lon"], node_defs[u]["lat"]) / self.config.rail_speed + 4.0
-                        
-                # 2 trains per day
-                for train_num in range(2):
-                    base_hour = 6 + train_num * 12
-                    
-                    # S2-1: Compute separate offsets for forward (u→v) and reverse (v→u) directions.
-                    # Forward offset based on u's position, reverse offset based on v's position.
-                    offset_fwd = haversine_distance(node_defs[1]["lon"], node_defs[1]["lat"], node_defs[u]["lon"], node_defs[u]["lat"]) / self.config.rail_speed + 4.0 if u != 1 else 0.0
-                    offset_rev = haversine_distance(node_defs[1]["lon"], node_defs[1]["lat"], node_defs[v]["lon"], node_defs[v]["lat"]) / self.config.rail_speed + 4.0 if v != 1 else 0.0
-                    
-                    # Forward: u → v
-                    dep_h_fwd = (day - 1) * 24 + base_hour + offset_fwd + self.rng.uniform(-0.5, 0.5)
-                    arr_h_fwd = dep_h_fwd + trip_time
-                    railway_timetable.append({
-                        "train_id": train_id_counter, "origin_hub": u, "destination_hub": v,
-                        "departure_time": round(dep_h_fwd, 2), "arrival_time": round(arr_h_fwd, 2),
-                        "dep_fmt": float_to_day_time(dep_h_fwd), "arr_fmt": float_to_day_time(arr_h_fwd)
-                    })
-                    train_id_counter += 1
-                    
-                    # Reverse: v → u
-                    dep_h_rev = (day - 1) * 24 + base_hour + offset_rev + self.rng.uniform(-0.5, 0.5)
-                    arr_h_rev = dep_h_rev + trip_time
-                    railway_timetable.append({
-                        "train_id": train_id_counter, "origin_hub": v, "destination_hub": u,
-                        "departure_time": round(dep_h_rev, 2), "arrival_time": round(arr_h_rev, 2),
-                        "dep_fmt": float_to_day_time(dep_h_rev), "arr_fmt": float_to_day_time(arr_h_rev)
-                    })
-                    train_id_counter += 1
+                service_time = dist / self.config.rail_speed + self.config.rail_intermediate_stop_hours
+                for departure_hour in (10.0, 18.0):
+                    departure_time = (day - 1) * 24 + departure_hour
+                    arrival_time = departure_time + service_time
+                    for origin_hub, destination_hub in ((u, v), (v, u)):
+                        railway_timetable.append({
+                            "train_id": train_id_counter,
+                            "origin_hub": origin_hub,
+                            "destination_hub": destination_hub,
+                            "departure_time": round(departure_time, 2),
+                            "arrival_time": round(arrival_time, 2),
+                            "dep_fmt": float_to_day_time(departure_time),
+                            "arr_fmt": float_to_day_time(arrival_time),
+                        })
+                        train_id_counter += 1
 
         instance_data = {
             "name": "rhmvsp_real_case",
@@ -385,11 +488,13 @@ class RealInstanceGenerator:
             },
             "od_pairs": od_pairs,
             "railway_timetable": railway_timetable,
-            "hub_fleet_size": {"1": 40, "5": 10, "38": 24},  # per-hub fleet (disabled for now)
-            "num_vehicles_west": 46,
-            "num_vehicles_east": 46,
+            "hub_fleet_size": default_empty_reposition_hub_fleet(),
             "config": {
-                "T_max": self.config.T_max
+                "T_max": self.config.T_max,
+                "seed": self.config.seed,
+                "alpha_R": self.config.alpha_R,
+                "alpha_T": self.config.alpha_T,
+                "data_version": self.config.data_version,
             }
         }
         return instance_data

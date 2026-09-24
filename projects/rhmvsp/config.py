@@ -1,210 +1,161 @@
-"""RHMVSP Configuration - All model parameters and constants."""
+"""RHMVSP 模型参数与绘图常量。"""
 
 from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 
 
+EMPTY_REPOSITION_HUB_IDS = (1, 12, 38)
+EMPTY_REPOSITION_HUB_FLEET_SIZE = 50
+INSTANCE_DATA_VERSION = "rhmvsp-real-case-v1"
+
+
+def default_empty_reposition_hub_fleet() -> dict[str, int]:
+	return {
+		str(hub_id): EMPTY_REPOSITION_HUB_FLEET_SIZE
+		for hub_id in EMPTY_REPOSITION_HUB_IDS
+	}
+
+
 @dataclass
 class RHMVSPConfig:
-	"""
-	Configuration for the Reliable Hazardous Materials Multi-modal VSP.
-
-	Based on the paper's parameter definitions (§3.1.1).
-	"""
+	"""可靠危险品多式联运车辆调度问题的配置。"""
 
 	# ============================================================
-	# Network Parameters
+	# 模型参数
 	# ============================================================
 
-	# Time discretization
-	T_max: int = 672  # Planning horizon (hours, 28 days for cross-China HazMat routing)
+	T_max: int = 168  # 真实案例规划期和所有 OD 的统一运输期限（小时）
 
-	# Vehicle parameters
-	q_road: float = 30.0  # Road vehicle capacity (tons)
-	# 现实折中方案：定义铁路的运输单位为一个“危险品车组 (Wagon Group)”。
-	# 根据国铁《铁路危险货物运输管理规则》的“隔离车”制度，一列普通货车不宜连续挂载太多危化品罐车。
-	# 设定一个标准调度车组包含 10 节 50t 的液氨罐车。
-	q_rail: float = 500.0  # Rail wagon group capacity (tons, 10节*50吨)
+	# 运载能力
+	q_road: float = 1.0  # 单辆公路车辆固定装载一个 40 英尺集装箱，即 1 FEU
+	q_rail: float = 40.0  # 每次铁路发车最多装载 40 个 40 英尺集装箱，即 40 FEU
 
-	# ============================================================
-	# Cost Parameters
-	# ============================================================
-	# Cost parameters calibrated from 12306 official pricing:
-	# Route: Ürümqi South → Chengdu (~3,334 km), 整车 (full carload)
-	# 根据《绿氨产业_国信证券》第13页，公路运输成本约为0.8元/吨/公里
-	# 根据黄丽霞(2017)论文校准: 公路运费¥0.49/吨·km, 考虑HazMat特殊车辆溢价
-	c_road: float = 0.55    # Road: ¥/ton·km (HazMat tanker, calibrated to literature)
-	c_deploy_road: float = 0.0  # Road vehicle deployment fixed cost (自有车为0)
-	c_deploy_rent: float = 1000.0 # Rented vehicle deployment fixed cost (外租车起步价)
-	c_rent_per_hour: float = 30.0 # Rented vehicle hourly rate (外租车小时租金)
-	c_empty_reposition_per_km: float = 2.0  # Empty truck repositioning (¥/km, diesel+driver+depreciation)
-	# ============================================================
-	# Railway Freight Two-Part Tariff Pricing (基于《铁路货物运价规则》)
-	# Formula per ton = (发到基价 + 运行基价 × 计费里程) × (1 + 危险品加成率) + 建设基金 × 计费里程
-	# ============================================================
-	c_rail_base_fixed: float = 16.30  # 发到基价 (¥/ton)
-	c_rail_base_var: float = 0.0855  # 运行基价 (¥/ton·km)
-	# 黄丽霞(2017): Class 3易燃=1.5x, Class 6有毒=2.0x, Class 8腐蚀=1.5x
-	# 取1.5x作为基准(50% markup), 对应液化气体类危化品
-	c_rail_hazmat_markup: float = 1.50  # 危险品加成率 (150% of base, i.e. 1.5x multiplier)
-	c_rail_fund: float = 0.033  # 铁路建设基金 (¥/ton·km)
-	
-	# 按照要求，运输商仅承担运费和转运费，不承担铁路系统的固定发车调度费
-	c_deploy_rail: float = 0.0  # Rail wagon group deployment fixed cost (¥/group)
-	# 黄丽霞(2017): 转运费¥500/车(60t)≈¥8.3/吨; HazMat防爆要求加成
-	c_transfer: float = 25.0  # Unit transfer/handling cost (¥/ton)
-	# 同样，转运设施启动费等 resource 成本也应由基建方承担，予以剔除
-	c_hub: float = 0.0  # Transfer facility setup cost (¥)
-	c_unmet_penalty: float = 5000.0 # Base opportunity cost for unfulfilled demand (¥/ton)
-	c_vehicle_idle_daily: float = 50.0  # Base vehicle daily depreciation/idle cost (¥/day)
-	crane_daily_lifts: int = 200  # Daily lifts per crane
-	max_hubs: int | None = None  # Max active transfer hubs (None means unlimited)
+	# 表列费率均为应用第三类危险品成本系数之前的原始费率
+	hazmat_cost_coefficient: float = 1.5
+	c_road_fixed: float = 675.0  # 公路运输固定费率（元/FEU）
+	c_road: float = 36.0  # 公路运输里程费率（元/FEU·公里）
+	c_empty_reposition_per_km: float = 18.0  # 公路车辆空驶调位费率：载运里程费率的一半（元/车·公里）
+	# 载运量区间依次为 [0,10)、[10,20)、[20,40] FEU；末档包含物理容量上限。
+	# 元组项为 (下界, 上界, 固定费率元/FEU, 变动费率元/(FEU·公里))。
+	rail_tariff_tiers: tuple = (
+		(0.0, 10.0, 680.0, 2.754),
+		(10.0, 20.0, 714.0, 2.203),
+		(20.0, 40.0, 748.0, 1.928),
+	)
 
-	# ============================================================
-	# Reliability Parameters (§2.4, §3.1.1)	# ============================================================
-	alpha_max: float = 0.05  # Arc accident belief threshold (base risk param)
-	# beta_od derived: beta_od = 1 - alpha_max
-	# beta_net derived: beta_net = min(beta_od)
-	alpha_T: float = 0.8  # Time reliability threshold (alpha_T > 0.5)
+	c_transfer_road_rail: float = 500.0  # 每次公铁或铁公转运行为的固定费用（元/次）
+	c_transfer_rail_rail: float = 200.0  # 每次铁铁转运行为的固定费用（元/次）
+	c_unmet_penalty: float = 100000.0  # 假设的未满足需求单位惩罚费（元/FEU）
 
-	# ============================================================
-	# Risk Parameters (§2.2)
-	# ============================================================
-	c_residual_risk_per_km: float = 2.0  # Residual risk cost for unwashed HazMat tanker (¥/km)
+	alpha_R: float = 0.9  # 风险可靠性阈值
+	alpha_T: float = 0.8  # OD 任务的默认时间可靠性阈值
+	road_accident_belief_bounds: tuple = (0.020, 0.080)
+	rail_accident_belief_bounds: tuple = (0.002, 0.015)
+	transfer_accident_belief_rail_rail_bounds: tuple = (0.003, 0.012)
+	transfer_accident_belief_intermodal_bounds: tuple = (0.008, 0.030)
+	# 归一化的逐小时事故信度乘数（日均值为 1）：
+	# 23:00–07:00 为 5/6，07:00–11:00 和 17:00–21:00 为 7/6，其余时段为 1。
+	hourly_accident_belief_multipliers: tuple = (
+		5.0 / 6.0, 5.0 / 6.0, 5.0 / 6.0, 5.0 / 6.0,
+		5.0 / 6.0, 5.0 / 6.0, 5.0 / 6.0,
+		7.0 / 6.0, 7.0 / 6.0, 7.0 / 6.0, 7.0 / 6.0,
+		1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+		7.0 / 6.0, 7.0 / 6.0, 7.0 / 6.0, 7.0 / 6.0,
+		1.0, 1.0,
+		5.0 / 6.0,
+	)
 
-	# ============================================================
-	# Driver Fatigue Limits
-	# ============================================================
-	driver_fatigue_limit_day_hours: float = 4.0   # Max continuous driving hours in daytime
-	driver_fatigue_limit_night_hours: float = 2.0  # Max continuous driving hours at night
-	driver_rest_hours: float = 0.33  # Minimum mandatory rest per stop (hours, ~20 min)
-	night_start_hour: float = 22.0   # Night period start (22:00)
-	night_end_hour: float = 6.0      # Night period end (06:00)
+	# 公路驾驶员休息规则；铁路运输不受这两个参数约束
+	driver_fatigue_limit_hours: float = 4.0  # 公路车辆最长连续驾驶时间（小时）
+	driver_rest_hours: float = 20.0 / 60.0  # 每次强制休息的最短时间（小时，即 20 分钟）
+
+	road_speed: float = 80.0  # 公路行驶速度（公里/小时）
+	rail_speed: float = 50.0  # 普快班列行驶速度（公里/小时）
+	rail_intermediate_stop_hours: float = 2.0  # 每条铁路弧计入的中间停站时间（小时），只生成时刻表
+	# 铁路行程时间的 Zigzag 不确定比例：（下界、中值、上界）
+	rail_fuzzy_time_ratio: tuple = (0.9, 1.0, 1.3)
+	# 公路行程时间的 Zigzag 不确定比例：（下界、中值、上界）
+	road_fuzzy_time_ratio: tuple = (0.9, 1.0, 1.5)
+	transfer_time_intermodal_hours: float = 8.0
+	transfer_time_rail_rail_hours: float = 4.0
+	pricing_overlap_ratio: float = 0.75  # 双向定价中正向和反向标签搜索区间各占统一期限的比例
 
 	# ============================================================
-	# Fuzzy Variable Parameters (§3.2)	# ============================================================
-	road_speed: float = 80.0  # Road speed (km/h, Huang 2017: 80 km/h for HazMat tanker)
-	rail_speed: float = 80.0  # Rail speed (km/h)
-	# Trapezoidal fuzzy time ratios for rail: (a_ratio, b_ratio, c_ratio, d_ratio)
-	# Rail time ~ Trap(base*a, base*b, base*c, base*d) with plateau [b,c]
-	rail_fuzzy_time_ratio: tuple = (0.9, 1.0, 1.0, 1.3)
-	# Trapezoidal fuzzy time ratios for road: (a_ratio, b_ratio, c_ratio, d_ratio)
-	# Road time ~ Trap(base*a, base*b, base*c, base*d) with plateau [b,c]
-	road_fuzzy_time_ratio: tuple = (0.8, 1.0, 1.0, 1.5)
-	# Bidirectional label correction overlap ratio (§4.5)
-	pricing_overlap_ratio: float = 0.75  # each direction covers this fraction of time span
-
-	# Hazardous material compatibility penalty (same / different cargo)
-	prep_time_same_hours: float = 0.0   # Preparation time for compatible cargo (no wash needed)
-	c_prep_reposition_same: float = 0.0  # Preparation cost for compatible cargo (¥)
-	prep_time_diff_hours: float = 4.0   # Wash-out time for incompatible cargo
-	c_prep_reposition_diff: float = 1500.0  # Incompatible cargo high wash cost (¥)
-	dispatch_buffer_hours: float = 2.0  # Cross-station dispatch buffer
-	time_window_end_buffer_hours: float = 6.0  # Buffer for computing OD delivery deadline from expected arrival
+	# 时变风险与求解模式开关
+	# ============================================================
+	enable_time_varying_risk: bool = True  # 是否用交通和疲劳时变系数修正事故信度
+	lp_only: bool = False  # 是否仅求根节点列生成的线性松弛解
+	skip_risk_constraint: bool = False  # 是否在定价中跳过路径风险可靠性约束，仅用于基准实验
+	solver_name: str = "gurobi"  # 优化求解器名称，可选 gurobi 或 pulp
 
 	# ============================================================
-	# Time Uncertainty Parameter
+	# 求解器参数
 	# ============================================================
-	delta_T: float = 0.8  # Time fluctuation factor (controls fuzzy spread of travel/transfer times)
+	time_limit: int = 3600  # 求解时间上限（秒）
 
 	# ============================================================
-	# Time-Varying Risk Switches (S2-2, §2.2)
+	# 分支定价参数
 	# ============================================================
-	enable_time_varying_risk: bool = True       # Enable phi(t) traffic/fatigue multiplier on accident probability
-	risk_scale: float = 1.0                       # Continuous scaling for time-varying risk (0.0=constant phi=psi=1, 1.0=full time-varying)
-	lp_only: bool = False                         # If True, BAP stops after root-node CG (LP relaxation, no branching)
-	skip_risk_constraint: bool = False              # If True, pricing skips R >= beta_od check (benchmark mode)
-	solver_name: str = "gurobi"
+	bap_max_iterations: int = 1000  # 根节点列生成允许执行的最大迭代次数
+	bap_pricing_columns_limit: int = 999  # 每轮定价最多返回的负检验数列数
+	initial_columns_per_od_service_day: int = 2  # 每个 OD 在每个服务日保留的初始候选列数
+	bap_ng_route_size: int = 15  # 路径松弛中每个节点的邻域大小
+	bap_stabilization: bool = True  # 是否启用对偶变量稳定化
+	stabilization_mu: float = 0.5  # 当前对偶解在平滑更新中的权重
+	max_labels_exact: int = 500  # 精确定价中每个节点保留的最大标签数
+	max_labels_heuristic: int = 50  # 启发式定价中每个节点保留的最大标签数
+	total_labels_limit: int = 500  # 单次定价在全部节点上保留的标签总数上限
 
 	# ============================================================
-	# Solver Parameters
-	# ============================================================
-	time_limit: int = 3600  # Solver time limit (seconds)
-
-	# ============================================================
-	# Branch-and-Price Parameters (§4.5)
-	# ============================================================
-	bap_max_iterations: int = 1000
-	bap_pricing_columns_limit: int = 999  # No limit — return all negative reduced cost columns
-	bap_ng_route_size: int = 15  # ng-route neighborhood size
-	bap_stabilization: bool = True  # Interior point stabilization
-	stabilization_mu: float = 0.5  # Smoothing factor for duals
-	max_labels_exact: int = 500  # Bound ESPPRC label count to prevent explosion
-	max_labels_heuristic: int = 50  # Max labels to keep in heuristic pricing
-	total_labels_limit: int = 500  # Global label cap across all nodes in pricing
-
-	# ============================================================
-	# Paths & System
-	# ============================================================
-	# Default path for Conda-installed CBC on Mac
+	# macOS 下使用 PuLP 时可调用的 CBC 求解器路径；路径不存在时使用 PuLP 默认求解器
 	cbc_path: str = "/opt/homebrew/Caskroom/miniforge/base/envs/rhmvsp/bin/cbc"
 
 
 	# ============================================================
-	# Numerical Constants
+	# 数值计算常量
 	# ============================================================
-	tolerance: float = 1e-6
-	big_m: float = 1e12
+	tolerance: float = 1e-6  # 判断变量取值、检验数和整数性的数值容差
+	big_m: float = 1e12  # 虚拟列惩罚和逻辑约束使用的充分大常数
 
-	# Random seed
-	# ============================================================
-	seed: int = 7
+	seed: int = 7  # 数据生成与抽样实验使用的随机种子
+	data_version: str = INSTANCE_DATA_VERSION  # 实例生成规则版本
+	gurobi_threads: int = 1  # 单线程确保等价最优解的选择可复现
 
+	def transfer_unit_cost(self, previous_mode: int, next_mode: int) -> float:
+		"""返回相邻运输弧之间每发生一次转运行为的固定费用（元/次）。"""
+		if previous_mode == 2 and next_mode == 2:
+			return self.c_transfer_rail_rail
+		return self.c_transfer_road_rail
 
-	@property
-	def beta_od(self) -> float:
-		"""Path risk reliability threshold (derived from alpha_max)."""
-		return 1.0 - self.alpha_max
+	def transfer_time_hours(self, previous_mode: int, next_mode: int) -> float:
+		"""返回相邻运输弧之间的固定转运时间（小时）。"""
+		if previous_mode == 2 and next_mode == 2:
+			return self.transfer_time_rail_rail_hours
+		return self.transfer_time_intermodal_hours
 
-	@property
-	def beta_net(self) -> float:
-		"""Network risk reliability threshold."""
-		return self.beta_od
+	def road_loaded_cost(self, distance: float, load_feu: float = 1.0) -> float:
+		"""返回装载公路运输成本（元）。"""
+		return self.hazmat_cost_coefficient * (self.c_road_fixed + self.c_road * distance) * load_feu
 
-
-	@property
-	def q_bar(self) -> float:
-		"""Minimum vehicle capacity across all arc-mode combinations."""
-		return min(self.q_road, self.q_rail)
-
-	def time_coeff_upper(self, alpha_T: float | None = None):
-		"""Coefficient for time window upper bound deterministic equivalent (Eq.12).
-
-		For triangular fuzzy (a,b,c): (2*alpha-1)*c + 2*(1-alpha)*b
-		For trapezoidal fuzzy (a,b,c,d): (2*alpha-1)*d + 2*(1-alpha)*c
-		"""
-		a = alpha_T if alpha_T is not None else self.alpha_T
-		return {
-			"tri_c": (2 * a - 1),
-			"tri_b": 2 * (1 - a),
-			"trap_d": (2 * a - 1),
-			"trap_c": 2 * (1 - a),
-		}
+	def rail_unit_cost(self, distance: float, tier_index: int) -> float:
+		"""返回给定铁路运价档次的单位装载成本（元/FEU）。"""
+		_, _, fixed_rate, variable_rate = self.rail_tariff_tiers[tier_index]
+		return self.hazmat_cost_coefficient * (fixed_rate + variable_rate * distance)
 
 	def to_dict(self) -> dict:
-		"""Convert config to dictionary including derived properties and full descriptive keys."""
+		"""转为字典，并将主要模型参数改成便于识别的完整键名。"""
 		data = asdict(self)
-		data["beta_od"] = self.beta_od
-		data["beta_net"] = self.beta_net
-		data["q_bar"] = self.q_bar
 
 		rev_map = {
 			"T_max": "planning_horizon_hours_T_max",
-			"dt_road": "time_granularity_road_hours_dt_road",
-			"dt_rail": "time_granularity_rail_hours_dt_rail",
-			"q_road": "vehicle_capacity_road_tons_q_road",
-			"q_rail": "wagon_capacity_rail_tons_q_rail",
+			"q_road": "vehicle_capacity_road_feu_q_road",
+			"q_rail": "service_capacity_rail_feu_q_rail",
+			"c_road_fixed": "fixed_transport_cost_road_per_feu",
 			"c_road": "unit_transport_cost_road_c_road",
-			"c_rail_base_fixed": "unit_transport_cost_rail_c_rail_base_fixed",
-			"c_rail_base_var": "unit_transport_cost_rail_c_rail_base_var",
-			"c_rail_hazmat_markup": "unit_transport_cost_rail_hazmat_markup",
-			"c_rail_fund": "unit_transport_cost_rail_fund",
-			"c_deploy_road": "fixed_dispatch_cost_road_d_road",
-			"c_deploy_rail": "fixed_dispatch_cost_rail_d_rail",
-			"c_transfer": "unit_transfer_cost_kappa_transfer",
-			"c_hub": "fixed_transfer_facility_cost_H_transfer",
-			"alpha_max": "risk_threshold_alpha_max",
+			"c_transfer_road_rail": "fixed_transfer_cost_road_rail_per_occurrence",
+			"c_transfer_rail_rail": "fixed_transfer_cost_rail_rail_per_occurrence",
+			"alpha_R": "risk_reliability_threshold_alpha_R",
 			"alpha_T": "time_reliability_threshold_alpha_T",
 		}
 		output_data = {}
@@ -214,10 +165,9 @@ class RHMVSPConfig:
 		return output_data
 
 	def save_to_json(self, filepath: str):
-		"""Save both model and visual configuration to a unified config.json file."""
-		import json
+		"""将模型配置和绘图配置保存到同一个 JSON 文件。"""
 		
-		# Collect visual config from class attributes
+		# 收集绘图配置类中公开且不可调用的类属性
 		visual_config = {}
 		for k, v in PlotProperties.__dict__.items():
 			if not k.startswith("_") and not callable(v) and not isinstance(v, classmethod):
@@ -230,32 +180,36 @@ class RHMVSPConfig:
 		with open(filepath, "w") as f:
 			json.dump(out, f, indent=4)
 
-# -*- coding: utf-8 -*-
-"""
-[Visual Style Configuration] Unified Visual Style Management Module for RHMVSP.
-Centralizes color palettes, markers, linewidths, and fonts to ensure premium academic publication standards.
-Based on the Twilight Gradation color system with high visibility.
-"""
-
 from typing import Dict, List
 
 
 class ColorPalette:
-	"""Refined Academic Morandi Earth & Sage Color Palette for High-Resolution Plotting."""
+	"""用于高分辨率学术图形的莫兰迪配色。"""
 
-	# Base neutrals
+	# 中性色
 	DEFAULT_BLACK = "#000000"
 	DEFAULT_GRAY = "#999999"
 	DEFAULT_WHITE = "#FFFFFF"
 
-	# 5 Premium Morandi Colors requested by USER
-	TERRACOTTA = "#C26B48"  # Warm Terracotta (Hazmat priority route / emergency)
-	CELADON = "#94C1B7"  # Celadon Green (Primary multimodal green route)
-	SAGE_GREEN = "#ABBCAA"  # Sage Green (Standard spoke nodes / third route)
-	WARM_SAND = "#DDBF91"  # Warm Sand (Multimodal transfer hubs)
-	PALE_LIME = "#DDE4B6"  # Pale Lime (Auxiliary routes / buffer)
+	# 五种主要莫兰迪色
+	TERRACOTTA = "#C26B48"  # 陶土色，用于危险品优先路径或应急元素
+	CELADON = "#94C1B7"  # 青瓷色，用于主要多式联运路径
+	SAGE_GREEN = "#ABBCAA"  # 鼠尾草绿，用于普通辐射节点或第三条路径
+	WARM_SAND = "#DDBF91"  # 暖沙色，用于多式联运转运节点
+	PALE_LIME = "#DDE4B6"  # 淡青柠色，用于辅助路径或缓冲元素
 
-	# Network tasks loop for active scheduled routes
+	# 敏感性分析双 Y 轴组合图专用色（不属于 docs 中的 colour set）
+	SENSITIVITY_RISK_LINE = TERRACOTTA
+	SENSITIVITY_TIME_LINE = CELADON
+	SENSITIVITY_COST_MARKER = "#7F8582"  # 成本棒棒糖端点：石墨灰
+	SENSITIVITY_COST_STEM = "#C9CDCA"  # 成本棒棒糖竖线：浅灰
+	SENSITIVITY_COST_AXIS = "#555555"  # 成本坐标轴与刻度：深灰
+	SENSITIVITY_GRID = "#D9D9D9"  # 组合图水平网格：浅灰
+	SENSITIVITY_COST = TERRACOTTA  # in-sample gap: cost family
+	SENSITIVITY_RISK = CELADON  # in-sample gap: risk family
+	SENSITIVITY_TIME = "#7F8582"  # in-sample gap: neutral time family
+
+	# 已调度运输任务循环使用的颜色
 	TASK_LOOP: List[str] = [
 		TERRACOTTA,
 		CELADON,
@@ -264,14 +218,14 @@ class ColorPalette:
 		PALE_LIME,
 	]
 
-	# Default neutrals list
+	# 默认中性色列表
 	DEFAULT_COLOR: List[Dict[str, str]] = [
 		{"BLACK": DEFAULT_BLACK},
 		{"GRAY": DEFAULT_GRAY},
 		{"WHITE": DEFAULT_WHITE},
 	]
 
-	# Network topology colors for background nodes and infrastructure
+	# 网络节点与运输基础设施的颜色
 	NETWORK_TOPOLOGY: List[Dict[str, str]] = [
 		{"HUB": WARM_SAND},
 		{"NON_HUB": SAGE_GREEN},
@@ -282,7 +236,7 @@ class ColorPalette:
 
 
 def get_color_by_key(config_list: List[Dict[str, str]], key: str) -> str:
-	"""Extract color string by key from a list of dict configurations."""
+	"""按键名从颜色配置列表中取出颜色值。"""
 	for item in config_list:
 		if key in item:
 			return item[key]
@@ -290,30 +244,28 @@ def get_color_by_key(config_list: List[Dict[str, str]], key: str) -> str:
 
 
 class PlotProperties:
-	"""Unified plotting parameters and styling constants."""
+	"""统一的绘图参数和样式常量。"""
 
-	# Fonts
+	# 字体
 	FONT_FAMILY = "Times New Roman"
 	FONT_SIZE_TITLE = 16
 	FONT_SIZE_AXIS_LABEL = 14
 	FONT_SIZE_LEGEND = 11
 	FONT_SIZE_NODE_ID = 14
-	FONT_SIZE_NODE_NAME = 10
 	FONT_SIZE_VEH_LABEL = 14
 	FONT_SIZE_BASE = 12
 	FONT_SIZE_TICK = 11
 	FONT_COLOR_NODE_ID = "#000000"
 	FONT_WEIGHT_BOLD = "bold"
-	FONT_WEIGHT_NORMAL = "normal"
 
-	# Figure
+	# 画布
 	FIG_SIZE = (12, 10)
 	DPI = 600
 	PAD_INCHES = 0.1
 
-	# Markers & Nodes & Legend
-	NODE_SHAPE_HUB = "s"       # square for hubs
-	NODE_SHAPE_SPOKE = "o"     # circle for spokes
+	# 标记、节点和图例
+	NODE_SHAPE_HUB = "s"  # 转运节点使用方形
+	NODE_SHAPE_SPOKE = "o"  # 普通节点使用圆形
 	NODE_SIZE_HUB = 500
 	NODE_SIZE_SPOKE = 400
 	NODE_LINE_WIDTH = 1.5
@@ -324,13 +276,25 @@ class PlotProperties:
 	LEGEND_MARKER_EDGE_WIDTH_SPOKE = 1.2
 	LEGEND_MARKER_FACE_WHITE = "#FFFFFF"
 
-	# Edges & Routes & Grids
+	# 网络边、路径和网格
 	LINE_WIDTH_ROAD = 2.5
 	LINE_WIDTH_RAIL = 3.5
 	LINE_WIDTH_ROUTE = 3.5
 	SPINE_LINE_WIDTH = 1.2
 	GRID_LINE_STYLE = "--"
 	GRID_ALPHA = 0.4
+	SENSITIVITY_COST_STEM_ALPHA = 0.75
+	SENSITIVITY_COST_STEM_WIDTH = 1.5
+	SENSITIVITY_COST_MARKER_SIZE = 42
+	SENSITIVITY_RISK_MARKER = "o"
+	SENSITIVITY_TIME_MARKER = "s"
+	SENSITIVITY_RISK_LINE_STYLE = "-"
+	SENSITIVITY_TIME_LINE_STYLE = "--"
+	SENSITIVITY_RELIABILITY_MARKER_SIZE = 5
+	SENSITIVITY_RELIABILITY_LINE_WIDTH = 1.8
+	SENSITIVITY_Y_TARGET_INTERVALS = 5
+	SENSITIVITY_GRID_ALPHA = 0.55
+	SENSITIVITY_GRID_LINE_WIDTH = 0.6
 	TICK_LENGTH = 5
 	TICK_WIDTH = 1.0
 
@@ -345,15 +309,11 @@ class PlotProperties:
 	ARROW_STYLE = "-|>"
 	ARROW_SIZE = 20
 
-	# Layout offsets & Curvatures
-	CURVATURE_OFFSET_RAD = 0.20
-	NODE_LABEL_OFFSET = 3.2
+	# 布局偏移和曲率
 	CURVATURE_BASE_RAD = 0.10
 	CURVATURE_STEP_RAD = 0.15
 
-	# Labels & Descriptions
-	LABEL_X_AXIS = "Physical Coordinate X (km)"
-	LABEL_Y_AXIS = "Physical Coordinate Y (km)"
+	# 图形标签
 	LABEL_LEGEND_HUB = "Hub"
 	LABEL_LEGEND_SPOKE = "Spoke"
 	LABEL_LEGEND_ROAD = "Road"
@@ -361,7 +321,5 @@ class PlotProperties:
 	LABEL_LEGEND_TASK_PREFIX = "Task "
 	LABEL_VEH_PREFIX = "Veh "
 
-	# Transparent text box styles
+	# 透明文本框样式
 	TRANSPARENT_BBOX = dict(boxstyle="round,pad=0.1", fc="none", ec="none")
-
-

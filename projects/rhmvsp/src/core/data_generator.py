@@ -7,6 +7,7 @@ import networkx as nx
 
 from config import RHMVSPConfig
 from .uncertainty import UncertaintyEngine
+from .synthetic_beliefs import arc_belief, draw_belief
 
 
 def float_to_day_time(time_hours: float) -> str:
@@ -42,12 +43,11 @@ class InstanceGenerator:
 	def generate(self, size: str = "small") -> dict:
 		"""Generate an instance of given size."""
 		sizes = {
-			"small":  {"nodes": 25,  "hubs": 5,  "od_pairs": 5,  "vehicles": 30, "T_max_init": 24},
-			"medium": {"nodes": 60,  "hubs": 10, "od_pairs": 15, "vehicles": 90, "T_max_init": 36},
-			"large":  {"nodes": 120, "hubs": 20, "od_pairs": 30, "vehicles": 150, "T_max_init": 48},
+			"small":  {"nodes": 25,  "hubs": 5,  "od_pairs": 5,  "vehicles": 30},
+			"medium": {"nodes": 60,  "hubs": 10, "od_pairs": 15, "vehicles": 90},
+			"large":  {"nodes": 120, "hubs": 20, "od_pairs": 30, "vehicles": 150},
 		}
 		params = sizes[size]
-		self.config.T_max = max(self.config.T_max, params["T_max_init"])
 		return self._generate_instance(
 			name=f"rhmvsp_{size}",
 			num_nodes=params["nodes"],
@@ -130,7 +130,9 @@ class InstanceGenerator:
 					G_road.add_edge(u, v, weight=d)
 
 		# 3. Assemble Network Attributes
-		nodes = [{"id": i, "x": round(coords[i][0], 2), "y": round(coords[i][1], 2)} for i in all_nodes]
+		nodes = [{
+			"id": i, "x": round(coords[i][0], 2), "y": round(coords[i][1], 2),
+		} for i in all_nodes]
 		arcs = []
 		railway_timetable = []
 		arc_id = 1
@@ -139,22 +141,17 @@ class InstanceGenerator:
 		for u, v in G_rail.edges():
 			dist = G_rail[u][v]['weight']
 			base_time = dist / self.config.rail_speed
-			unit_cost_rail = (self.config.c_rail_base_fixed + self.config.c_rail_base_var * dist) * (1 + self.config.c_rail_hazmat_markup) + self.config.c_rail_fund * dist
-			alpha_rail_val = float(round(rng.uniform(0.0005, 0.003), 5))
-			rail_ratios = getattr(self.config, 'rail_fuzzy_time_ratio', (0.9, 1.0, 1.0, 1.3))
+			unit_cost_rail = 0.0
+			rail_ratios = getattr(self.config, 'rail_fuzzy_time_ratio', (0.9, 1.0, 1.3))
 			for src, dst in [(u, v), (v, u)]:
 				arcs.append({
 					"id": arc_id, "i": src, "j": dst, "mode": 2, "distance": round(float(dist), 2),
 					"time_a": round(float(base_time * rail_ratios[0]), 2),
 					"time_b": round(float(base_time * rail_ratios[1]), 2),
 					"time_c": round(float(base_time * rail_ratios[2]), 2),
-					"time_d": round(float(base_time * rail_ratios[3]), 2),
-					"alpha": alpha_rail_val,
-					"e_window": 0.0, "l_window": float(self.config.T_max),
-					"e_window_fmt": float_to_day_time(0.0), "l_window_fmt": float_to_day_time(self.config.T_max),
-					"capacity": float(self.config.q_rail),
+					"alpha": arc_belief(self.config.seed, arc_id, src, dst, 2,
+						self.config.road_accident_belief_bounds, self.config.rail_accident_belief_bounds),
 					"unit_cost": round(float(unit_cost_rail), 2),
-					"deploy_cost": float(self.config.c_deploy_rail), "min_units": 1,
 				})
 				arc_id += 1
 			for dep_h in dynamic_schedule_hours:
@@ -175,34 +172,27 @@ class InstanceGenerator:
 		for u, v in G_road.edges():
 			dist = G_road[u][v]['weight']
 			base_time = dist / self.config.road_speed
-			alpha_road_val = float(round(rng.uniform(0.005, 0.03), 4))
-			road_ratios = getattr(self.config, 'road_fuzzy_time_ratio', (0.8, 1.0, 1.0, 1.5))
+			road_ratios = getattr(self.config, 'road_fuzzy_time_ratio', (0.9, 1.0, 1.5))
 			for src, dst in [(u, v), (v, u)]:
 				arcs.append({
 					"id": arc_id, "i": src, "j": dst, "mode": 1, "distance": round(float(dist), 2),
 					"time_a": round(float(base_time * road_ratios[0]), 2),
 					"time_b": round(float(base_time * road_ratios[1]), 2),
 					"time_c": round(float(base_time * road_ratios[2]), 2),
-					"time_d": round(float(base_time * road_ratios[3]), 2),
-					"alpha": alpha_road_val,
-					"e_window": 0.0, "l_window": float(self.config.T_max),
-					"e_window_fmt": float_to_day_time(0.0), "l_window_fmt": float_to_day_time(self.config.T_max),
-					"capacity": float(self.config.q_road),
-					"unit_cost": round(float(self.config.c_road * dist), 2),
-					"deploy_cost": float(self.config.c_deploy_road), "min_units": 1,
+					"alpha": arc_belief(self.config.seed, arc_id, src, dst, 1,
+						self.config.road_accident_belief_bounds, self.config.rail_accident_belief_bounds),
+					"unit_cost": round(float(self.config.road_loaded_cost(dist)), 2),
 				})
 				arc_id += 1
 
 		# 4. Transfer facilities at Hub nodes
 		transfer_nodes = []
 		for hub in hub_ids:
-			gamma_val = float(round(rng.uniform(0.001, 0.01), 5))
 			transfer_nodes.append({
-				"node_id": hub, "transfer_time_a": 0.5, "transfer_time_b": 1.0,
-				"transfer_time_c": 2.0, "transfer_time_d": 4.0,
-				"gamma": gamma_val,
-				"unit_transfer_cost": float(self.config.c_transfer),
-				"facility_cost": float(self.config.c_hub),
+				"node_id": hub,
+				"gamma_rr": draw_belief(self.config.seed, f"transfer:{hub}:rr", self.config.transfer_accident_belief_rail_rail_bounds),
+				"gamma_ir": draw_belief(self.config.seed, f"transfer:{hub}:ir", self.config.transfer_accident_belief_intermodal_bounds),
+				"unit_transfer_cost": float(self.config.c_transfer_road_rail),
 			})
 
 		# 5. O-D Pairs: far apart, unique O and D nodes, different hubs
@@ -313,12 +303,11 @@ class InstanceGenerator:
 
 			multiplier = int(rng.uniform(1, 10))
 			demand = float(multiplier * self.config.q_road)
-			time_window_start = float(round(rng.uniform(0, 24), 1))
-			transfer_time = 1.0
+			time_window_start = 0.0
+			transfer_time = self.config.transfer_time_intermodal_hours
 			wait_time_est = interval
 			t_expected = time_window_start + t_road_1 + transfer_time + wait_time_est + t_rail + transfer_time + t_road_2
-			time_window_end = float(round(t_expected + self.config.prep_time_same_hours + self.config.dispatch_buffer_hours + self.config.time_window_end_buffer_hours, 1))
-			self.config.T_max = max(self.config.T_max, time_window_end + 12.0)
+			time_window_end = float(self.config.T_max)
 
 			od_pairs.append({
 				"id": od_idx + 1,
@@ -339,7 +328,7 @@ class InstanceGenerator:
 			"num_vehicles": num_vehicles,
 			"config": {
 				"T_max": self.config.T_max,
-				"alpha_max": self.config.alpha_max,
+				"alpha_R": self.config.alpha_R,
 				"alpha_T": self.config.alpha_T,
 				"timetable_services_per_direction": num_services,
 			},

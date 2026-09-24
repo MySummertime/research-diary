@@ -1,3 +1,11 @@
+from src.utils.numeric_format import (
+    RELIABILITY_DIGITS,
+    RISK_DIGITS,
+    TIME_RELIABILITY_DIGITS,
+    format_number,
+)
+
+
 def float_to_day_time(time_hours: float) -> str:
     """Convert continuous float hours (0~48) into Day 1/2 24-hour real time format (Day X HH:MM)."""
     day = int(time_hours // 24) + 1
@@ -15,6 +23,10 @@ def float_to_day_time(time_hours: float) -> str:
 
 def format_solution_report(solution: dict, instance: dict, total_wall: float, total_cpu: float) -> str:
     """Format a human-readable solution report recording exact CPU and wall-clock times."""
+    def format_metric(key: str, spec: str, default: str = "N/A") -> str:
+        value = solution.get(key)
+        return default if value is None else format(value, spec)
+
     lines = []
     lines.append("=" * 60)
     lines.append("RHMVSP Solution Report")
@@ -40,15 +52,10 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
     lines.append(f"  Total cost:          ¥{solution.get('total_cost', 0):>12,.2f}")
     lines.append(f"  Transport cost:      ¥{solution.get('transport_cost', 0):>12,.2f}")
     lines.append(f"  Transfer cost:       ¥{solution.get('transfer_cost', 0):>12,.2f}")
-    reposition_total = (solution.get('reposition_cost', 0) + solution.get('prep_cost', 0)
-                        + solution.get('idle_cost', 0) + solution.get('repo_extra_penalty', 0))
-    lines.append(f"  Reposition cost:     ¥{reposition_total:>12,.2f}")
-    lines.append(f"    └─ empty drive:    ¥{solution.get('reposition_cost', 0):>12,.2f}")
-    lines.append(f"    └─ preparation:    ¥{solution.get('total_prep_cost', 0):>12,.2f}")
-    lines.append(f"    └─ vehicle idle:   ¥{solution.get('idle_cost', 0):>12,.2f}")
-    lines.append(f"    └─ repo unmet:     ¥{solution.get('repo_extra_penalty', 0):>12,.2f}")
-    shortfall = solution.get('unmet_penalty', 0) - solution.get('repo_extra_penalty', 0)
-    lines.append(f"  Unmet penalty:       ¥{shortfall:>12,.2f}")
+    lines.append(f"  Reposition cost:     ¥{solution.get('reposition_cost', 0):>12,.2f}")
+    lines.append(f"  Unmet penalty:       ¥{solution.get('unmet_penalty', 0):>12,.2f}")
+    if "unmet_penalty_per_feu" in solution:
+        lines.append(f"  Penalty rate:        ¥{solution['unmet_penalty_per_feu']:>12,.2f}/FEU")
     lines.append("")
 
     lines.append("--- Resource Budget & Infrastructure ---")
@@ -58,15 +65,23 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
     lines.append("")
 
     lines.append("--- Reliability & Fleet ---")
-    if 'R_net_risk' in solution:
-        lines.append(f"  Network R_risk:      {solution.get('R_net_risk', 0):.6f}")
-    if 'R_net_time' in solution:
-        lines.append(f"  Network R_time:      {solution.get('R_net_time', 0):.6f}")
-    if 'raw_net_risk' in solution:
-        lines.append(f"  Network Raw Risk:    {solution.get('raw_net_risk', 0):.2f}")
-    if 'raw_net_time' in solution:
-        lines.append(f"  Network Raw Time:    {solution.get('raw_net_time', 0):.2f}h")
-    lines.append(f"  Max available vehicles: {(solution.get('max_vehicles_west', 0) + solution.get('max_vehicles_east', 0))}")
+    if 'network_risk_reliability' in solution:
+        lines.append(
+            "  Network risk reliability: "
+            f"{format_number(solution['network_risk_reliability'], RELIABILITY_DIGITS)}"
+        )
+    if 'network_time_reliability' in solution:
+        lines.append(
+            "  Network time reliability: "
+            f"{format_number(solution['network_time_reliability'], TIME_RELIABILITY_DIGITS)}"
+        )
+    if 'network_risk' in solution:
+        lines.append(
+            f"  Network risk: {format_number(solution['network_risk'], RISK_DIGITS)}"
+        )
+    if 'network_time' in solution:
+        lines.append(f"  Network time: {format_metric('network_time', '.2f', '0.00')} h")
+    lines.append(f"  Max available vehicles: {solution.get('max_vehicles', 0)}")
     lines.append(f"  Actual used vehicles: {solution.get('num_vehicles_used', 0)}")
     lines.append(f"  Dispatched road trips: {solution.get('total_dispatches', 0)}")
     lines.append("")
@@ -75,14 +90,24 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
     od_rel = solution.get('od_reliability_details', {})
     if od_rel:
         lines.append("--- O-D Reliability Details ---")
-        for od_idx in sorted(od_rel.keys()):
+        for od_idx in sorted(od_rel.keys(), key=int):
             od_r = od_rel[od_idx]
-            od_name = f"OD_{od_idx+1}"
-            r_str = f"R_od={od_r.get('R_od', 1.0):.4f}"
-            if 'R_od_risk' in od_r and 'R_od_time' in od_r:
-                r_str += f" (Risk: {od_r['R_od_risk']:.4f}, Time: {od_r['R_od_time']:.4f})"
-                if 'raw_risk' in od_r and 'raw_time' in od_r:
-                    r_str += f" [Raw Risk: {od_r['raw_risk']:.2f}, Raw Time: {od_r['raw_time']:.2f}h]"
+            od_name = f"OD_{int(od_idx)+1}"
+            r_str = (
+                "Joint reliability="
+                f"{format_number(od_r.get('od_joint_reliability', 1.0), TIME_RELIABILITY_DIGITS)}"
+            )
+            if 'od_risk_reliability' in od_r and 'od_time_reliability' in od_r:
+                r_str += (
+                    " (Risk reliability: "
+                    f"{format_number(od_r['od_risk_reliability'], RELIABILITY_DIGITS)}, "
+                    f"Time reliability: {format_number(od_r['od_time_reliability'], TIME_RELIABILITY_DIGITS)})"
+                )
+                if 'od_risk' in od_r and 'od_time' in od_r:
+                    r_str += (
+                        f" [Risk: {format_number(od_r['od_risk'], RISK_DIGITS)}, "
+                        f"Time: {od_r['od_time']:.2f} h]"
+                    )
             lines.append(
                 f"  {od_name:<8s} | {r_str} | Batches={od_r.get('num_batches', 0)} | Binding={od_r.get('binding','N/A')} | Deliver={od_r.get('delivery_ratio', 1.0):.0%}"
             )
@@ -93,7 +118,7 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
         lines.append("--- Dispatch Details ---")
         for d in details:
             lines.append(
-                f"  {d['od_pair']:<8s} | Demand: {d['demand']:>6.1f}t | Delivered: {d.get('delivered', 0):>6.1f}t | Shortfall: {d.get('shortfall', 0):>5.1f}t"
+                f"  {d['od_pair']:<8s} | Demand: {d['demand']:>6.1f} FEU | Delivered: {d.get('delivered', 0):>6.1f} FEU | Shortfall: {d.get('shortfall', 0):>5.1f} FEU"
             )
         lines.append("")
 
@@ -101,15 +126,14 @@ def format_solution_report(solution: dict, instance: dict, total_wall: float, to
     repo_events = solution.get("reposition_events", [])
     if repo_events:
         lines.append("--- Reposition Details ---")
-        lines.append(f"  Total repositions: {len(repo_events)} | Empty: ¥{solution.get('reposition_cost', 0):,.2f} | Idle: ¥{solution.get('repo_pure_idle', 0):,.2f} | Unmet: ¥{solution.get('repo_extra_penalty', 0):,.2f}")
-        lines.append(f"  {'Veh':>4s} | {'From':>10s} | {'To':>10s} | {'Dep-Node':>8s} | {'Arr-Node':>8s} | {'Time':>16s} | {'Dist':>8s} | {'Empty':>10s} | {'Idle':>10s} | {'Unmet':>10s}")
-        lines.append(f"  {'-'*4:>4s} | {'-'*10:>10s} | {'-'*10:>10s} | {'-'*8:>8s} | {'-'*8:>8s} | {'-'*16:>16s} | {'-'*8:>8s} | {'-'*10:>10s} | {'-'*10:>10s} | {'-'*10:>10s}")
+        lines.append(f"  Total repositions: {len(repo_events)} | Cost: ¥{solution.get('reposition_cost', 0):,.2f}")
+        lines.append(f"  {'Veh':>4s} | {'From':>10s} | {'To':>10s} | {'Dep-Node':>8s} | {'Arr-Node':>8s} | {'Time':>16s} | {'Dist':>8s} | {'Cost':>10s}")
         for r in repo_events:
             r_dep = float_to_day_time(r['from_arrival'])
             r_arr = float_to_day_time(r['to_departure'])
             gap = max(0.0, r['to_departure'] - r['from_arrival'])
             lines.append(
-                f"  {r['vehicle']:>4d} | {r['from_od']:>10s} | {r['to_od']:>10s} | {str(r['from_node']):>8s} | {str(r['to_node']):>8s} | {r_dep} to {r_arr} ({gap:.1f}h) | {r.get('distance_km', 0):>6.1f}km | ¥{r.get('empty_fee', 0):>9.1f} | ¥{r.get('pure_idle', 0):>9.1f} | ¥{r.get('extra_penalty', 0):>9.1f}"
+                f"  {r['vehicle']:>4d} | {r['from_od']:>10s} | {r['to_od']:>10s} | {str(r['from_node']):>8s} | {str(r['to_node']):>8s} | {r_dep} to {r_arr} ({gap:.1f}h) | {r.get('distance_km', 0):>6.1f}km | ¥{r.get('empty_fee', 0):>9.1f}"
             )
         lines.append("")
 

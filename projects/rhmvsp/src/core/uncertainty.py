@@ -1,110 +1,94 @@
 from __future__ import annotations
+import math
 """
 Uncertainty Theory Engine (§2, §3.2).
 
-Implements fuzzy variables (triangular/trapezoidal) and uncertainty measures M{...}.
-Based on Liu (2007/2015) Uncertainty Theory.
+Transport: Zigzag uncertain variables (Liu, Uncertainty Theory, 6th ed.,
+Definition 3.8, Eq. 3.50). Transfer: trapezoidal uncertain-set time measures
+(Chapter 9). These objects are not identified with probability or fuzzy
+credibility merely because some numerical formulas coincide.
 
-When alpha_T > 0.5, uncertain measure M{...} is mathematically equivalent to
-credibility measure Cr{...} (Liu 2007, §1.12).
-
-Time-varying risk (§2.2): Both accident probability alpha_ij^m(t) and consequence
-C_ij^m(t) are time-dependent. alpha scales with a traffic/fatigue multiplier
-phi(t) and C scales with a population exposure multiplier psi(t) reflecting
-diurnal activity patterns (Fabiano et al. 2002, Abkowitz & Cheng 1988).
+Time-varying risk (§2.2): the accident belief alpha_ij^m(t) scales with the
+traffic and fatigue multiplier phi(t). Risk is reported as accident belief.
 """
 
 from dataclasses import dataclass
+import math
 from typing import Optional, Tuple
 
 
+def _validate_alpha(alpha: float) -> None:
+    if not math.isfinite(alpha) or not 0.0 <= alpha <= 1.0:
+        raise ValueError("Confidence must be finite and in [0, 1]")
+
+
+def _validate_support(values) -> None:
+    if not all(math.isfinite(x) for x in values) or any(x > y for x, y in zip(values, values[1:])):
+        raise ValueError(f"Support must be finite and ordered: {values}")
+
+
 @dataclass
-class TriangularFuzzy:
-    """
-    Triangular fuzzy variable t~ = (a, b, c) where a <= b <= c.
+class ZigzagUncertainVariable:
+    """Z(a,b,c): lower bound, median, upper bound (book Eq. 3.50).
 
-    Membership function:
-        mu(x) = (x-a)/(b-a)  if a <= x <= b
-        mu(x) = (c-x)/(c-b)  if b <= x <= c
-        mu(x) = 0            otherwise
-
-    Used for: transport time on arcs (§3.2, Eq.7).
+    Strict a<b<c is the book's regular case. Equal endpoints are supported
+    as limiting distributions, including the deterministic constant a=b=c.
     """
-    a: float  # Minimum
-    b: float  # Most likely
-    c: float  # Maximum
+    a: float
+    b: float
+    c: float
 
     def __post_init__(self):
-        assert self.a <= self.b <= self.c, f"Invalid triangular fuzzy: ({self.a}, {self.b}, {self.c})"
+        _validate_support((self.a, self.b, self.c))
 
     def membership(self, x: float) -> float:
-        """Membership function mu(x)."""
-        if x <= self.a or x >= self.c:
+        """Legacy triangular shape helper, NOT the uncertainty distribution."""
+        if x < self.a or x > self.c:
             return 0.0
-        elif x <= self.b:
-            return (x - self.a) / (self.b - self.a) if self.b > self.a else 1.0
-        else:
-            return (self.c - x) / (self.c - self.b) if self.c > self.b else 1.0
+        if x == self.b:
+            return 1.0
+        if x < self.b:
+            return (x-self.a)/(self.b-self.a)
+        return (self.c-x)/(self.c-self.b)
 
     def uncertain_measure_leq(self, x: float) -> float:
-        """
-        M{t~ <= x} - Uncertain measure that the fuzzy variable is <= x.
-        For alpha > 0.5 (right tail), deterministic equivalent for M{t~ <= L} >= alpha:
-            L >= (2*alpha-1)*c + 2*(1-alpha)*b
-        """
-        if x <= self.a:
+        """Uncertainty distribution, book Eq. 3.50; constants use a step."""
+        if x < self.a:
             return 0.0
-        elif x >= self.c:
+        if x >= self.c:
             return 1.0
-        elif x <= self.b:
-            mu = (x - self.a) / (self.b - self.a) if self.b > self.a else 1.0
-            return 0.5 * mu
-        else:  # b < x < c
-            mu = (self.c - x) / (self.c - self.b) if self.c > self.b else 1.0
-            return 1.0 - 0.5 * mu
+        if x < self.b:
+            return (x-self.a)/(2.0*(self.b-self.a))
+        return 1.0-(self.c-x)/(2.0*(self.c-self.b))
 
     def uncertain_measure_geq(self, x: float) -> float:
-        """M{t~ >= x} = 1 - M{t~ <= x} (by self-duality of uncertain measure)."""
-        return 1.0 - self.uncertain_measure_leq(x)
+        """Use reflection so inclusive inequalities remain correct at atoms."""
+        return ZigzagUncertainVariable(-self.c, -self.b, -self.a).uncertain_measure_leq(-x)
 
     def deterministic_equivalent_upper(self, alpha: float) -> float:
-        """
-        Deterministic equivalent for M{t~ <= L} >= alpha (Eq.12 / A.1).
-
-        When alpha > 0.5, equivalent to: L >= (2*alpha-1)*c + 2*(1-alpha)*b
-        Returns the minimum L satisfying the constraint.
-        """
-        # Support full alpha range (0,1]. For alpha < 0.5 the required L
-        # lies on the left slope [a, b] of the triangular membership where
-        # M{t~ <= x} = 0.5 * (x - a) / (b - a).
-        if alpha < 0.5:
-            # Solve 0.5 * (x - a) / (b - a) = alpha => x = a + 2*alpha*(b-a)
-            return self.a + 2.0 * alpha * (self.b - self.a)
-        # alpha >= 0.5: use right-tail deterministic equivalent
-        return (2.0 * alpha - 1.0) * self.c + 2.0 * (1.0 - alpha) * self.b
+        """Finite upper-quantile duration for a reliability level in [0, 1]."""
+        _validate_alpha(alpha)
+        if alpha == 0:
+            # A vacuous time-reliability constraint still needs a finite
+            # duration for path scheduling.  The lower support is the least
+            # restrictive physically meaningful value; -inf would propagate
+            # through label clocks and produce NaN departure times.
+            return self.a
+        if alpha <= 0.5:
+            return self.a+2.0*alpha*(self.b-self.a)
+        return (2.0*alpha-1.0)*self.c+2.0*(1.0-alpha)*self.b
 
     def deterministic_equivalent_lower(self, alpha: float) -> float:
-        """
-        Deterministic equivalent for M{t~ >= E} >= alpha (Eq.15 / A.2).
-
-        When alpha > 0.5, equivalent to: E <= (2*alpha-1)*a + 2*(1-alpha)*b
-        Returns the maximum E satisfying the constraint.
-        """
-        # Use symmetry: M{t~ >= E} >= alpha  <=>  M{t~ <= E} <= 1 - alpha
-        # So deterministic-equivalent lower bound equals the deterministic
-        # equivalent upper bound for (1 - alpha).
-        return self.deterministic_equivalent_upper(1.0 - alpha)
+        """Largest E with M{T>=E}>=alpha, including constants."""
+        return -ZigzagUncertainVariable(-self.c, -self.b, -self.a).deterministic_equivalent_upper(alpha)
 
     def mean(self) -> float:
-        """
-        Expected value under uncertainty theory (Liu 2007, Theorem 1.23).
-        E[xi] = integral_0^inf M{xi>=r}dr - integral_{-inf}^0 M{xi<=r}dr
-        For triangular (a,b,c): E = (a + 2b + c) / 4
-        """
-        return (self.a + 2 * self.b + self.c) / 4.0
+        """Book Eq. 3.192: E[T]=(a+2b+c)/4."""
+        return (self.a+2*self.b+self.c)/4.0
 
-    def __repr__(self):
-        return f"TriFuzzy({self.a:.2f}, {self.b:.2f}, {self.c:.2f})"
+
+# Backward-compatible import for callers from earlier versions.
+TriangularFuzzy = ZigzagUncertainVariable
 
 
 @dataclass
@@ -118,7 +102,7 @@ class TrapezoidalFuzzy:
         mu(x) = (d-x)/(d-c)  if c <= x <= d
         mu(x) = 0            otherwise
 
-    Used for: transport time (§3.2, Eq.7) and transfer time (§3.2, Eq.8).
+    Used for: transfer time (§3.2, Eq.8) and aggregated path duration.
     """
     a: float  # Minimum
     b: float  # Lower mode start
@@ -126,71 +110,54 @@ class TrapezoidalFuzzy:
     d: float  # Maximum
 
     def __post_init__(self):
-        assert self.a <= self.b <= self.c <= self.d, \
-            f"Invalid trapezoidal fuzzy: ({self.a}, {self.b}, {self.c}, {self.d})"
+        _validate_support((self.a, self.b, self.c, self.d))
 
     def membership(self, x: float) -> float:
-        """Membership function mu(x)."""
-        if x <= self.a or x >= self.d:
+        """Trapezoidal shape; book Eq. 9.59, extended to collapsed supports."""
+        if x < self.a or x > self.d:
             return 0.0
-        elif x <= self.b:
-            return (x - self.a) / (self.b - self.a) if self.b > self.a else 1.0
-        elif x <= self.c:
+        if self.b <= x <= self.c:
             return 1.0
-        else:
-            return (self.d - x) / (self.d - self.c) if self.d > self.c else 1.0
+        if x < self.b:
+            return (x-self.a)/(self.b-self.a)
+        return (self.d-x)/(self.d-self.c)
 
     def uncertain_measure_leq(self, x: float) -> float:
-        """
-        M{tau~ <= x} for trapezoidal fuzzy variable.
+        """Imaginary-inclusion time measure (book Eq. 9.191).
 
-        Credibility: Cr{tau~ <= x} =
-            0                           if x <= a
-            (x-a) / (2*(b-a))           if a < x <= b
-            0.5                         if b < x <= c  (plateau: mu=1 everywhere)
-            1 - (d-x) / (2*(d-c))       if c < x <= d
-            1                           if x >= d
+        Nondegenerate supports have continuous tails and a 0.5 plateau.
+        Collapsed endpoints use inclusive limiting values; a=b=c=d is constant.
         """
-        if x <= self.a:
+        if x < self.a:
             return 0.0
-        elif x >= self.d:
+        if x >= self.d:
             return 1.0
-        elif x <= self.b:
-            return (x - self.a) / (2 * (self.b - self.a)) if self.b > self.a else 0.5
-        elif x <= self.c:
+        if x < self.b:
+            return (x-self.a)/(2.0*(self.b-self.a))
+        if x <= self.c:
             return 0.5
-        else:
-            return 1.0 - (self.d - x) / (2 * (self.d - self.c)) if self.d > self.c else 0.5
+        return 1.0-(self.d-x)/(2.0*(self.d-self.c))
 
     def uncertain_measure_geq(self, x: float) -> float:
-        """M{tau~ >= x} = 1 - M{tau~ <= x}."""
-        return 1.0 - self.uncertain_measure_leq(x)
+        """Reflect the support; do not subtract an inclusive CDF at atoms."""
+        return TrapezoidalFuzzy(-self.d, -self.c, -self.b, -self.a).uncertain_measure_leq(-x)
 
     def deterministic_equivalent_upper(self, alpha: float) -> float:
-        """
-        Deterministic equivalent for M{tau~ <= L} >= alpha.
-
-        For trapezoidal, when alpha > 0.5 (right tail):
-            L >= (2*alpha-1)*d + 2*(1-alpha)*c
-        """
-        # For alpha < 0.5, the required L lies on the rising slope [a,b]
-        # where M{tau~ <= x} = (x - a) / (2*(b-a)). Solve for x:
-        #   (x - a) / (2*(b-a)) = alpha  => x = a + 2*alpha*(b-a)
-        # For alpha >= 0.5, use right-tail formula to be consistent with
-        # compute_time_reliability_od which always uses the right-branch.
+        """Finite upper-quantile duration; at 0.5 use the upper core c."""
+        _validate_alpha(alpha)
+        if alpha == 0:
+            # See ZigzagUncertainVariable: scheduling must remain finite even
+            # when the time-reliability constraint is disabled.
+            return self.a
         if alpha < 0.5:
-            return self.a + 2.0 * alpha * (self.b - self.a)
-        # alpha >= 0.5: right-tail formula
-        return (2.0 * alpha - 1.0) * self.d + 2.0 * (1.0 - alpha) * self.c
+            return self.a+2.0*alpha*(self.b-self.a)
+        if alpha == 0.5:
+            return self.c
+        return (2.0*alpha-1.0)*self.d+2.0*(1.0-alpha)*self.c
 
     def deterministic_equivalent_lower(self, alpha: float) -> float:
-        """
-        Deterministic equivalent for M{tau~ >= E} >= alpha.
-
-        For trapezoidal, when alpha > 0.5 (left tail):
-            E <= (2*alpha-1)*a + 2*(1-alpha)*b
-        """
-        return self.deterministic_equivalent_upper(1.0 - alpha)
+        """Largest feasible E; at alpha=0.5 the plateau ends at c, not b."""
+        return -TrapezoidalFuzzy(-self.d, -self.c, -self.b, -self.a).deterministic_equivalent_upper(alpha)
 
     def mean(self) -> float:
         """
@@ -219,118 +186,21 @@ class BoolUncertainVariable:
         """R = M{xi = 0} = 1 - alpha (Eq.1)."""
         return 1.0 - self.alpha
 
-    def expected_consequence(self, C: float) -> float:
-        """E^M[r~] = alpha * C (Eq.3)."""
-        return self.alpha * C
-
-
 # ============================================================
-# Time-varying Risk Multipliers (§2.2, S2-2 fix)
+# Time-varying accident-belief multipliers
 # ============================================================
 
-def _traffic_multiplier(hour_of_day: float, risk_scale: float = 1.0) -> float:
+def _traffic_multiplier(hour_of_day: float, profile: tuple[float, ...]) -> float:
     """
-    Time-varying accident probability multiplier phi(t) (S2-2).
+    Time-varying accident-belief multiplier phi(t) (S2-2).
 
-    risk_scale in [0,1]: 0 → constant 1.0, 1 → full time-varying formula.
-    phi_eff(t) = 1 + risk_scale * (phi(t) - 1).
-
-    Models elevated hazmat accident risk during:
-    - Night/early morning (22:00-06:00): multiplier=1.5 (fatigue, low visibility)
-    - Morning/evening rush (07:00-09:00, 17:00-19:00): multiplier=1.3 (congestion)
-    - Daytime off-peak (09:00-17:00, 19:00-22:00): multiplier=1.0 (normal)
-
-    Reference: Abkowitz & Cheng (1988), Fabiano et al. (2002).
+    The day is divided into 24 one-hour intervals. Each interval has one
+    assumed constant value; no interpolation is used between adjacent hours.
     """
     h = hour_of_day % 24.0
-    if h < 6.0:
-        raw = 1.5
-    elif h < 7.0:
-        raw = 1.5 - 0.2 * (h - 6.0)
-    elif h < 9.0:
-        raw = 1.3
-    elif h < 17.0:
-        raw = 1.0
-    elif h < 19.0:
-        raw = 1.3
-    elif h < 22.0:
-        raw = 1.0
-    else:
-        raw = 1.0 + 0.5 * ((h - 22.0) / 2.0)
-    return 1.0 + risk_scale * (raw - 1.0)
-
-
-def _population_exposure_multiplier(hour_of_day: float, risk_scale: float = 1.0) -> float:
-    """
-    Time-varying consequence multiplier psi(t) (S2-2).
-
-    risk_scale in [0,1]: 0 → constant 1.0, 1 → full time-varying formula.
-    psi_eff(t) = 1 + risk_scale * (psi(t) - 1).
-
-    Hazmat accident consequence C(t) scales with population exposure:
-    - Daytime (08:00-20:00): peak activity, psi=1.0 (reference)
-    - Evening transition (20:00-22:00): psi=0.8
-    - Late night (22:00-06:00): low exposure, psi=0.5 (fewer people outdoors)
-    - Early morning (06:00-08:00): psi=0.7
-
-    Reference: Erkut & Verter (1998), Batta & Chiu (1988).
-    """
-    h = hour_of_day % 24.0
-    if h < 6.0:
-        raw = 0.5
-    elif h < 8.0:
-        raw = 0.5 + 0.5 * ((h - 6.0) / 2.0)  # Linear from 0.5→1.0 over 06:00-08:00
-    elif h < 20.0:
-        raw = 1.0
-    elif h < 22.0:
-        raw = 1.0 - 0.2 * ((h - 20.0) / 2.0)  # Linear from 1.0→0.8 over 20:00-22:00
-    else:
-        raw = 0.8 - 0.3 * ((h - 22.0) / 2.0)  # Linear from 0.8→0.5 over 22:00-06:00
-    return 1.0 + risk_scale * (raw - 1.0)
-
-
-def time_varying_alpha(alpha_base: float, start_time: float, end_time: float,
-                       risk_scale: float = 1.0) -> float:
-    """
-    Compute time-averaged accident probability over transit window [start_time, end_time].
-
-    alpha_ij^m(t) = alpha_base * phi(t)
-
-    Uses exact piecewise integration of phi(t) over the transit window.
-    Returns effective alpha for the transit.
-    """
-    if start_time >= end_time:
-        return min(0.95, alpha_base * _traffic_multiplier(start_time, risk_scale))
-
-    total_integral = 0.0
-    current_t = start_time
-    while current_t < end_time:
-        day = int(current_t // 24)
-        h = current_t - day * 24.0
-        # Find end of current piecewise segment
-        breakpoints = [6.0, 7.0, 9.0, 17.0, 19.0, 22.0, 24.0]
-        next_h = next((bp for bp in breakpoints if bp > h), 24.0)
-        seg_end = min(end_time, day * 24.0 + next_h)
-        step = seg_end - current_t
-        # Trapezoidal integration within segment
-        phi_start = _traffic_multiplier(current_t, risk_scale)
-        phi_end = _traffic_multiplier(seg_end - 1e-9, risk_scale)
-        total_integral += (phi_start + phi_end) / 2.0 * step
-        current_t = seg_end
-
-    avg_multiplier = total_integral / (end_time - start_time)
-    return min(0.95, alpha_base * avg_multiplier)
-
-
-def time_varying_consequence(C_base: float, hour_of_day: float,
-                             risk_scale: float = 1.0) -> float:
-    """
-    Compute time-dependent consequence C(t) = C_base * psi(t).
-
-    Consequence reflects population exposure at time of accident.
-    """
-    return C_base * _population_exposure_multiplier(hour_of_day, risk_scale)
-
+    if len(profile) != 24 or any(value <= 0.0 for value in profile):
+        raise ValueError("Hourly accident-belief profile requires 24 positive multipliers")
+    return float(profile[int(h)])
 
 
 class UncertaintyEngine:
@@ -343,125 +213,83 @@ class UncertaintyEngine:
 
     def __init__(self, config):
         self.config = config
-        self.risk_scale = getattr(config, 'risk_scale', 1.0)
 
-    def make_transport_time(self, distance: float, mode: int) -> TrapezoidalFuzzy:
-        """Create transport time fuzzy variable for an arc (§3.2, Eq.7).
-        Returns TrapezoidalFuzzy for all modes (road: c=d equivalent to triangular).
+    def make_transport_time(self, distance: float, mode: int) -> ZigzagUncertainVariable:
+        """Create Z(base*a, base*b, base*c), base=distance/speed."""
+        if not math.isfinite(distance) or distance < 0:
+            raise ValueError("Distance must be finite and nonnegative")
+        if mode == 1:
+            speed = self.config.road_speed
+            ratios = self.config.road_fuzzy_time_ratio
+        elif mode == 2:
+            speed = self.config.rail_speed
+            ratios = self.config.rail_fuzzy_time_ratio
+        else:
+            raise ValueError(f"Unknown transport mode: {mode}")
+        if not math.isfinite(speed) or speed <= 0:
+            raise ValueError("Transport speed must be finite and positive")
+        if len(ratios) != 3:
+            raise ValueError("Transport ratios require three values (lower, median, upper)")
+        _validate_support(ratios)
+        if ratios[0] < 0:
+            raise ValueError("Transport time ratios must be nonnegative")
+        base = distance/speed
+        return ZigzagUncertainVariable(*(base*r for r in ratios))
+
+    def road_rest_time(self, drive_time: float) -> float:
+        """Return rests for a road block that starts with zero driving state."""
+        return self.road_drive_transition(0.0, drive_time)[0]
+
+    def road_drive_transition(
+        self, continuous_drive: float, drive_time: float
+    ) -> tuple[float, float]:
+        """Advance cumulative road-driving state and insert mandatory rests.
+
+        Returns ``(rest_time, residual_continuous_drive)``.  A rest is inserted
+        immediately when accumulated driving reaches the limit.  Non-road
+        operations reset the state in the calling scheduling logic.
         """
-        dt = getattr(self.config, 'delta_T', 0.2)
-        scale = dt / 0.2 if dt > 0 else 0.001
-
-        if mode == 1:  # Road: triangular equivalent (c=d)
-            base = distance / self.config.road_speed
-            # S2-1: Use road_fuzzy_time_ratio from config if available,
-            # otherwise fall back to delta_T-based dynamic computation.
-            road_ratios = getattr(self.config, 'road_fuzzy_time_ratio', None)
-            if road_ratios:
-                return TrapezoidalFuzzy(
-                    a=base * road_ratios[0],
-                    b=base * road_ratios[1],
-                    c=base * road_ratios[2],
-                    d=base * road_ratios[3],
-                )
-            a_ratio = max(0.1, 1.0 - 0.2 * scale)
-            c_ratio = 1.0 + 0.5 * scale
-            return TrapezoidalFuzzy(
-                a=base * a_ratio,
-                b=base,
-                c=base,  # plateau collapses to point (triangular)
-                d=base * c_ratio,
-            )
-        else:  # Rail: trapezoidal with plateau (§3.2, #9)
-            base = distance / self.config.rail_speed
-            ratios = getattr(self.config, 'rail_fuzzy_time_ratio', (0.9, 1.0, 1.0, 1.3))
-            return TrapezoidalFuzzy(
-                a=base * ratios[0],
-                b=base * ratios[1],
-                c=base * ratios[2],
-                d=base * ratios[3],
-            )
-
-    def make_transfer_time(self) -> TrapezoidalFuzzy:
-        """Create transfer time fuzzy variable (§3.2, Eq.8)."""
-        dt = getattr(self.config, 'delta_T', 0.2)
-        scale = dt / 0.2 if dt > 0 else 0.001
-        base = 1.0  # Base transfer time is ~1 hour
-        return TrapezoidalFuzzy(
-            a=base * max(0.1, 1.0 - 0.5 * scale), 
-            b=base, 
-            c=base * (1.0 + 1.0 * scale), 
-            d=base * (1.0 + 3.0 * scale)
-        )
+        limit = self.config.driver_fatigue_limit_hours
+        total_drive = max(0.0, continuous_drive) + max(0.0, drive_time)
+        rest_count = int((total_drive + self.config.tolerance) // limit)
+        residual_drive = total_drive - rest_count * limit
+        return rest_count * self.config.driver_rest_hours, residual_drive
 
     def _integrate_risk_multiplier(self, t1: float, t2: float) -> float:
         """
-        Calculate time-averaged accident probability multiplier phi(t) over [t1, t2].
-        Uses exact piecewise integration of the traffic-dependent multiplier.
+        Calculate the average accident-belief multiplier over [t1, t2].
+
+        The multiplier is constant in each of the 24 one-hour intervals, so
+        the exact integral is the sum of interval value times overlap length.
         """
         if t1 >= t2:
-            return _traffic_multiplier(t1, self.risk_scale)
+            return _traffic_multiplier(t1, self.config.hourly_accident_belief_multipliers)
 
         total_integral = 0.0
         current_t = t1
         while current_t < t2:
             day = int(current_t // 24)
             h = current_t - day * 24.0
-            breakpoints = [6.0, 7.0, 9.0, 17.0, 19.0, 22.0, 24.0]
-            next_h = next((bp for bp in breakpoints if bp > h), 24.0)
+            next_h = min(24.0, math.floor(h) + 1.0)
             seg_end = min(t2, day * 24.0 + next_h)
             step = seg_end - current_t
-            phi_s = _traffic_multiplier(current_t, self.risk_scale)
-            phi_e = _traffic_multiplier(seg_end - 1e-9, self.risk_scale)
-            total_integral += (phi_s + phi_e) / 2.0 * step
-            current_t = seg_end
-
-        return total_integral / (t2 - t1)
-
-    def _integrate_risk_consequence_product(self, t1: float, t2: float) -> float:
-        """
-        Calculate time-averaged product of phi(t) and psi(t) over [t1, t2].
-        Uses exact piecewise integration (Simpson's 1/3 rule) of the multipliers.
-        """
-        if t1 >= t2:
-            return _traffic_multiplier(t1, self.risk_scale) * _population_exposure_multiplier(t1, self.risk_scale)
-
-        total_integral = 0.0
-        current_t = t1
-        while current_t < t2:
-            day = int(current_t // 24)
-            h = current_t - day * 24.0
-            breakpoints = [6.0, 7.0, 8.0, 9.0, 17.0, 19.0, 20.0, 22.0, 24.0]
-            next_h = next((bp for bp in breakpoints if bp > h), 24.0)
-            seg_end = min(t2, day * 24.0 + next_h)
-            step = seg_end - current_t
-            
-            mid_t_seg = (current_t + seg_end) / 2.0
-            v_start = _traffic_multiplier(current_t, self.risk_scale) * _population_exposure_multiplier(current_t, self.risk_scale)
-            v_mid = _traffic_multiplier(mid_t_seg, self.risk_scale) * _population_exposure_multiplier(mid_t_seg, self.risk_scale)
-            v_end = _traffic_multiplier(seg_end - 1e-9, self.risk_scale) * _population_exposure_multiplier(seg_end - 1e-9, self.risk_scale)
-            
-            total_integral += (step / 6.0) * (v_start + 4.0 * v_mid + v_end)
+            total_integral += _traffic_multiplier(
+                current_t, self.config.hourly_accident_belief_multipliers
+            ) * step
             current_t = seg_end
 
         return total_integral / (t2 - t1)
 
     def arc_reliability(self, alpha: float, start_time: float = 0.0, end_time: float = 0.0,
                         time_dependent: bool = False, arrival_time: Optional[float] = None,
-                        fuzzy_duration: Optional[Tuple[float, ...]] = None,
-                        C_consequence: float = 100.0) -> float:
+                        fuzzy_duration: Optional[Tuple[float, ...]] = None) -> float:
         """
         Arc reliability R_ij^m = 1 - alpha_ij^m(t) (Eq.1).
 
-        Time-dependent mode (S2-2):
-        - alpha_ij^m(t) = alpha_base * phi(t)  [probability multiplier]
-        - C_ij^m(t)     = C_base * psi(t)      [consequence multiplier]
-
-        Risk measure = alpha(t) * C(t) / C_ref, normalized so that
-        alpha_ij^m used for reliability = effective probability only.
-
-        If fuzzy_duration=(a,b,c) is provided, integrates over triangular fuzzy
-        arrival times using 10-point quadrature.
+        Time-dependent mode:
+        - the baseline belief is adjusted by the bounded odds mapping
+        - phi_bar is the exact piecewise integral of phi(t) over the expected
+          uncertain traversal duration specified by fuzzy_duration.
         """
         if arrival_time is not None and start_time == 0.0:
             start_time = arrival_time
@@ -472,43 +300,37 @@ class UncertaintyEngine:
             return 1.0 - alpha
 
         if fuzzy_duration is not None:
-            # #9: Support both triangular (a,b,c) and trapezoidal (a,b,c,d) fuzzy durations
             if len(fuzzy_duration) == 4:
                 a, b, c, d = fuzzy_duration
+                expected_duration = (a + b + c + d) / 4.0
             else:
                 a, b, c = fuzzy_duration
-                d = c  # triangular: d=c
-            n_steps = 10
-            total_alpha = 0.0
-            for k in range(1, n_steps + 1):
-                r = (k - 0.5) / n_steps
-                # Alpha-cut of trapezoidal fuzzy duration
-                if r <= 0.5:
-                    t_r = a + 2.0 * r * (b - a)
-                elif r <= 0.5 + 1e-9:
-                    t_r = b  # plateau start
-                else:
-                    t_r = d - 2.0 * (1.0 - r) * (d - c)
-                avg_phi = self._integrate_risk_multiplier(start_time, start_time + t_r)
-                effective_alpha_k = alpha * avg_phi
-                total_alpha += effective_alpha_k
-            effective_alpha = min(0.95, total_alpha / n_steps)
+                expected_duration = (a + 2.0 * b + c) / 4.0
+            avg_phi = self._integrate_risk_multiplier(
+                start_time, start_time + expected_duration
+            )
+            effective_alpha = self.time_adjusted_belief(alpha, avg_phi)
         else:
             t_end = end_time if end_time > start_time else start_time + 1.0
             avg_phi = self._integrate_risk_multiplier(start_time, t_end)
-            # Effective alpha accounts for probability time-variation only
-            effective_alpha = min(0.95, alpha * avg_phi)
+            effective_alpha = self.time_adjusted_belief(alpha, avg_phi)
 
         return 1.0 - effective_alpha
 
     def path_reliability(self, arc_reliabilities: list, node_reliabilities: list) -> float:
         """
-        Path reliability R(P) = min of all component reliabilities (Eq.4).
-
-        Serial system: min over all arcs and transfer nodes on the path.
+        Plan risk reliability for a series uncertain system.
         """
         all_r = arc_reliabilities + node_reliabilities
         return min(all_r) if all_r else 1.0
+
+    @staticmethod
+    def time_adjusted_belief(baseline: float, multiplier: float) -> float:
+        """Apply the bounded odds multiplier to a baseline accident belief."""
+        baseline = min(1.0, max(0.0, baseline))
+        multiplier = max(0.0, multiplier)
+        denominator = 1.0 - baseline + multiplier * baseline
+        return 0.0 if denominator == 0.0 else multiplier * baseline / denominator
 
     def od_reliability(self, batch_reliabilities: list) -> float:
         """
@@ -556,7 +378,3 @@ class UncertaintyEngine:
         for fv, is_trap in zip(fuzzy_vars, is_trapezoidal):
             coeffs.append(fv.deterministic_equivalent_lower(alpha_T))
         return coeffs
-
-
-
-

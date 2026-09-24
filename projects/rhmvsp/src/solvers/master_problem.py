@@ -22,18 +22,15 @@ class MasterProblem:
 
     Objective:
       min  sum_col cost * lambda_col
-         + sum_hub c_hub * g_hub
          + sum_od [p_pen + c_unmet_penalty] * shortfall_i
-         + repositioning costs (vehicle idle + empty drive + opportunity)
+         + empty-vehicle repositioning costs
     """
 
     def __init__(self, config: RHMVSPConfig, network, logger, instance: dict = None):
         self.config = config
         self.network = network
         self.od_pairs = network.od_pairs
-        self.num_vehicles_west = instance.get("num_vehicles_west", 2500)
-        self.num_vehicles_east = instance.get("num_vehicles_east", 2500)
-        self.hub_fleet = instance.get("hub_fleet_size", {})  # per-hub fleet: {hub_id: fleet_size}
+        self.hub_fleet = (instance or {}).get("hub_fleet_size", {})
         self.logger = logger
         self.instance = instance or {}
         self.engine = UncertaintyEngine(config)
@@ -44,51 +41,13 @@ class MasterProblem:
         self.use_stabilization = getattr(config, 'bap_stabilization', True)
         self.next_col_id = 0
 
-    def _calc_fatigue_rest(self, departure_time: float, drive_time: float) -> float:
-        """Calculate total mandatory rest time (hours) for a drive spanning day/night.
-
-        Args:
-            departure_time: when the vehicle departs (hours since planning horizon start)
-            drive_time: total driving duration (hours)
-
-        Returns:
-            Total rest time in hours (rests * driver_rest_hours).
-        """
-        night_start = self.config.night_start_hour   # 22.0
-        night_end = self.config.night_end_hour        # 6.0
-        rest_h = self.config.driver_rest_hours        # 0.33
-        day_limit = self.config.driver_fatigue_limit_day_hours    # 4.0
-        night_limit = self.config.driver_fatigue_limit_night_hours  # 2.0
-
-        total_rest = 0.0
-        current_time = departure_time % 24.0
-        remaining = drive_time
-
-        while remaining > 0:
-            is_night = (night_start <= current_time or current_time < night_end)
-            limit = night_limit if is_night else day_limit
-            if is_night:
-                hrs_to_boundary = (24.0 - current_time) + night_end if current_time >= night_start else night_end - current_time
-            else:
-                hrs_to_boundary = night_start - current_time if current_time < night_start else (24.0 - current_time) + night_end
-
-            drive_in_period = min(remaining, hrs_to_boundary, limit)
-            remaining -= drive_in_period
-            current_time = (current_time + drive_in_period) % 24.0
-
-            if remaining > 0 or drive_in_period >= limit:
-                total_rest += rest_h
-                current_time = (current_time + rest_h) % 24.0
-
-        return total_rest
-
     def _compute_unmet_penaltys(self):
         """
         Compute opportunity costs per OD pair.
         """
         c_unmet_penalty = {}
         for i, od in enumerate(self.od_pairs):
-            # Unmet penalty per ton is defined strictly as a fixed unit cost
+            # 未满足需求惩罚按 FEU 计，不再按距离调整。
             # under Wang 2025, without additional O-D distance adjustment.
             c_unmet_penalty[i] = self.config.c_unmet_penalty
 
@@ -100,23 +59,52 @@ class MasterProblem:
 
         Objective:
           min  sum_col cost * lambda_col
-             + sum_hub c_hub * g_hub
              + sum_od [p_pen + c_unmet_penalty] * shortfall_i
-             + repositioning costs (vehicle idle + empty drive + opportunity)
+             + empty-vehicle repositioning costs
         """
-        if not columns:
-            return None, {}
-        branch_constraints = branch_constraints if branch_constraints is not None else []
+        columns = sorted(columns, key=lambda col: col.col_id)
+        branch_constraints = sorted(branch_constraints) if branch_constraints else []
 
         # 1. Always instantiate all transfer hubs in the Master Problem to support branch constraints safely
-        transfer_node_ids = sorted(list(self.network.transfer_nodes.keys()))
 
         # 2. Compute opportunity costs
         c_unmet_penalty = self._compute_unmet_penaltys()
 
         q_veh = self.config.q_road
-        c_idle_hourly = self.config.c_vehicle_idle_daily / 24.0
-        d_road = self.config.c_deploy_road
+        def column_train_ids(col):
+            return {
+                int(run["train_id"])
+                for run in col.rail_services
+                if "train_id" in run
+            }
+
+        used_train_ids = set().union(
+            *(column_train_ids(col) for col in columns)
+        ) if columns else set()
+        # The RMP only needs timetable resources referenced by its current
+        # columns. Newly priced columns add their dispatches on the next rebuild.
+        rail_runs = {
+            int(run["train_id"]): run
+            for run in self.instance.get("railway_timetable", [])
+            if "train_id" in run and int(run["train_id"]) in used_train_ids
+        }
+        rail_distances = {
+            (int(arc["i"]), int(arc["j"])): float(arc["distance"])
+            for arc in self.instance.get("network", {}).get("arcs", [])
+            if int(arc["mode"]) == 2
+        }
+        rail_tiers = tuple(self.config.rail_tariff_tiers)
+        rail_unit_cost = {
+            (train_id, p): self.config.rail_unit_cost(
+                rail_distances[(int(run["origin_hub"]), int(run["destination_hub"]))], p
+            )
+            for train_id, run in rail_runs.items()
+            for p in range(len(rail_tiers))
+        }
+
+        def column_variable_cost(col):
+            # Rail transport cost is load-tier dependent and is modeled separately.
+            return col.total_cost
 
         # 3. Create LP Problem
         if self.config.solver_name == "gurobi" and gp:
@@ -126,6 +114,8 @@ class MasterProblem:
                 env.start()
                 prob = gp.Model("RMP", env=env)
                 prob.setParam('OutputFlag', 0)  # Suppress Gurobi output
+                prob.setParam("Seed", self.config.seed)
+                prob.setParam("Threads", self.config.gurobi_threads)
             except gp.GurobiError as e:
                 self.logger.warning(f"Gurobi license error: {e}. Falling back to Pulp.")
                 prob = pulp.LpProblem("RMP", pulp.LpMinimize)
@@ -136,87 +126,157 @@ class MasterProblem:
             prob = pulp.LpProblem("RMP", pulp.LpMinimize)
             use_gurobi = False
 
-        # OD-level Empty Repositioning Variables pi_{i,j}
-        # Decision: reuse a vehicle from OD_i for OD_j vs. deploying a new one.
-        # Full comparison (user's insight):
-        #   reposition total = empty_drive_fee + extra_inventory_cost_during_wait
-        #   new_veh total    = deploy_fee (available immediately at time_window_start_j)
-        #   → only reposition if total_repo - d_road < 0
-        valid_transitions_west = {}
-        valid_transitions_east = {}
-        time_factor = 0.05
-        for i, od_i in enumerate(self.od_pairs):
-            for j, od_j in enumerate(self.od_pairs):
-                # West: Reposition from OD_i West Hub to OD_j Origin
-                dist_w = self.network.get_exact_road_distance(od_i.origin, od_j.origin)
-                drive_time_w = dist_w / self.config.road_speed
-                rest_time_w = self._calc_fatigue_rest(od_i.time_window_start + 10.0, drive_time_w)
-                dispatch_buf = getattr(self.config, 'dispatch_buffer_hours', 1.0)
-                req_gap_w = max(0.1, drive_time_w) + self.config.prep_time_same_hours + dispatch_buf + rest_time_w
-                arr_w_i = od_i.time_window_start + 10.0
-                if arr_w_i + req_gap_w <= od_j.time_window_end:
-                    empty_fee = self.config.c_empty_reposition_per_km * dist_w + self.config.c_residual_risk_per_km * dist_w
-                    repo_arr = arr_w_i + req_gap_w
-                    extra_wait = max(0.0, repo_arr - od_j.time_window_start)
-                    extra_inv_cost = c_idle_hourly * (extra_wait + 0.5 * time_factor * extra_wait**2)
-                    valid_transitions_west[(i, j)] = (dist_w, self.config.c_prep_reposition_same + empty_fee + extra_inv_cost)
+        # Column-level empty repositioning variables.  Feasibility uses the
+        # exact road-task times stored by each generated column so that the
+        # master fleet constraints match final vehicle stitching.
+        valid_reposition_transitions = {}
 
-                # East: Reposition from OD_i Destination to OD_j East Hub
-                dist_e = self.network.get_exact_road_distance(od_i.destination, od_j.destination)
-                drive_time_e = dist_e / self.config.road_speed
-                rest_time_e = self._calc_fatigue_rest(od_i.time_window_end - getattr(self.config, 'time_window_end_buffer_hours', 1.5), drive_time_e)
-                req_gap_e = max(0.1, drive_time_e) + self.config.prep_time_same_hours + dispatch_buf + rest_time_e
-                arr_e_i = od_i.time_window_end - getattr(self.config, 'time_window_end_buffer_hours', 1.5)
-                if arr_e_i + req_gap_e <= od_j.time_window_end:
-                    empty_fee = self.config.c_empty_reposition_per_km * dist_e + self.config.c_residual_risk_per_km * dist_e
-                    repo_arr = arr_e_i + req_gap_e
-                    extra_wait = max(0.0, repo_arr - od_j.time_window_start)
-                    extra_inv_cost = c_idle_hourly * (extra_wait + 0.5 * time_factor * extra_wait**2)
-                    valid_transitions_east[(i, j)] = (dist_e, self.config.c_prep_reposition_same + empty_fee + extra_inv_cost)
+        def road_task_times(col):
+            first_rail = next((i for i, arc in enumerate(col.arcs) if arc.mode == 2), len(col.arcs))
+            last_rail = max((i for i, arc in enumerate(col.arcs) if arc.mode == 2), default=-1)
+            west = col.arcs[:first_rail]
+            east = col.arcs[last_rail + 1:]
+            if not west or not east:
+                return None
+            def road_block_duration(block):
+                duration = 0.0
+                continuous_drive = 0.0
+                for road_arc in block:
+                    drive_time = self.engine.make_transport_time(
+                        road_arc.distance, 1
+                    ).deterministic_equivalent_upper(self.config.alpha_T)
+                    rest_time, continuous_drive = self.engine.road_drive_transition(
+                        continuous_drive, drive_time
+                    )
+                    duration += drive_time + rest_time
+                return duration
+
+            west_duration = road_block_duration(west)
+            east_duration = road_block_duration(east)
+            return {
+                "west_start": col.departure_time,
+                "west_end": col.departure_time + west_duration,
+                "west_origin": west[0].i,
+                "west_destination": west[-1].j,
+                "east_start": col.arrival_time - east_duration,
+                "east_end": col.arrival_time,
+                "east_origin": east[0].i,
+                "east_destination": east[-1].j,
+            }
+
+        column_times = {col.col_id: road_task_times(col) for col in columns}
+        column_by_id = {col.col_id: col for col in columns}
+        road_task_nodes = {}
+        for col in columns:
+            times = column_times[col.col_id]
+            if times is None:
+                continue
+            road_task_nodes[(col.col_id, "collection")] = {
+                "province_hub_id": col.origin_hub,
+                "start": times["west_start"],
+                "end": times["west_end"],
+                "origin": times["west_origin"],
+                "destination": times["west_destination"],
+            }
+            road_task_nodes[(col.col_id, "distribution")] = {
+                "province_hub_id": col.destination_hub,
+                "start": times["east_start"],
+                "end": times["east_end"],
+                "origin": times["east_origin"],
+                "destination": times["east_destination"],
+            }
+
+        for task_i, data_i in road_task_nodes.items():
+            for task_j, data_j in road_task_nodes.items():
+                if task_i == task_j:
+                    continue
+                # Empty repositioning is allowed only inside one provincial fleet area.
+                if data_i["province_hub_id"] != data_j["province_hub_id"]:
+                    continue
+                distance = self.network.get_exact_road_distance(
+                    data_i["destination"], data_j["origin"]
+                )
+                drive_time = distance / self.config.road_speed
+                required_gap = drive_time + self.engine.road_rest_time(drive_time)
+                if data_i["end"] + required_gap <= data_j["start"]:
+                    empty_fee = self.config.c_empty_reposition_per_km * distance
+                    valid_reposition_transitions[(task_i, task_j)] = (distance, empty_fee)
+
+        self.logger.debug(
+            f"  Provincial road-task nodes={len(road_task_nodes)}, "
+            f"reposition transitions={len(valid_reposition_transitions)}; "
+            "all initial vehicles are pre-positioned before Day 1 00:00"
+        )
 
         # Decision Variables
         if use_gurobi:
-            lambdas_own = {
-                col.col_id: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"lambda_own_{col.col_id}")
+            lambdas = {
+                col.col_id: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"lambda_{col.col_id}")
                 for col in columns
-            }
-            lambdas_rent = {
-                col.col_id: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"lambda_rent_{col.col_id}")
-                for col in columns
-            }
-            g_vars = {
-                i: prob.addVar(lb=0, ub=1, vtype=GRB.CONTINUOUS, name=f"g_{i}")
-                for i in transfer_node_ids
             }
             dummy_vars = {
-                i: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"dummy_{i}")
+                i: prob.addVar(
+                    lb=0,
+                    ub=0 if is_integer else GRB.INFINITY,
+                    vtype=GRB.CONTINUOUS,
+                    name=f"dummy_{i}",
+                )
                 for i in range(len(self.od_pairs))
+            }
+            rail_tier_load = {
+                (train_id, p): prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS,
+                    name=f"rail_tier_load_{train_id}_{p}")
+                for train_id in rail_runs for p in range(len(rail_tiers))
+            }
+            rail_tier_active = {
+                (train_id, p): prob.addVar(lb=0, ub=1,
+                    vtype=GRB.BINARY if is_integer else GRB.CONTINUOUS,
+                    name=f"rail_tier_active_{train_id}_{p}")
+                for train_id in rail_runs for p in range(len(rail_tiers))
             }
         else:
-            lambdas_own = {
-                col.col_id: pulp.LpVariable(f"lambda_own_{col.col_id}", 0, None, pulp.LpContinuous)
+            lambdas = {
+                col.col_id: pulp.LpVariable(f"lambda_{col.col_id}", 0, None, pulp.LpContinuous)
                 for col in columns
-            }
-            lambdas_rent = {
-                col.col_id: pulp.LpVariable(f"lambda_rent_{col.col_id}", 0, None, pulp.LpContinuous)
-                for col in columns
-            }
-            g_vars = {
-                i: pulp.LpVariable(f"g_{i}", 0, 1, pulp.LpContinuous)
-                for i in transfer_node_ids
             }
             dummy_vars = {
-                i: pulp.LpVariable(f"dummy_{i}", 0, None, pulp.LpContinuous)
+                i: pulp.LpVariable(
+                    f"dummy_{i}", 0, 0 if is_integer else None, pulp.LpContinuous
+                )
                 for i in range(len(self.od_pairs))
+            }
+            rail_tier_load = {
+                (train_id, p): pulp.LpVariable(
+                    f"rail_tier_load_{train_id}_{p}", 0, None,
+                    pulp.LpInteger if is_integer else pulp.LpContinuous)
+                for train_id in rail_runs for p in range(len(rail_tiers))
+            }
+            rail_tier_active = {
+                (train_id, p): pulp.LpVariable(
+                    f"rail_tier_active_{train_id}_{p}", 0, 1,
+                    pulp.LpBinary if is_integer else pulp.LpContinuous)
+                for train_id in rail_runs for p in range(len(rail_tiers))
             }
 
         # Decision Variables (repositioning, delivery, shortfall)
         if use_gurobi:
-            # OD-level Empty Repositioning Variables pi_{i,j}
-            pi_west_own = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_west_own_{pair[0]}_{pair[1]}") for pair in valid_transitions_west }
-            pi_east_own = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_east_own_{pair[0]}_{pair[1]}") for pair in valid_transitions_east }
-            pi_west_rent = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_west_rent_{pair[0]}_{pair[1]}") for pair in valid_transitions_west }
-            pi_east_rent = { pair: prob.addVar(lb=0, vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS, name=f"pi_east_rent_{pair[0]}_{pair[1]}") for pair in valid_transitions_east }
+            pi_reposition = {
+                pair: prob.addVar(
+                    lb=0,
+                    vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS,
+                    name=f"pi_{pair[0][0]}_{pair[0][1]}_{pair[1][0]}_{pair[1][1]}",
+                )
+                for pair in valid_reposition_transitions
+            }
+            initial_vehicle = {
+                task: prob.addVar(
+                    lb=0,
+                    ub=GRB.INFINITY,
+                    vtype=GRB.INTEGER if is_integer else GRB.CONTINUOUS,
+                    name=f"initial_vehicle_{task[0]}_{task[1]}",
+                )
+                for task in road_task_nodes
+            }
             q_delivered = {
                 i: prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"q_del_{i}")
                 for i, od in enumerate(self.od_pairs)
@@ -226,10 +286,23 @@ class MasterProblem:
                 shortage_vars[i] = prob.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"shortage_{i}")
             prob.update()
         else:
-            pi_west_own = { pair: pulp.LpVariable(f"pi_west_own_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous) for pair in valid_transitions_west }
-            pi_east_own = { pair: pulp.LpVariable(f"pi_east_own_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous) for pair in valid_transitions_east }
-            pi_west_rent = { pair: pulp.LpVariable(f"pi_west_rent_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous) for pair in valid_transitions_west }
-            pi_east_rent = { pair: pulp.LpVariable(f"pi_east_rent_{pair[0]}_{pair[1]}", 0, None, pulp.LpContinuous) for pair in valid_transitions_east }
+            pi_category = pulp.LpInteger if is_integer else pulp.LpContinuous
+            pi_reposition = {
+                pair: pulp.LpVariable(
+                    f"pi_{pair[0][0]}_{pair[0][1]}_{pair[1][0]}_{pair[1][1]}",
+                    0, None, pi_category,
+                )
+                for pair in valid_reposition_transitions
+            }
+            initial_vehicle = {
+                task: pulp.LpVariable(
+                    f"initial_vehicle_{task[0]}_{task[1]}",
+                    0,
+                    None,
+                    pi_category,
+                )
+                for task in road_task_nodes
+            }
             q_delivered = {
                 i: pulp.LpVariable(f"q_del_{i}", 0, None, pulp.LpContinuous)
                 for i, od in enumerate(self.od_pairs)
@@ -238,42 +311,21 @@ class MasterProblem:
             for i in range(len(self.od_pairs)):
                 shortage_vars[i] = pulp.LpVariable(f"shortage_{i}", 0, None, pulp.LpContinuous)
 
-        # Per-hub fleet excess variables (for soft fleet constraints)
-        hub_excess_vars = {}
-
         # 4. Objective function
 
         # Removed _get_q_c_vals since supply uncertainty is disabled
         if use_gurobi:
-            
-            c_rent_hr = getattr(self.config, 'c_rent_per_hour', 100.0)
-            c_dep_rent = getattr(self.config, 'c_deploy_rent', 1000.0)
-            
-            # Own costs
-            transport_own = gp.quicksum(col.total_cost * lambdas_own[col.col_id] for col in columns)
-            repo_own = gp.quicksum(valid_transitions_west[pair][1] * pi_west_own[pair] for pair in valid_transitions_west) + gp.quicksum(valid_transitions_east[pair][1] * pi_east_own[pair] for pair in valid_transitions_east)
-            
-            # Rent costs
-            transport_rent = gp.quicksum(
-                (col.total_cost + c_dep_rent + c_rent_hr * (col.arrival_time - col.departure_time)) * lambdas_rent[col.col_id]
-                for col in columns
+            transport_cost_term = gp.quicksum(
+                column_variable_cost(col) * lambdas[col.col_id] for col in columns
             )
-            # Gap duration = od_j.time_window_end - buffer - arrival_time_i
-            def get_gap(p):
-                i, j = p
-                od_i = self.od_pairs[i]
-                od_j = self.od_pairs[j]
-                buf = getattr(self.config, 'time_window_end_buffer_hours', 1.5)
-                arr_i = od_i.time_window_end - buf
-                dep_j = od_j.time_window_end - buf
-                return max(0.0, dep_j - arr_i)
-                
-            repo_rent = gp.quicksum((valid_transitions_west[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_west_rent[pair] for pair in valid_transitions_west) + gp.quicksum((valid_transitions_east[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_east_rent[pair] for pair in valid_transitions_east)
-            
-            transport_cost_term = transport_own + transport_rent
-            repo_cost_term = repo_own + repo_rent
-            hub_cost_term = gp.quicksum(self.config.c_hub * g_vars[i] for i in transfer_node_ids)
-            
+            rail_transport_cost_term = gp.quicksum(
+                rail_unit_cost[key] * rail_tier_load[key]
+                for key in rail_tier_load
+            )
+            repo_cost_term = gp.quicksum(
+                valid_reposition_transitions[pair][1] * pi_reposition[pair]
+                for pair in valid_reposition_transitions
+            )
             demand_penalty_cost_term = gp.quicksum(
                 c_unmet_penalty[i] * shortage_vars[i] for i, od in enumerate(self.od_pairs)
             )
@@ -281,37 +333,22 @@ class MasterProblem:
             dummy_cost_term = gp.quicksum(self.config.big_m * dummy_vars[i] for i in range(len(self.od_pairs)))
             
             prob.setObjective(
-                transport_cost_term + repo_cost_term + hub_cost_term
+                transport_cost_term + rail_transport_cost_term + repo_cost_term
                 + demand_penalty_cost_term + dummy_cost_term,
                 GRB.MINIMIZE
             )
         else:
-            
-            c_rent_hr = getattr(self.config, 'c_rent_per_hour', 100.0)
-            c_dep_rent = getattr(self.config, 'c_deploy_rent', 1000.0)
-            
-            transport_own = pulp.lpSum(col.total_cost * lambdas_own[col.col_id] for col in columns)
-            repo_own = pulp.lpSum(valid_transitions_west[pair][1] * pi_west_own[pair] for pair in valid_transitions_west) + pulp.lpSum(valid_transitions_east[pair][1] * pi_east_own[pair] for pair in valid_transitions_east)
-            
-            transport_rent = pulp.lpSum(
-                (col.total_cost + c_dep_rent + c_rent_hr * (col.arrival_time - col.departure_time)) * lambdas_rent[col.col_id]
-                for col in columns
+            transport_cost_term = pulp.lpSum(
+                column_variable_cost(col) * lambdas[col.col_id] for col in columns
             )
-            def get_gap(p):
-                i, j = p
-                od_i = self.od_pairs[i]
-                od_j = self.od_pairs[j]
-                buf = getattr(self.config, 'time_window_end_buffer_hours', 1.5)
-                arr_i = od_i.time_window_end - buf
-                dep_j = od_j.time_window_end - buf
-                return max(0.0, dep_j - arr_i)
-                
-            repo_rent = pulp.lpSum((valid_transitions_west[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_west_rent[pair] for pair in valid_transitions_west) + pulp.lpSum((valid_transitions_east[pair][1] + c_rent_hr * get_gap(pair) - c_dep_rent) * pi_east_rent[pair] for pair in valid_transitions_east)
-            
-            transport_cost_term = transport_own + transport_rent
-            repo_cost_term = repo_own + repo_rent
-            hub_cost_term = pulp.lpSum(self.config.c_hub * g_vars[i] for i in transfer_node_ids)
-            
+            rail_transport_cost_term = pulp.lpSum(
+                rail_unit_cost[key] * rail_tier_load[key]
+                for key in rail_tier_load
+            )
+            repo_cost_term = pulp.lpSum(
+                valid_reposition_transitions[pair][1] * pi_reposition[pair]
+                for pair in valid_reposition_transitions
+            )
             demand_penalty_cost_term = pulp.lpSum(
                 c_unmet_penalty[i] * shortage_vars[i] for i, od in enumerate(self.od_pairs)
             )
@@ -319,177 +356,176 @@ class MasterProblem:
             dummy_cost_term = pulp.lpSum(self.config.big_m * dummy_vars[i] for i in range(len(self.od_pairs)))
             
             prob += (
-                transport_cost_term + repo_cost_term + hub_cost_term
+                transport_cost_term + rail_transport_cost_term + repo_cost_term
                 + demand_penalty_cost_term + dummy_cost_term
             )
 
         # 5. Constraints
 
-        # Demand shortfall definition
+        # Exact demand partition: every FEU is either delivered or unmet.
         for i, od in enumerate(self.od_pairs):
             if use_gurobi:
-                prob.addConstr(shortage_vars[i] >= od.demand - q_delivered[i], name=f"short_def1_{i}")
+                prob.addConstr(
+                    q_delivered[i] + shortage_vars[i] == od.demand,
+                    name=f"demand_balance_{i}",
+                )
             else:
-                prob += shortage_vars[i] >= od.demand - q_delivered[i], f"short_def1_{i}"
+                prob += (
+                    q_delivered[i] + shortage_vars[i] == od.demand,
+                    f"demand_balance_{i}",
+                )
 
-        # S2-8: Capacity link — delivered quantity <= physical capacity from dispatched columns + dummy variables
+        # A loaded road dispatch always carries exactly one 40-foot container (1 FEU).
         capacity_constraints = {}
         for i, od in enumerate(self.od_pairs):
             cols_for_od = [col for col in columns if col.od_idx == i]
             if use_gurobi:
                 prob.addConstr(
-                    gp.quicksum((lambdas_own[col.col_id] + lambdas_rent[col.col_id]) * q_veh for col in cols_for_od) + dummy_vars[i] >= q_delivered[i],
+                    gp.quicksum(lambdas[col.col_id] * q_veh for col in cols_for_od) + dummy_vars[i] == q_delivered[i],
                     name=f"capacity_link_{i}"
                 )
             else:
                 c_cap = (
-                    pulp.lpSum((lambdas_own[col.col_id] + lambdas_rent[col.col_id]) * q_veh for col in cols_for_od)
+                    pulp.lpSum(lambdas[col.col_id] * q_veh for col in cols_for_od)
                     + dummy_vars[i]
                     - q_delivered[i]
                 )
-                capacity_constraints[i] = pulp.LpConstraint(c_cap, pulp.LpConstraintGE, name=f"capacity_link_{i}", rhs=0)
+                capacity_constraints[i] = pulp.LpConstraint(c_cap, pulp.LpConstraintEQ, name=f"capacity_link_{i}", rhs=0)
                 prob += capacity_constraints[i]
+
+        # Each timetable dispatch selects at most one load-dependent FEU tariff tier.
+        rail_capacity_constraints = {}
+        for train_id in rail_runs:
+            using_columns = [
+                col for col in columns if train_id in column_train_ids(col)
+            ]
+            if use_gurobi:
+                constr = prob.addConstr(
+                    gp.quicksum(q_veh * lambdas[col.col_id] for col in using_columns)
+                    == gp.quicksum(rail_tier_load[train_id, p] for p in range(len(rail_tiers))),
+                    name=f"rail_capacity_{train_id}",
+                )
+                rail_capacity_constraints[train_id] = constr
+                prob.addConstr(
+                    gp.quicksum(rail_tier_active[train_id, p] for p in range(len(rail_tiers))) <= 1,
+                    name=f"rail_tier_select_{train_id}",
+                )
+                for p, (lower, upper, _, _) in enumerate(rail_tiers):
+                    tier_upper = upper if p == len(rail_tiers) - 1 else upper - self.config.tolerance
+                    prob.addConstr(
+                        rail_tier_load[train_id, p] >= lower * rail_tier_active[train_id, p],
+                        name=f"rail_tier_lower_{train_id}_{p}",
+                    )
+                    prob.addConstr(
+                        rail_tier_load[train_id, p] <= tier_upper * rail_tier_active[train_id, p],
+                        name=f"rail_tier_upper_{train_id}_{p}",
+                    )
+            else:
+                constr = pulp.LpConstraint(
+                    pulp.lpSum(q_veh * lambdas[col.col_id] for col in using_columns)
+                    - pulp.lpSum(rail_tier_load[train_id, p] for p in range(len(rail_tiers))),
+                    pulp.LpConstraintEQ,
+                    name=f"rail_capacity_{train_id}",
+                    rhs=0,
+                )
+                prob += constr
+                rail_capacity_constraints[train_id] = constr
+                prob += (
+                    pulp.lpSum(rail_tier_active[train_id, p] for p in range(len(rail_tiers))) <= 1,
+                    f"rail_tier_select_{train_id}",
+                )
+                for p, (lower, upper, _, _) in enumerate(rail_tiers):
+                    tier_upper = upper if p == len(rail_tiers) - 1 else upper - self.config.tolerance
+                    prob += (
+                        rail_tier_load[train_id, p] >= lower * rail_tier_active[train_id, p],
+                        f"rail_tier_lower_{train_id}_{p}",
+                    )
+                    prob += (
+                        rail_tier_load[train_id, p] <= tier_upper * rail_tier_active[train_id, p],
+                        f"rail_tier_upper_{train_id}_{p}",
+                    )
 
         # Demand satisfaction at origin/destination (S2-8)
 
-
-        # Vehicle balance: global fleet balance (original model)
-        veh_limit_w = self.num_vehicles_west
-        veh_limit_e = self.num_vehicles_east
-        if use_gurobi:
-            prob.addConstr(gp.quicksum(lambdas_own.values()) - gp.quicksum(pi_west_own.values()) <= veh_limit_w, name="vehicle_balance_west")
-            prob.addConstr(gp.quicksum(lambdas_own.values()) - gp.quicksum(pi_east_own.values()) <= veh_limit_e, name="vehicle_balance_east")
-            prob.addConstr(gp.quicksum(lambdas_rent.values()) - gp.quicksum(pi_west_rent.values()) >= 0, name="vehicle_balance_rent_w")
-            prob.addConstr(gp.quicksum(lambdas_rent.values()) - gp.quicksum(pi_east_rent.values()) >= 0, name="vehicle_balance_rent_e")
-        else:
-            prob += (pulp.lpSum(lambdas_own.values()) - pulp.lpSum(pi_west_own.values()) <= veh_limit_w, "vehicle_balance_west")
-            prob += (pulp.lpSum(lambdas_own.values()) - pulp.lpSum(pi_east_own.values()) <= veh_limit_e, "vehicle_balance_east")
-            prob += (pulp.lpSum(lambdas_rent.values()) - pulp.lpSum(pi_west_rent.values()) >= 0, "vehicle_balance_rent_w")
-            prob += (pulp.lpSum(lambdas_rent.values()) - pulp.lpSum(pi_east_rent.values()) >= 0, "vehicle_balance_rent_e")
 
         # Per-hub fleet hard constraints
         if self.hub_fleet:
             for hub_id_str, fleet_size in self.hub_fleet.items():
                 hub_id = int(hub_id_str)
-                # West-side: origin_hub columns
-                cols_west = [col for col in columns if col.origin_hub == hub_id]
-                if cols_west:
-                    repo_west = [pi_west_own[p] for p in valid_transitions_west
-                                 if self.od_pairs[p[0]].origin_hub == hub_id]
-                    repo_west_rent = [pi_west_rent[p] for p in valid_transitions_west
-                                      if self.od_pairs[p[0]].origin_hub == hub_id]
+                hub_tasks = [
+                    task for task, data in road_task_nodes.items()
+                    if data["province_hub_id"] == hub_id
+                ]
+                if hub_tasks:
+                    initial_count = (
+                        gp.quicksum(initial_vehicle[task] for task in hub_tasks)
+                        if use_gurobi else
+                        pulp.lpSum(initial_vehicle[task] for task in hub_tasks)
+                    )
                     if use_gurobi:
                         prob.addConstr(
-                            gp.quicksum(lambdas_own[col.col_id] for col in cols_west)
-                            - gp.quicksum(repo_west) - gp.quicksum(repo_west_rent)
-                            <= fleet_size,
-                            name=f"hub_fleet_west_{hub_id}"
+                            initial_count <= fleet_size,
+                            name=f"hub_fleet_{hub_id}",
                         )
                     else:
                         prob += (
-                            pulp.lpSum(lambdas_own[col.col_id] for col in cols_west)
-                            - pulp.lpSum(repo_west) - pulp.lpSum(repo_west_rent)
-                            <= fleet_size,
-                            f"hub_fleet_west_{hub_id}"
-                        )
-                # East-side: destination_hub columns
-                cols_east = [col for col in columns if col.destination_hub == hub_id]
-                if cols_east:
-                    repo_east = [pi_east_own[p] for p in valid_transitions_east
-                                 if self.od_pairs[p[0]].destination_hub == hub_id]
-                    repo_east_rent = [pi_east_rent[p] for p in valid_transitions_east
-                                      if self.od_pairs[p[0]].destination_hub == hub_id]
-                    if use_gurobi:
-                        prob.addConstr(
-                            gp.quicksum(lambdas_own[col.col_id] for col in cols_east)
-                            - gp.quicksum(repo_east) - gp.quicksum(repo_east_rent)
-                            <= fleet_size,
-                            name=f"hub_fleet_east_{hub_id}"
-                        )
-                    else:
-                        prob += (
-                            pulp.lpSum(lambdas_own[col.col_id] for col in cols_east)
-                            - pulp.lpSum(repo_east) - pulp.lpSum(repo_east_rent)
-                            <= fleet_size,
-                            f"hub_fleet_east_{hub_id}"
+                            initial_count <= fleet_size,
+                            f"hub_fleet_{hub_id}",
                         )
 
         
 
         # Flow conservation for repositioning vehicles
-        for k in range(len(self.od_pairs)):
-            in_w_own = [pi_west_own[p] for p in valid_transitions_west if p[1] == k]
-            out_w_own = [pi_west_own[p] for p in valid_transitions_west if p[0] == k]
-            in_e_own = [pi_east_own[p] for p in valid_transitions_east if p[1] == k]
-            out_e_own = [pi_east_own[p] for p in valid_transitions_east if p[0] == k]
-            cols_own = [lambdas_own[c.col_id] for c in columns if c.od_idx == k]
-            
-            if use_gurobi:
-                prob.addConstr(gp.quicksum(in_w_own) <= gp.quicksum(cols_own), name=f"repo_w_in_own_{k}")
-                prob.addConstr(gp.quicksum(out_w_own) <= gp.quicksum(cols_own), name=f"repo_w_out_own_{k}")
-                prob.addConstr(gp.quicksum(in_e_own) <= gp.quicksum(cols_own), name=f"repo_e_in_own_{k}")
-                prob.addConstr(gp.quicksum(out_e_own) <= gp.quicksum(cols_own), name=f"repo_e_out_own_{k}")
-            else:
-                prob += (pulp.lpSum(in_w_own) <= pulp.lpSum(cols_own), f"repo_w_in_own_{k}")
-                prob += (pulp.lpSum(out_w_own) <= pulp.lpSum(cols_own), f"repo_w_out_own_{k}")
-                prob += (pulp.lpSum(in_e_own) <= pulp.lpSum(cols_own), f"repo_e_in_own_{k}")
-                prob += (pulp.lpSum(out_e_own) <= pulp.lpSum(cols_own), f"repo_e_out_own_{k}")
-
-        # Hub activation constraints
-        for t_node in transfer_node_ids:
-            cols_via_hub = [
-                lambdas_own[col.col_id] + lambdas_rent[col.col_id] for col in columns if t_node in col.transfer_nodes
+        for task in road_task_nodes:
+            incoming = [
+                pi_reposition[pair] for pair in valid_reposition_transitions
+                if pair[1] == task
             ]
-            tn = self.network.transfer_nodes[t_node]
+            outgoing = [
+                pi_reposition[pair] for pair in valid_reposition_transitions
+                if pair[0] == task
+            ]
+            task_flow = lambdas[task[0]]
             if use_gurobi:
                 prob.addConstr(
-                    gp.quicksum(cols_via_hub) <= self.config.big_m * g_vars[t_node],
-                    name=f"hub_activate_{t_node}"
+                    initial_vehicle[task] + gp.quicksum(incoming) == task_flow,
+                    name=f"repo_balance_{task[0]}_{task[1]}",
+                )
+                prob.addConstr(
+                    gp.quicksum(incoming) <= task_flow,
+                    name=f"repo_in_{task[0]}_{task[1]}",
+                )
+                prob.addConstr(
+                    gp.quicksum(outgoing) <= task_flow,
+                    name=f"repo_out_{task[0]}_{task[1]}",
                 )
             else:
                 prob += (
-                    pulp.lpSum(cols_via_hub) <= self.config.big_m * g_vars[t_node],
-                    f"hub_activate_{t_node}",
+                    initial_vehicle[task] + pulp.lpSum(incoming) == task_flow,
+                    f"repo_balance_{task[0]}_{task[1]}",
                 )
-                
-            # Hub physical processing capacity constraint
-            max_lifts = tn.max_cranes * self.config.crane_daily_lifts
-            if use_gurobi:
-                prob.addConstr(
-                    gp.quicksum(cols_via_hub) <= max_lifts * g_vars[t_node],
-                    name=f"hub_crane_capacity_{t_node}"
-                )
-            else:
                 prob += (
-                    pulp.lpSum(cols_via_hub) <= max_lifts * g_vars[t_node],
-                    f"hub_crane_capacity_{t_node}",
+                    pulp.lpSum(incoming) <= task_flow,
+                    f"repo_in_{task[0]}_{task[1]}",
+                )
+                prob += (
+                    pulp.lpSum(outgoing) <= task_flow,
+                    f"repo_out_{task[0]}_{task[1]}",
                 )
 
-        # Max network active hubs constraint
-        if use_gurobi:
-            prob.addConstr(
-                gp.quicksum(g_vars.values()) <= (self.config.max_hubs if self.config.max_hubs is not None else len(transfer_node_ids)),
-                name="max_hubs_limit"
-            )
-        else:
-            prob += (
-                pulp.lpSum(g_vars.values()) <= (self.config.max_hubs if self.config.max_hubs is not None else len(transfer_node_ids)),
-                "max_hubs_limit",
-            )
-
-        # Branching constraints (S2-8: Ryan-Foster and Hub Activation)
+        # Branching constraints
         for c_type, c_data in branch_constraints:
             if c_type == "rf_same":
                 i, j = c_data
                 if use_gurobi:
                     prob.addConstr(
-                        gp.quicksum(lambdas_own[col.col_id] + lambdas_rent[col.col_id] for col in columns if not self._check_rf(col, i, j, True)) == 0,
+                        gp.quicksum(lambdas[col.col_id] for col in columns if not self._check_rf(col, i, j, True)) == 0,
                         name=f"rf_same_{i}_{j}"
                     )
                 else:
                     prob += (
                         pulp.lpSum(
-                            lambdas_own[col.col_id] + lambdas_rent[col.col_id] for col in columns if not self._check_rf(col, i, j, True)
+                            lambdas[col.col_id] for col in columns if not self._check_rf(col, i, j, True)
                         )
                         == 0,
                         f"rf_same_{i}_{j}",
@@ -498,29 +534,17 @@ class MasterProblem:
                 i, j = c_data
                 if use_gurobi:
                     prob.addConstr(
-                        gp.quicksum(lambdas_own[col.col_id] + lambdas_rent[col.col_id] for col in columns if not self._check_rf(col, i, j, False)) == 0,
+                        gp.quicksum(lambdas[col.col_id] for col in columns if not self._check_rf(col, i, j, False)) == 0,
                         name=f"rf_diff_{i}_{j}"
                     )
                 else:
                     prob += (
                         pulp.lpSum(
-                            lambdas_own[col.col_id] + lambdas_rent[col.col_id] for col in columns if not self._check_rf(col, i, j, False)
+                            lambdas[col.col_id] for col in columns if not self._check_rf(col, i, j, False)
                         )
                         == 0,
                         f"rf_diff_{i}_{j}",
                     )
-            elif c_type == "hub_close":
-                hub_id = c_data
-                if use_gurobi:
-                    prob.addConstr(g_vars[hub_id] == 0, name=f"hub_close_{hub_id}")
-                else:
-                    prob += (g_vars[hub_id] == 0, f"hub_close_{hub_id}")
-            elif c_type == "hub_open":
-                hub_id = c_data
-                if use_gurobi:
-                    prob.addConstr(g_vars[hub_id] == 1, name=f"hub_open_{hub_id}")
-                else:
-                    prob += (g_vars[hub_id] == 1, f"hub_open_{hub_id}")
 
         # S2-8: Optional stabilization: add trust region around previous duals
         if self.use_stabilization and self.prev_duals and use_gurobi:
@@ -530,6 +554,9 @@ class MasterProblem:
 
         # 6. Solve LP
         if use_gurobi:
+            self.logger.info(
+                f"  RMP optimize: columns={len(columns)}, active rail dispatches={len(rail_runs)}"
+            )
             prob.optimize()
             if prob.status == GRB.INFEASIBLE:
                 prob.computeIIS()
@@ -542,7 +569,9 @@ class MasterProblem:
                 if is_integer:
                     duals = {}
                 else:
-                    duals = self._extract_gurobi_duals(prob, capacity_constraints, transfer_node_ids)
+                    duals = self._extract_gurobi_duals(
+                        prob, capacity_constraints, rail_capacity_constraints,
+                    )
             else:
                 self.logger.warning(f"Gurobi did not find an optimal solution. Status: {prob.status}")
                 return None, {}
@@ -562,74 +591,79 @@ class MasterProblem:
                 if is_integer:
                     duals = {}
                 else:
-                    duals = self._extract_pulp_duals(prob, capacity_constraints, transfer_node_ids)
+                    duals = self._extract_pulp_duals(
+                        prob, capacity_constraints, rail_capacity_constraints,
+                    )
             else:
                 self.logger.warning(f"Pulp did not find an optimal solution. Status: {prob.status}")
                 return None, {}
 
 
-        # 7. Update column LP values and hub activation values
+        # 7. Update column LP values
         for col in columns:
-            val_own = lambdas_own[col.col_id].X if use_gurobi else lambdas_own[col.col_id].varValue
-            val_rent = lambdas_rent[col.col_id].X if use_gurobi else lambdas_rent[col.col_id].varValue
-            col.lp_value_own = val_own
-            col.lp_value_rent = val_rent
-            col.lp_value = val_own + val_rent
+            col.lp_value = lambdas[col.col_id].X if use_gurobi else lambdas[col.col_id].varValue
 
-        self.hub_values = {i: g_vars[i].X if use_gurobi else g_vars[i].varValue for i in transfer_node_ids}
-
+        self.reposition_solution = {
+            "initial": {
+                task: (var.X if use_gurobi else var.varValue or 0.0)
+                for task, var in initial_vehicle.items()
+            },
+            "transitions": {
+                pair: (var.X if use_gurobi else var.varValue or 0.0)
+                for pair, var in pi_reposition.items()
+            },
+            "task_data": road_task_nodes,
+        }
+        self.rail_tariff_solution = {
+            "loads": {
+                key: (var.X if use_gurobi else var.varValue or 0.0)
+                for key, var in rail_tier_load.items()
+            },
+            "unit_costs": rail_unit_cost,
+        }
         # S2-8: Update prev_duals for stabilization in next iteration
         self.prev_duals = duals
 
         return lp_val, duals
 
-    def _extract_gurobi_duals(self, prob, capacity_constraints, transfer_node_ids):
+    def _extract_gurobi_duals(self, prob, capacity_constraints, rail_capacity_constraints):
         duals = {
             "od": {},
             "vehicle": {},
             "trans_out": {},
             "trans_in": {},
-            "hub": {},
+            "rail": {},
         }
         for i in range(len(self.od_pairs)):
             duals["od"][i] = prob.getConstrByName(f"capacity_link_{i}").Pi
-            repo_pi_in = (prob.getConstrByName(f"repo_w_in_own_{i}").Pi + prob.getConstrByName(f"repo_e_in_own_{i}").Pi)
-            repo_pi_out = (prob.getConstrByName(f"repo_w_out_own_{i}").Pi + prob.getConstrByName(f"repo_e_out_own_{i}").Pi)
-            duals["trans_out"][i] = repo_pi_out
-            duals["trans_in"][i] = repo_pi_in
+            # Reposition-flow constraints are column/task-specific and have no
+            # mathematically valid one-to-one OD dual for the pricing problem.
+            duals["trans_out"][i] = 0.0
+            duals["trans_in"][i] = 0.0
         
-        duals["vehicle"][0] = (prob.getConstrByName("vehicle_balance_west").Pi + prob.getConstrByName("vehicle_balance_east").Pi)
-
-        for t_node in transfer_node_ids:
-            act_pi = prob.getConstrByName(f"hub_activate_{t_node}").Pi
-            cap_pi = prob.getConstrByName(f"hub_crane_capacity_{t_node}").Pi
-            duals["hub"][t_node] = act_pi + cap_pi
-            
+        duals["vehicle"][0] = 0.0
+        for train_id, constr in rail_capacity_constraints.items():
+            duals["rail"][train_id] = constr.Pi
         return duals
 
-    def _extract_pulp_duals(self, prob, capacity_constraints, transfer_node_ids):
+    def _extract_pulp_duals(self, prob, capacity_constraints, rail_capacity_constraints):
         duals = {
             "od": {},
             "vehicle": {},
             "trans_out": {},
             "trans_in": {},
-            "hub": {},
+            "rail": {},
         }
         for i in range(len(self.od_pairs)):
             cap_pi = capacity_constraints[i].pi or 0.0
             duals["od"][i] = cap_pi
-            repo_pi_in = ((prob.constraints[f"repo_w_in_own_{i}"].pi or 0.0) + (prob.constraints[f"repo_e_in_own_{i}"].pi or 0.0))
-            repo_pi_out = ((prob.constraints[f"repo_w_out_own_{i}"].pi or 0.0) + (prob.constraints[f"repo_e_out_own_{i}"].pi or 0.0))
-            duals["trans_out"][i] = repo_pi_out
-            duals["trans_in"][i] = repo_pi_in
+            duals["trans_out"][i] = 0.0
+            duals["trans_in"][i] = 0.0
             
-        duals["vehicle"][0] = ((prob.constraints["vehicle_balance_west"].pi or 0.0) + (prob.constraints["vehicle_balance_east"].pi or 0.0))
-        
-        for t_node in transfer_node_ids:
-            act_pi = prob.constraints[f"hub_activate_{t_node}"].pi or 0.0
-            cap_pi = prob.constraints[f"hub_crane_capacity_{t_node}"].pi or 0.0
-            duals["hub"][t_node] = act_pi + cap_pi
-            
+        duals["vehicle"][0] = 0.0
+        for train_id, constr in rail_capacity_constraints.items():
+            duals["rail"][train_id] = constr.pi or 0.0
+
         return duals
 
     def _check_rf(self, col, i, j, same: bool):

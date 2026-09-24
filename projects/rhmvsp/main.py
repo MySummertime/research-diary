@@ -6,6 +6,7 @@ import argparse
 import copy
 import csv
 import json
+import math
 import os
 import sys
 from datetime import datetime
@@ -13,11 +14,71 @@ from datetime import datetime
 from config import RHMVSPConfig
 from src.core.data_generator import InstanceGenerator
 from src.core.network import MultimodalNetwork
+from src.core.synthetic_beliefs import arc_belief, draw_belief
 from src.solvers.branch_and_price import BranchAndPriceController as BranchAndPriceSolver
 from src.utils.logging import Logger
 from src.utils.plotting import Visualizer
 from src.utils.reporting import format_solution_report
+from src.utils.numeric_format import format_alpha_R, format_alpha_T, format_csv_value
 from src.utils.timing import Timer
+
+
+def synchronize_instance_parameters(instance: dict, config: RHMVSPConfig) -> dict:
+	"""将旧实例中的时间、容量和费率统一到当前配置。"""
+	horizon = float(config.T_max)
+	for od in instance.get("od_pairs", []):
+		od["time_window_start"] = 0.0
+		od["time_window_end"] = horizon
+		od["time_window_start_fmt"] = "Day 1 00:00"
+		day_number = int(horizon // 24) + 1
+		remaining_hours = horizon % 24
+		od["time_window_end_fmt"] = f"Day {day_number} {int(remaining_hours):02d}:00"
+	instance.setdefault("config", {})["T_max"] = horizon
+	instance["config"]["alpha_R"] = float(config.alpha_R)
+	instance["config"]["alpha_T"] = float(config.alpha_T)
+	instance["config"]["q_road"] = float(config.q_road)
+	instance["config"]["q_rail"] = float(config.q_rail)
+	for service in instance.get("railway_timetable", []):
+		service["capacity"] = float(config.q_rail)
+	for arc in instance.get("network", {}).get("arcs", []):
+		distance = float(arc["distance"])
+		if arc["mode"] == 1:
+			ratios = config.road_fuzzy_time_ratio
+			base_time = distance / config.road_speed
+			arc["unit_cost"] = round(config.road_loaded_cost(distance), 2)
+		else:
+			ratios = config.rail_fuzzy_time_ratio
+			base_time = distance / config.rail_speed
+			# Rail cost depends on the total service load and is modeled in the master problem.
+			arc["unit_cost"] = 0.0
+		arc["time_a"], arc["time_b"], arc["time_c"] = [round(base_time * x, 2) for x in ratios]
+		arc.pop("time_d", None)
+		for obsolete_key in ("capacity", "e_window", "l_window", "e_window_fmt", "l_window_fmt"):
+			arc.pop(obsolete_key, None)
+	for node in instance.get("network", {}).get("transfer_nodes", []):
+		for key in ("transfer_time_a", "transfer_time_b", "transfer_time_c", "transfer_time_d"):
+			node.pop(key, None)
+		node["unit_transfer_cost"] = config.c_transfer_road_rail
+	return instance
+
+
+def synchronize_risk_parameters(instance: dict, config: RHMVSPConfig) -> dict:
+	"""按稳定组件标识生成并固定合成事故信度。"""
+	for arc in instance.get("network", {}).get("arcs", []):
+		arc["alpha"] = arc_belief(
+			config.seed, int(arc.get("id", 0)), int(arc["i"]), int(arc["j"]), int(arc["mode"]),
+			config.road_accident_belief_bounds, config.rail_accident_belief_bounds,
+		)
+	for transfer in instance.get("network", {}).get("transfer_nodes", []):
+		transfer.pop("gamma", None)
+		hub = int(transfer["node_id"])
+		transfer["gamma_rr"] = draw_belief(
+			config.seed, f"transfer:{hub}:rr", config.transfer_accident_belief_rail_rail_bounds
+		)
+		transfer["gamma_ir"] = draw_belief(
+			config.seed, f"transfer:{hub}:ir", config.transfer_accident_belief_intermodal_bounds
+		)
+	return instance
 
 
 def parse_args():
@@ -104,12 +165,12 @@ def run_demo(config: RHMVSPConfig, size: str, logger: Logger):
 	else:
 		logger.info(f"Generating and saving fixed benchmark {size} instance...")
 		instance = run_generate(config, size, logger)
+	instance = synchronize_instance_parameters(instance, config)
+	instance = synchronize_risk_parameters(instance, config)
 
 	if "config" in instance:
-		if "T_max" in instance["config"]:
-			config.T_max = instance["config"]["T_max"]
-		if "alpha_max" in instance["config"]:
-			config.alpha_max = instance["config"]["alpha_max"]
+		if "alpha_R" in instance["config"]:
+			config.alpha_R = instance["config"]["alpha_R"]
 		if "alpha_T" in instance["config"]:
 			config.alpha_T = instance["config"]["alpha_T"]
 
@@ -118,7 +179,7 @@ def run_demo(config: RHMVSPConfig, size: str, logger: Logger):
 		f"  Nodes: {instance['network']['num_nodes']}, "
 		f"Arcs: {instance['network']['num_arcs']}, "
 		f"O-D pairs: {len(instance['od_pairs'])}, "
-		f"West Vehicles: {instance.get('num_vehicles_west', 0)} | East Vehicles: {instance.get('num_vehicles_east', 0)}"
+		f"Hub fleet sizes: {instance.get('hub_fleet_size', {})}"
 	)
 
 	# Display network summary
@@ -130,8 +191,8 @@ def run_demo(config: RHMVSPConfig, size: str, logger: Logger):
 
 	# Display uncertainty parameters
 	logger.info("\nUncertainty Parameters:")
-	logger.info(f"  Alpha_max (arc risk threshold): {config.alpha_max}")
-	logger.info(f"  Alpha_T (time reliability threshold): {config.alpha_T}")
+	logger.info(f"  Alpha_R (risk reliability threshold): {format_alpha_R(config.alpha_R)}")
+	logger.info(f"  Alpha_T (time reliability threshold): {format_alpha_T(config.alpha_T)}")
 
 	# Solve with Branch-and-Price
 	logger.info("\n" + "=" * 60)
@@ -166,12 +227,12 @@ def run_solve(config: RHMVSPConfig, instance_path: str, logger: Logger):
 
 	# Deep copy to avoid leaking instance-specific overrides back to caller
 	config = copy.deepcopy(config)
+	instance = synchronize_instance_parameters(instance, config)
+	instance = synchronize_risk_parameters(instance, config)
 	
 	if "config" in instance:
-		if "T_max" in instance["config"]:
-			config.T_max = instance["config"]["T_max"]
-		if "alpha_max" in instance["config"]:
-			config.alpha_max = instance["config"]["alpha_max"]
+		if "alpha_R" in instance["config"]:
+			config.alpha_R = instance["config"]["alpha_R"]
 		if "alpha_T" in instance["config"]:
 			config.alpha_T = instance["config"]["alpha_T"]
 
@@ -180,7 +241,7 @@ def run_solve(config: RHMVSPConfig, instance_path: str, logger: Logger):
 		f"  Nodes: {instance['network']['num_nodes']}, "
 		f"Arcs: {instance['network']['num_arcs']}, "
 		f"O-D pairs: {len(instance['od_pairs'])}, "
-		f"West Vehicles: {instance.get('num_vehicles_west', 0)} | East Vehicles: {instance.get('num_vehicles_east', 0)}"
+		f"Hub fleet sizes: {instance.get('hub_fleet_size', {})}"
 	)
 
 	# Solve
@@ -199,8 +260,7 @@ def run_generate(config: RHMVSPConfig, size: str, logger: Logger):
 	"""Generate and save an instance in JSON and CSV format within data/{size}/."""
 	logger.info(f"Generating {size}-size instance...")
 
-	# Work on a deep copy so that config.T_max mutations during generation
-	# do not leak back to the caller.
+	# Work on a deep copy so instance generation cannot mutate caller settings.
 	gen_config = copy.deepcopy(config)
 	gen = InstanceGenerator(gen_config, seed=config.seed)
 	instance = gen.generate(size=size)
@@ -296,7 +356,8 @@ def main():
 	logger.info("RHMVSP - Reliable Hazardous Materials Multi-modal VSP")
 	logger.info(f"Mode: {args.mode} | Solver: {args.solver} | Seed: {args.seed}")
 	logger.info(
-		f"Config: alpha_max={config.alpha_max}, alpha_T={config.alpha_T}, "
+		f"Config: alpha_R={format_alpha_R(config.alpha_R)}, "
+		f"alpha_T={format_alpha_T(config.alpha_T)}, "
 		f"T_max={config.T_max}"
 	)
 
@@ -323,25 +384,41 @@ def main():
 		# Write summary CSV with cost, sub-costs, reliability and raw values
 		csv_path = os.path.join(args.output, "summary.csv")
 		sol = solution
+		def csv_metric(key, default="N/A"):
+			value = sol.get(key)
+			return default if value is None else format_csv_value(key, value)
+
 		from sensitivity.utils import format_routing_summary
 		route_sum = format_routing_summary(sol, instance)
-		cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "transfer_cost",
-				 "reposition_cost", "total_prep_cost", "idle_cost", "unmet_penalty"]
+		cost_cols = ["transport_cost", "transfer_cost", "reposition_cost", "unmet_penalty"]
 		with open(csv_path, "w", newline="") as csv_f:
 			w = csv.writer(csv_f)
 			w.writerow(["Status", "Cost"] + cost_cols +
-					   ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "Routes"])
+					   ["Network_Risk_Reliability", "Network_Time_Reliability",
+						"Network_Risk", "Network_Time", "Routes"])
 			w.writerow([
 				sol.get("status", "unknown"),
-				f"{sol.get('total_cost', 0):.2f}",
-			] + [f"{sol.get(c, 0):.2f}" for c in cost_cols] + [
-				f"{sol.get('R_net_risk', 0):.6f}",
-				f"{sol.get('R_net_time', 0):.6f}",
-				f"{sol.get('raw_net_risk', 0):.2f}",
-				f"{sol.get('raw_net_time', 0):.2f}",
+				format_csv_value("total_cost", sol.get("total_cost", 0)),
+			] + [format_csv_value(c, sol.get(c, 0)) for c in cost_cols] + [
+				csv_metric("network_risk_reliability"),
+				csv_metric("network_time_reliability"),
+				csv_metric("network_risk", "0.00000000"),
+				csv_metric("network_time", "0.00"),
 				route_sum,
 			])
 		logger.info(f"Summary CSV saved to: {csv_path}")
+
+		# Write one row for every timetable service used by every delivered batch.
+		services_path = os.path.join(args.output, "batch_train_services.csv")
+		service_fields = [
+			"od_id", "batch_id", "service_order", "train_id", "origin", "destination",
+			"departure_time_fmt", "arrival_time_fmt",
+		]
+		with open(services_path, "w", newline="", encoding="utf-8-sig") as services_f:
+			writer = csv.DictWriter(services_f, fieldnames=service_fields)
+			writer.writeheader()
+			writer.writerows(sol.get("batch_train_services", []))
+		logger.info(f"Batch train-service CSV saved to: {services_path}")
 
 		# --- Generate Publication-Quality Plots ---
 		try:

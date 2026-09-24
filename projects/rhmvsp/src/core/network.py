@@ -14,25 +14,14 @@ class Arc:
     j: int                          # End node
     mode: int                       # 1=road, 2=rail
     distance: float                 # Distance (km)
-    # Fuzzy transport time parameters: trapezoidal (a, b, c, d)
-    # Road: c=d (triangular equivalent); Rail: b<=c plateau
+    # Triangular road/rail transport time: (minimum, mode, maximum)
     time_a: float = 0.0
     time_b: float = 0.0
     time_c: float = 0.0
-    time_d: float = 0.0
     # Risk parameters
-    alpha: float = 0.01             # Accident belief (time-independent default)
-    C_consequence: float = 100.0    # Accident consequence
-    # Operational time window (mainly for rail)
-    e_window: float = 0.0           # Earliest operational time
-    l_window: float = 48.0          # Latest operational time
-    # Capacity
-    capacity: float = 100.0         # Per-vehicle capacity (tons)
+    alpha: float = 0.0              # 基准事故信度
     # Cost
-    unit_cost: float = 0.5          # Transport cost per ton
-    deploy_cost: float = 100.0      # Vehicle deployment cost
-    min_units: int = 1              # Minimum transport units
-    population_density: float = 1.0  # Population density multiplier for time-varying C (S2-2)
+    unit_cost: float = 0.5          # 单个 FEU 通过该弧的运输费用
 
     @property
     def mode_name(self) -> str:
@@ -51,18 +40,10 @@ class Arc:
 class TransferNode:
     """A node where road-rail transfer is possible."""
     node_id: int
-    # Fuzzy transfer time: trapezoidal (a, b, c, d)
-    transfer_time_a: float = 0.5
-    transfer_time_b: float = 1.0
-    transfer_time_c: float = 2.0
-    transfer_time_d: float = 4.0
-    # Transfer risk
-    gamma: float = 0.005            # Transfer accident belief
+    gamma_rr: float = 0.01          # 铁铁转运事故信度
+    gamma_ir: float = 0.03          # 公铁/铁公转运事故信度
     # Cost
-    unit_transfer_cost: float = 50.0
-    facility_cost: float = 5000.0   # Fixed facility setup cost
-    max_cranes: int = 2             # Max concurrent cranes per hub
-    max_storage_tons: float = 500.0 # Max hazmat storage capacity per hub (tons)
+    unit_transfer_cost: float = 500.0
 
 
 @dataclass
@@ -70,9 +51,9 @@ class ODPair:
     """Origin-Destination pair with demand."""
     origin: int
     destination: int
-    demand: float                   # Q_od (tons)
-    time_window_start: float = 0.0              # Delivery time window lower bound
-    time_window_end: float = 48.0             # Delivery time window upper bound
+    demand: float                   # 需求量（FEU）
+    time_window_end: float          # Common horizon end supplied from config.T_max
+    time_window_start: float = 0.0             # Common horizon start (Day 1 00:00)
     alpha_T_od: float = 0.8        # Time reliability threshold
     origin_hub: int = -1           # Hub ID for west-side origin hub (fleet base)
     destination_hub: int = -1       # Hub ID for east-side delivery
@@ -109,23 +90,18 @@ class MultimodalNetwork:
 
         # Add arcs
         for arc_data in instance["network"]["arcs"]:
+            # Backward compatibility: legacy (a,b,b,d) becomes (a,b,d).
+            if "time_d" in arc_data and arc_data.get("time_b", 0) != arc_data.get("time_c", 0):
+                raise ValueError("Legacy transport trapezoid must have b=c for lossless conversion")
             arc = Arc(
                 arc_id=arc_data.get("id", 0),
                 i=arc_data["i"], j=arc_data["j"], mode=arc_data["mode"],
                 distance=arc_data["distance"],
                 time_a=arc_data.get("time_a", 0),
                 time_b=arc_data.get("time_b", 0),
-                time_c=arc_data.get("time_c", 0),
-                time_d=arc_data.get("time_d", arc_data.get("time_c", 0)),  # #9: trapezoidal, default=c
-                alpha=arc_data.get("alpha", 0.01),
-                C_consequence=arc_data.get("C_consequence", 100.0),
-                e_window=arc_data.get("e_window", 0.0),
-                l_window=arc_data.get("l_window", 48.0),
-                capacity=arc_data.get("capacity", 100.0),
+                time_c=arc_data.get("time_d", arc_data.get("time_c", 0)),
+                alpha=arc_data.get("alpha", 0.0),
                 unit_cost=arc_data.get("unit_cost", 0.5),
-                deploy_cost=arc_data.get("deploy_cost", 100.0),
-                min_units=arc_data.get("min_units", 1),
-                population_density=arc_data.get("population_density", 1.0),
             )
             net.add_arc(arc)
 
@@ -143,15 +119,9 @@ class MultimodalNetwork:
         for tn_data in instance["network"].get("transfer_nodes", []):
             tn = TransferNode(
                 node_id=tn_data["node_id"],
-                transfer_time_a=tn_data.get("transfer_time_a", 0.5),
-                transfer_time_b=tn_data.get("transfer_time_b", 1.0),
-                transfer_time_c=tn_data.get("transfer_time_c", 2.0),
-                transfer_time_d=tn_data.get("transfer_time_d", 4.0),
-                gamma=tn_data.get("gamma", 0.005),
-                unit_transfer_cost=tn_data.get("unit_transfer_cost", 50.0),
-                facility_cost=tn_data.get("facility_cost", 5000.0),
-                max_cranes=tn_data.get("max_cranes", 2),
-                max_storage_tons=tn_data.get("max_storage_tons", 500.0),
+                gamma_rr=tn_data.get("gamma_rr", 0.01),
+                gamma_ir=tn_data.get("gamma_ir", 0.03),
+                unit_transfer_cost=tn_data.get("unit_transfer_cost", 500.0),
             )
             net.transfer_nodes[tn.node_id] = tn
 
@@ -161,7 +131,7 @@ class MultimodalNetwork:
                 origin=od_data["origin"], destination=od_data["destination"],
                 demand=od_data["demand"],
                 time_window_start=od_data.get("time_window_start", 0.0),
-                time_window_end=od_data.get("time_window_end", 48.0),
+                time_window_end=od_data["time_window_end"],
                 alpha_T_od=od_data.get("alpha_T_od", 0.8),
                 origin_hub=od_data.get("origin_hub", -1),
                 destination_hub=od_data.get("destination_hub", -1),
@@ -290,27 +260,18 @@ class MultimodalNetwork:
                 {
                     "id": a.arc_id, "i": a.i, "j": a.j, "mode": a.mode,
                     "distance": a.distance,
-                    "time_a": a.time_a, "time_b": a.time_b, "time_c": a.time_c, "time_d": a.time_d,
-                    "alpha": a.alpha, "C_consequence": a.C_consequence,
-                    "e_window": a.e_window, "l_window": a.l_window,
-                    "capacity": a.capacity, "unit_cost": a.unit_cost,
-                    "deploy_cost": a.deploy_cost, "min_units": a.min_units,
-                    "population_density": a.population_density,
+                    "time_a": a.time_a, "time_b": a.time_b, "time_c": a.time_c,
+                    "alpha": a.alpha,
+                    "unit_cost": a.unit_cost,
                 }
                 for a in self.arcs.values()
             ],
             "transfer_nodes": [
                 {
                     "node_id": tn.node_id,
-                    "transfer_time_a": tn.transfer_time_a,
-                    "transfer_time_b": tn.transfer_time_b,
-                    "transfer_time_c": tn.transfer_time_c,
-                    "transfer_time_d": tn.transfer_time_d,
-                    "gamma": tn.gamma,
+                    "gamma_rr": tn.gamma_rr,
+                    "gamma_ir": tn.gamma_ir,
                     "unit_transfer_cost": tn.unit_transfer_cost,
-                    "facility_cost": tn.facility_cost,
-                    "max_cranes": tn.max_cranes,
-                    "max_storage_tons": tn.max_storage_tons,
                 }
                 for tn in self.transfer_nodes.values()
             ],
