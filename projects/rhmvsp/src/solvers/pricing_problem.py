@@ -54,9 +54,11 @@ class PricingProblem:
         self.logger = logger
         # S2-6: time-keyed arc reliability cache: (arc_id, hour_bin) -> R
         self._arc_R_cache: dict[tuple, float] = {}
-        # Timers for exact ESPPRC execution profiling
+        # Timers and resource-limit diagnostics for pricing calls
         self.total_espprc_cpu_time = 0.0
         self.total_espprc_wall_time = 0.0
+        self.last_solve_resource_limited = False
+        self.resource_limit_hits = 0
 
     def _get_arc_R(self, arc: Arc, start_time: float, alpha_T: float) -> float:
         """
@@ -96,6 +98,7 @@ class PricingProblem:
         """
         Solve bidirectional ESPPRC, optionally heuristically (exact=False).
         """
+        self.last_solve_resource_limited = False
         self._exact_pricing = exact
         self.origin = origin
         self.destination = destination
@@ -105,7 +108,7 @@ class PricingProblem:
         self.branch_constraints = branch_constraints if branch_constraints is not None else []
 
         import time
-        start_wall = time.time()
+        start_wall = time.perf_counter()
         start_cpu = time.process_time()
 
         # 1. Forward Labeling
@@ -124,7 +127,7 @@ class PricingProblem:
 
         self.logger.debug(f"  Pricing OD {od_idx} (exact={exact}): F={num_f}, B={num_b}, Joined={len(all_columns)}")
 
-        self.total_espprc_wall_time += (time.time() - start_wall)
+        self.total_espprc_wall_time += (time.perf_counter() - start_wall)
         self.total_espprc_cpu_time += (time.process_time() - start_cpu)
 
         return all_columns
@@ -214,12 +217,18 @@ class PricingProblem:
                         # Heuristic pruning: keep top labels by reduced cost
                         max_keep = self.config.max_labels_heuristic if not exact else self.config.max_labels_exact
                         if len(labels_at[new_label.node]) > max_keep:
+                            if exact:
+                                self.last_solve_resource_limited = True
+                                self.resource_limit_hits += 1
                             labels_at[new_label.node].sort(key=lambda x: x.reduced_cost)
                             labels_at[new_label.node] = labels_at[new_label.node][:max_keep]
 
                         # Global label cap: stop expanding if total labels exceed limit
                         total_labels = sum(len(v) for v in labels_at.values())
                         if total_labels > total_labels_limit:
+                            if exact:
+                                self.last_solve_resource_limited = True
+                                self.resource_limit_hits += 1
                             break
                         heapq.heappush(queue, (new_label.reduced_cost, next(counter), new_label))
 

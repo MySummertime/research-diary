@@ -40,6 +40,10 @@ class MasterProblem:
         self.prev_duals = None
         self.use_stabilization = getattr(config, 'bap_stabilization', True)
         self.next_col_id = 0
+        self.total_master_wall_time = 0.0
+        self.total_master_cpu_time = 0.0
+        self.total_master_lp_wall_time = 0.0
+        self.total_master_mip_wall_time = 0.0
 
     def _compute_unmet_penaltys(self):
         """
@@ -553,11 +557,22 @@ class MasterProblem:
             pass # Placeholder for Gurobi stabilization logic if needed
 
         # 6. Solve LP
+        import time
+        optimize_wall_start = time.perf_counter()
+        optimize_cpu_start = time.process_time()
         if use_gurobi:
             self.logger.info(
                 f"  RMP optimize: columns={len(columns)}, active rail dispatches={len(rail_runs)}"
             )
             prob.optimize()
+            optimize_wall = time.perf_counter() - optimize_wall_start
+            optimize_cpu = time.process_time() - optimize_cpu_start
+            self.total_master_wall_time += optimize_wall
+            self.total_master_cpu_time += optimize_cpu
+            if is_integer:
+                self.total_master_mip_wall_time += optimize_wall
+            else:
+                self.total_master_lp_wall_time += optimize_wall
             if prob.status == GRB.INFEASIBLE:
                 prob.computeIIS()
                 prob.write("rmp_infeasible.ilp")
@@ -584,6 +599,14 @@ class MasterProblem:
                 solver = pulp.PULP_CBC_CMD(msg=0)
 
             prob.solve(solver)
+            optimize_wall = time.perf_counter() - optimize_wall_start
+            optimize_cpu = time.process_time() - optimize_cpu_start
+            self.total_master_wall_time += optimize_wall
+            self.total_master_cpu_time += optimize_cpu
+            if is_integer:
+                self.total_master_mip_wall_time += optimize_wall
+            else:
+                self.total_master_lp_wall_time += optimize_wall
 
             if prob.status == pulp.LpStatusOptimal:
                 lp_val = pulp.value(prob.objective)

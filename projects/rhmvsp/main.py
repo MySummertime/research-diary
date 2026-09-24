@@ -202,6 +202,8 @@ def run_demo(config: RHMVSPConfig, size: str, logger: Logger):
 	solver = BranchAndPriceSolver(config, instance, logger)
 	solution = solver.solve()
 	elapsed_wall, elapsed_cpu = timer.stop()
+	solution["end_to_end_wall_time"] = elapsed_wall
+	solution["end_to_end_cpu_time"] = elapsed_cpu
 
 	# Display results
 	logger.info("\n" + "=" * 60)
@@ -248,6 +250,8 @@ def run_solve(config: RHMVSPConfig, instance_path: str, logger: Logger):
 	solver = BranchAndPriceSolver(config, instance, logger)
 	solution = solver.solve()
 	elapsed_wall, elapsed_cpu = timer.stop()
+	solution["end_to_end_wall_time"] = elapsed_wall
+	solution["end_to_end_cpu_time"] = elapsed_cpu
 
 	# Report
 	report = format_solution_report(solution, instance, total_wall=elapsed_wall, total_cpu=elapsed_cpu)
@@ -391,11 +395,17 @@ def main():
 		from sensitivity.utils import format_routing_summary
 		route_sum = format_routing_summary(sol, instance)
 		cost_cols = ["transport_cost", "transfer_cost", "reposition_cost", "unmet_penalty"]
+		benchmark_cols = [
+			"solve_wall_time", "master_wall_time", "pricing_wall_time", "other_wall_time",
+			"processed_node_count", "total_columns", "root_lp_bound_bp",
+			"root_pricing_termination", "root_bound_available",
+			"root_gap_vs_bp_incumbent_pct", "gap_bp_pct",
+		]
 		with open(csv_path, "w", newline="") as csv_f:
 			w = csv.writer(csv_f)
 			w.writerow(["Status", "Cost"] + cost_cols +
 					   ["Network_Risk_Reliability", "Network_Time_Reliability",
-						"Network_Risk", "Network_Time", "Routes"])
+						"Network_Risk", "Network_Time"] + benchmark_cols + ["Routes"])
 			w.writerow([
 				sol.get("status", "unknown"),
 				format_csv_value("total_cost", sol.get("total_cost", 0)),
@@ -404,6 +414,7 @@ def main():
 				csv_metric("network_time_reliability"),
 				csv_metric("network_risk", "0.00000000"),
 				csv_metric("network_time", "0.00"),
+			] + [csv_metric(c) for c in benchmark_cols] + [
 				route_sum,
 			])
 		logger.info(f"Summary CSV saved to: {csv_path}")

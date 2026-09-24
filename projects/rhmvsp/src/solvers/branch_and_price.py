@@ -94,10 +94,19 @@ class BranchAndPriceController:
         self.col_gen_iterations = 0
         self.cg_history: list[tuple[int, float, float]] = []  # [(iter, lp_bound, best_ub)]
 
+        # Observational benchmark metrics; these do not alter solver decisions.
+        self.processed_node_count = 0
+        self.root_lp_bound = None
+        self.root_pricing_termination = None
+        self.root_bound_available = False
+        self.last_cg_termination = None
+
     def solve(self) -> dict:
         """Main solve loop using Best-First Search."""
         import time
         self.solve_start_time = time.time()
+        self.solve_start_wall = time.perf_counter()
+        self.solve_start_cpu = time.process_time()
 
         root_cols = self._generate_initial_columns()
         self.cg_history = []
@@ -119,7 +128,12 @@ class BranchAndPriceController:
                 f"Solving Node {curr_node.node_id} (LB={curr_node.lower_bound:.2f}, depth={curr_node.depth})"
             )
 
+            self.processed_node_count += 1
             lp_val, is_optimal = self._column_generation(curr_node)
+            if curr_node.node_id == 0 and lp_val is not None:
+                self.root_lp_bound = lp_val
+                self.root_pricing_termination = self.last_cg_termination
+                self.root_bound_available = is_optimal
 
             if lp_val is None:
                 continue
@@ -133,13 +147,9 @@ class BranchAndPriceController:
             if self.config.lp_only:
                 self.logger.info("  LP-only mode: extracting fractional LP solution.")
                 sol = self._extract_lp_solution(curr_node, lp_val)
-                elapsed_wall = self.pp.total_espprc_wall_time
-                elapsed_cpu = self.pp.total_espprc_cpu_time
                 sol["lp_bound"] = lp_val
                 sol["gap_pct"] = 0.0
-                sol["solve_wall_time"] = elapsed_wall
-                sol["solve_cpu_time"] = elapsed_cpu
-                return sol
+                return self._attach_performance_metrics(sol)
 
             # In root node or when columns are sufficient, extract exact physical integer MIP solution immediately
             sol = self._extract_solution(curr_node)
@@ -158,21 +168,56 @@ class BranchAndPriceController:
 
             self._branch(curr_node)
 
-        # Core time is strictly the time spent inside ESPPRC pathfinding
-        elapsed_wall = self.pp.total_espprc_wall_time
-        elapsed_cpu = self.pp.total_espprc_cpu_time
-        
         if self.best_solution:
-            self.best_solution["solve_wall_time"] = elapsed_wall
-            self.best_solution["solve_cpu_time"] = elapsed_cpu
-            return self.best_solution
-        else:
-            return {"status": "infeasible", "solve_wall_time": elapsed_wall, "solve_cpu_time": elapsed_cpu}
+            return self._attach_performance_metrics(self.best_solution)
+        return self._attach_performance_metrics({"status": "infeasible"})
+
+    def _attach_performance_metrics(self, solution: dict) -> dict:
+        """Attach reproducible timing and root-node benchmark metadata."""
+        total_wall = time.perf_counter() - self.solve_start_wall
+        total_cpu = time.process_time() - self.solve_start_cpu
+        master_wall = self.mp.total_master_wall_time
+        pricing_wall = self.pp.total_espprc_wall_time
+        other_wall = max(0.0, total_wall - master_wall - pricing_wall)
+        root_gap_vs_incumbent = None
+        incumbent = solution.get("total_cost")
+        if (
+            self.root_bound_available
+            and incumbent is not None
+            and abs(float(incumbent)) > self.config.tolerance
+        ):
+            root_gap_vs_incumbent = (
+                100.0 * (float(incumbent) - float(self.root_lp_bound))
+                / abs(float(incumbent))
+            )
+        solution.update({
+            "solve_wall_time": total_wall,
+            "solve_cpu_time": total_cpu,
+            "master_wall_time": master_wall,
+            "master_cpu_time": self.mp.total_master_cpu_time,
+            "master_lp_wall_time": self.mp.total_master_lp_wall_time,
+            "master_mip_wall_time": self.mp.total_master_mip_wall_time,
+            "pricing_wall_time": pricing_wall,
+            "pricing_cpu_time": self.pp.total_espprc_cpu_time,
+            "other_wall_time": other_wall,
+            "processed_node_count": self.processed_node_count,
+            "root_lp_bound_bp": self.root_lp_bound,
+            "root_pricing_termination": self.root_pricing_termination,
+            "root_bound_available": self.root_bound_available,
+            "pricing_resource_limit_hits": self.pp.resource_limit_hits,
+            "root_gap_vs_bp_incumbent_pct": root_gap_vs_incumbent,
+            # gapBP requires a common cross-method Z_best and is aggregated later.
+            "gap_bp_pct": None,
+        })
+        return solution
 
     def _column_generation(self, node: BAPNode) -> tuple[float | None, bool]:
         """Run exact column generation loop at a node."""
         iteration = 0
         max_iters = self.config.bap_max_iterations
+        lp_val = None
+        pricing_resource_limited = False
+        self.last_cg_termination = "unknown"
 
         existing_fingerprints = set()
         for col in node.columns:
@@ -187,6 +232,7 @@ class BranchAndPriceController:
         while iteration < max_iters:
             if time.time() - getattr(self, 'solve_start_time', time.time()) > self.config.time_limit:
                 self.logger.warning(f"Time limit of {self.config.time_limit}s reached during Column Generation.")
+                self.last_cg_termination = "time_limit"
                 break
 
             iteration += 1
@@ -196,6 +242,7 @@ class BranchAndPriceController:
             )
             lp_val, raw_duals = self.mp.solve(node.columns, node.branch_constraints)
             if lp_val is None:
+                self.last_cg_termination = "rmp_failure"
                 return None, False
 
             self.cg_history.append((self.col_gen_iterations, lp_val, self.best_ub))
@@ -258,6 +305,9 @@ class BranchAndPriceController:
                     node.branch_constraints, exact=True
                 )
 
+                if self.pp.last_solve_resource_limited:
+                    pricing_resource_limited = True
+
                 new_node_cols = []
                 for lab in labels:
                     fp = (tuple((a.i, a.j, a.arc_id) for a in lab.arc_sequence),
@@ -273,16 +323,20 @@ class BranchAndPriceController:
                     new_cols_found = True
 
             if not new_cols_found:
+                self.last_cg_termination = (
+                    "pricing_resource_limit" if pricing_resource_limited else "no_new_column"
+                )
                 break
 
             self.logger.debug(
                 f"  Iteration {iteration}: LP={lp_val:.2f}, PoolSize={len(node.columns)}"
             )
 
-        if iteration >= max_iters:
+        if iteration >= max_iters and self.last_cg_termination == "unknown":
+            self.last_cg_termination = "iteration_limit"
             self.logger.warning(f"  Column generation reached max iterations ({max_iters})")
 
-        return lp_val, True
+        return lp_val, self.last_cg_termination == "no_new_column"
 
     def _is_integer(self, node: BAPNode) -> bool:
         """Check integrality of the column-dispatch variables."""

@@ -22,28 +22,35 @@ def float_to_day_time(time_hours: float) -> str:
 
 
 def format_solution_report(solution: dict, instance: dict, total_wall: float, total_cpu: float) -> str:
-    """Format a human-readable solution report recording exact CPU and wall-clock times."""
+    """Format a human-readable solution report with benchmark timing fields."""
     def format_metric(key: str, spec: str, default: str = "N/A") -> str:
         value = solution.get(key)
         return default if value is None else format(value, spec)
+
+    def append_performance_metrics(lines: list[str]) -> None:
+        lines.append(f"Algorithm wall time: {format_metric('solve_wall_time', '.6f')}s")
+        lines.append(f"Master time:         {format_metric('master_wall_time', '.6f')}s")
+        lines.append(f"Pricing time:        {format_metric('pricing_wall_time', '.6f')}s")
+        lines.append(f"Other time:          {format_metric('other_wall_time', '.6f')}s")
+        lines.append(f"Processed nodes:     {solution.get('processed_node_count', 'N/A')}")
+        lines.append(f"Root LP value:       {format_metric('root_lp_bound_bp', '.6f')}")
+        lines.append(f"Root pricing status: {solution.get('root_pricing_termination', 'N/A')}")
+        lines.append(f"Root bound usable:   {solution.get('root_bound_available', False)}")
 
     lines = []
     lines.append("=" * 60)
     lines.append("RHMVSP Solution Report")
     lines.append("=" * 60)
 
-    core_wall = solution.get("solve_wall_time", total_wall)
-    core_cpu = solution.get("solve_cpu_time", total_cpu)
-
     if solution.get("status") == "infeasible":
         lines.append("Status: INFEASIBLE")
         lines.append(f"Total CPU time: {total_cpu:.2f}s (Wall: {total_wall:.2f}s)")
-        lines.append(f"Core  CPU time: {core_cpu:.2f}s (Wall: {core_wall:.2f}s)")
+        append_performance_metrics(lines)
         return "\n".join(lines)
 
     lines.append(f"Status: {solution.get('status', 'unknown').upper()}")
     lines.append(f"Total CPU time: {total_cpu:.2f}s (Wall: {total_wall:.2f}s)")
-    lines.append(f"Core  CPU time: {core_cpu:.2f}s (Wall: {core_wall:.2f}s)")
+    append_performance_metrics(lines)
     lines.append(f"B&P iterations: {solution.get('iterations', 'N/A')}")
     lines.append(f"Total columns generated: {solution.get('total_columns', 'N/A')}")
     lines.append("")
