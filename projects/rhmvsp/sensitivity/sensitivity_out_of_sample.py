@@ -13,7 +13,6 @@ Reference: Wang et al. (2025) §5.6 — out-of-sample tests comparing [RM]
 """
 import sys, os, json
 from datetime import datetime
-from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -23,22 +22,21 @@ import csv
 from config import RHMVSPConfig
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
 from src.utils.logging import Logger
+from src.utils.numeric_format import format_alpha_R, format_alpha_T, format_csv_value
 from src.core.scenario_sampler import sample_scenario
-from sensitivity.plot_helpers import set_style, COLOURS, enhanced_boxplot
+from sensitivity.parameter_grids import ALPHA_R_OOS_LEVELS, ALPHA_T_OOS_LEVELS
 from sensitivity.utils import update_od_deadlines as _update_od_deadlines
-
-# ── Colour constants ────────────────────────────────────────────────────────
-C_MR  = COLOURS["C1"]  # Warm Terracotta — MR (Model with Reliability)
-C_MW = COLOURS["C2"]  # Celadon Green  — MW (Model Without reliability)
 
 # ── Experiment parameters ───────────────────────────────────────────────────
 N_SCENARIOS = 200          # scenarios per group (Wang uses 200)
 INSTANCE_PATH = "data_real_case/instance.json"
 
-# Parameter combinations (α_T, α_max)
+# Parameter combinations (alpha_T, alpha_R).
+# alpha_R is the risk reliability threshold used directly as R >= alpha_R.
 PARAM_GRID = [
-    (0.5, 0.015), (0.5, 0.03), (0.5, 0.05),
-    (0.8, 0.015), (0.8, 0.03), (0.8, 0.05),
+    (alpha_T, alpha_R)
+    for alpha_T in ALPHA_T_OOS_LEVELS
+    for alpha_R in ALPHA_R_OOS_LEVELS
 ]
 
 
@@ -57,10 +55,10 @@ def _run_single(config, inst, model_tag):
     ok = status not in ("infeasible", "error", None)
     return {
         "cost": sol.get("total_cost") if ok else None,
-        "R_risk": sol.get("R_net_risk") if ok else None,
-        "R_time": sol.get("R_net_time") if ok else None,
-        "raw_risk": sol.get("raw_net_risk", 0.0) if ok else None,
-        "raw_time": sol.get("raw_net_time", 0.0) if ok else None,
+        "network_risk_reliability": sol.get("network_risk_reliability") if ok else None,
+        "network_time_reliability": sol.get("network_time_reliability") if ok else None,
+        "network_risk": sol.get("network_risk", 0.0) if ok else None,
+        "network_time": sol.get("network_time", 0.0) if ok else None,
         "status": status,
         "elapsed": round(elapsed, 2),
         "model": model_tag,
@@ -72,7 +70,7 @@ def run_out_of_sample():
     """
     Out-of-sample robustness test: MR (Model with Reliability) vs MW (Model Without).
 
-    For each (alpha_T, alpha_max) group:
+    For each (alpha_T, alpha_R) group:
       1. Solve MR (with reliability constraints) on original → S_mr
       2. Solve MW (skip risk + time reliability) on original → S_mw
       3. Generate N Monte Carlo perturbed scenarios (demand + time + risk)
@@ -103,46 +101,43 @@ def run_out_of_sample():
         "instance": INSTANCE_PATH,
         "mw_config": {
             "skip_risk_constraint": True,
-            "alpha_T": 0.01,
+            "alpha_T": 0.0,
+            "alpha_R": 0.0,
         },
     }
     with open(os.path.join(exp_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
-    group_labels = [f"({aT:.1f}, {aM:.3f})" for aT, aM in PARAM_GRID]
-    mr_costs = defaultdict(list)
-    mr_raw_risk = defaultdict(list)
-    mr_raw_time = defaultdict(list)
-    mr_R_risk = defaultdict(list)
-    mr_R_time = defaultdict(list)
-
-    mw_costs = defaultdict(list)
-    mw_raw_risk = defaultdict(list)
-    mw_raw_time = defaultdict(list)
-    mw_R_risk = defaultdict(list)
-    mw_R_time = defaultdict(list)
-
+    alpha_T_values = [item[0] for item in PARAM_GRID]
+    alpha_R_values = [item[1] for item in PARAM_GRID]
+    group_labels = [
+        f"({format_alpha_T(aT)}, {format_alpha_R(aM)})"
+        for aT, aM in PARAM_GRID
+    ]
     total = len(PARAM_GRID) * N_SCENARIOS * 2
     done = 0
 
     # CSV header
     csv_path = os.path.join(exp_dir, "experiment.csv")
-    cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "transfer_cost",
-                 "reposition_cost", "total_prep_cost", "idle_cost", "unmet_penalty"]
+    cost_cols = ["transport_cost", "transfer_cost",
+                 "reposition_cost", "unmet_penalty"]
     with open(csv_path, "w", newline="") as f:
         csv.writer(f).writerow(
-            ["group_label", "alpha_T", "alpha_max", "scenario_id",
+            ["group_label", "alpha_T", "alpha_R", "scenario_id",
              "model", "cost"] + cost_cols +
-            ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "status", "elapsed_s", "Routes"]
+            ["network_risk_reliability", "network_time_reliability", "Network_Risk", "Network_Time", "status", "elapsed_s", "Routes"]
         )
 
-    for aT, a_max in PARAM_GRID:
-        label = f"({aT:.1f}, {a_max:.3f})"
-        print(f"\n=== α_T={aT:.1f},  α_max={a_max:.3f} ===")
+    for aT, a_R in PARAM_GRID:
+        label = f"({format_alpha_T(aT)}, {format_alpha_R(a_R)})"
+        print(
+            f"\n=== α_T={format_alpha_T(aT)},  "
+            f"α_R={format_alpha_R(a_R)} ==="
+        )
 
         for s_id in range(N_SCENARIOS):
             print(f"  [Scenario {s_id+1}/{N_SCENARIOS}] ...", end=" ", flush=True)
-            seed = 1000 * int(aT * 100) + int(a_max * 1000) + s_id
+            seed = 1000 * int(aT * 100) + int(a_R * 1000) + s_id
             rng = np.random.default_rng(seed=seed)
 
             # ── One shared perturbed scenario (paired design) ────────────────
@@ -151,7 +146,7 @@ def run_out_of_sample():
             # ── MR (Model with Reliability) ─────────────────────────────────
             cfg_mr = RHMVSPConfig()
             cfg_mr.alpha_T = aT
-            cfg_mr.alpha_max = a_max
+            cfg_mr.alpha_R = a_R
             cfg_mr.time_limit = 120
             cfg_mr.solver_name = "gurobi"
 
@@ -161,18 +156,20 @@ def run_out_of_sample():
             done += 1
 
             with open(csv_path, "a", newline="") as f:
-                row = [label, aT, a_max, s_id, "MR", r_mr["cost"]]
+                row = [label, format_csv_value("alpha_T", aT), format_csv_value("alpha_R", a_R), s_id, "MR", format_csv_value("cost", r_mr["cost"])]
                 for col in cost_cols:
-                    row.append(r_mr.get(col) if r_mr["cost"] is not None else None)
-                row += [r_mr.get("R_risk"), r_mr.get("R_time"),
-                        r_mr.get("raw_risk"), r_mr.get("raw_time"),
-                        r_mr["status"], r_mr["elapsed"], r_mr.get("routes", "")]
+                    row.append(format_csv_value(col, r_mr.get(col)) if r_mr["cost"] is not None else "")
+                row += [format_csv_value("network_risk_reliability", r_mr.get("network_risk_reliability")),
+                        format_csv_value("network_time_reliability", r_mr.get("network_time_reliability")),
+                        format_csv_value("network_risk", r_mr.get("network_risk")),
+                        format_csv_value("network_time", r_mr.get("network_time")),
+                        r_mr["status"], format_csv_value("elapsed_s", r_mr["elapsed"]), r_mr.get("routes", "")]
                 csv.writer(f).writerow(row)
 
             # ── MW (Model Without reliability) ──────────────────────────────
             cfg_mw = RHMVSPConfig()
-            cfg_mw.alpha_T = 0.01        # weak threshold, reasonable mid-point estimate
-            cfg_mw.alpha_max = a_max     # keep for reference
+            cfg_mw.alpha_T = 0.0
+            cfg_mw.alpha_R = 0.0
             cfg_mw.skip_risk_constraint = True  # disable risk reliability
             cfg_mw.time_limit = 120
             cfg_mw.solver_name = "gurobi"
@@ -182,26 +179,15 @@ def run_out_of_sample():
             r_mw = _run_single(cfg_mw, scen_mw, "mw")
             done += 1
 
-            # Store aligned — NaN for failed runs
-            mr_costs[label].append(r_mr["cost"] if r_mr["cost"] is not None else float("nan"))
-            mr_raw_risk[label].append(r_mr.get("raw_risk") if r_mr.get("raw_risk") is not None else float("nan"))
-            mr_raw_time[label].append(r_mr.get("raw_time") if r_mr.get("raw_time") is not None else float("nan"))
-            mr_R_risk[label].append(r_mr.get("R_risk") if r_mr.get("R_risk") is not None else float("nan"))
-            mr_R_time[label].append(r_mr.get("R_time") if r_mr.get("R_time") is not None else float("nan"))
-
-            mw_costs[label].append(r_mw["cost"] if r_mw["cost"] is not None else float("nan"))
-            mw_raw_risk[label].append(r_mw.get("raw_risk") if r_mw.get("raw_risk") is not None else float("nan"))
-            mw_raw_time[label].append(r_mw.get("raw_time") if r_mw.get("raw_time") is not None else float("nan"))
-            mw_R_risk[label].append(r_mw.get("R_risk") if r_mw.get("R_risk") is not None else float("nan"))
-            mw_R_time[label].append(r_mw.get("R_time") if r_mw.get("R_time") is not None else float("nan"))
-
             with open(csv_path, "a", newline="") as f:
-                row = [label, aT, a_max, s_id, "MW", r_mw["cost"]]
+                row = [label, format_csv_value("alpha_T", aT), format_csv_value("alpha_R", a_R), s_id, "MW", format_csv_value("cost", r_mw["cost"])]
                 for col in cost_cols:
-                    row.append(r_mw.get(col) if r_mw["cost"] is not None else None)
-                row += [r_mw.get("R_risk"), r_mw.get("R_time"),
-                        r_mw.get("raw_risk"), r_mw.get("raw_time"),
-                        r_mw["status"], r_mw["elapsed"], r_mw.get("routes", "")]
+                    row.append(format_csv_value(col, r_mw.get(col)) if r_mw["cost"] is not None else "")
+                row += [format_csv_value("network_risk_reliability", r_mw.get("network_risk_reliability")),
+                        format_csv_value("network_time_reliability", r_mw.get("network_time_reliability")),
+                        format_csv_value("network_risk", r_mw.get("network_risk")),
+                        format_csv_value("network_time", r_mw.get("network_time")),
+                        r_mw["status"], format_csv_value("elapsed_s", r_mw["elapsed"]), r_mw.get("routes", "")]
                 csv.writer(f).writerow(row)
 
             # Progress
@@ -214,87 +200,8 @@ def run_out_of_sample():
 
     print(f"CSV saved → {csv_path}")
 
-    # ── Generate plots: primary = Total Cost violin+boxplot ─────────────────
-    from scipy.stats import wilcoxon as _wilcoxon
-
-    # Primary: Total Cost (Wang §5.6 Fig. 8 equivalent)
-    mr_cost_list = [mr_costs[l] for l in group_labels]
-    mw_cost_list = [mw_costs[l] for l in group_labels]
-
-    enhanced_boxplot(
-        group_labels=group_labels,
-        bap_costs=mr_cost_list,
-        bench_costs=mw_cost_list,
-        save_path=os.path.join(exp_dir, "oos_total_cost"),
-        y_label="Total Cost (CNY)",
-        x_label=r"$(\alpha_T,\;\alpha_{max})$",
-        model_bap_label="MR",
-        model_bench_label="MW",
-        c_bap=C_MR,
-        c_bench=C_MW,
-    )
-    print(f"  Saved oos_total_cost.png/.tiff")
-
-    # Supplementary: 4 reliability metrics
-    supp_metrics = [
-        ("raw_risk",  mr_raw_risk, mw_raw_risk,
-         r"Risk", "oos_raw_risk"),
-        ("raw_time",  mr_raw_time, mw_raw_time,
-         r"Time (h)", "oos_raw_time"),
-        ("R_risk",    mr_R_risk,   mw_R_risk,
-         r"Risk Reliability ($R_{risk}$)", "oos_R_risk"),
-        ("R_time",    mr_R_time,   mw_R_time,
-         r"Time Reliability ($R_{time}$)", "oos_R_time"),
-    ]
-
-    for metric_name, mr_data, mw_data, y_label, filename in supp_metrics:
-        mr_list = [mr_data[l] for l in group_labels]
-        mw_list = [mw_data[l] for l in group_labels]
-
-        enhanced_boxplot(
-            group_labels=group_labels,
-            bap_costs=mr_list,
-            bench_costs=mw_list,
-            save_path=os.path.join(exp_dir, filename),
-            y_label=y_label,
-            x_label=r"$(\alpha_T,\;\alpha_{max})$",
-            model_bap_label="MR",
-            model_bench_label="MW",
-            c_bap=C_MR,
-            c_bench=C_MW,
-        )
-        print(f"  Saved {filename}.png/.tiff")
-
-    # ── Summary statistics ──────────────────────────────────────────────────
-    print("\n=== Summary ===")
-    all_metrics = supp_metrics + [("total_cost", mr_costs, mw_costs,
-                                    "Total Cost (CNY)", "")]
-    for metric_name, mr_data, mw_data, y_label, _ in all_metrics:
-        print(f"\n--- {y_label} ---")
-        is_cost = metric_name == "total_cost"
-        fmt = ",.0f" if is_cost else ".4f"
-        for lbl in group_labels:
-            m = np.array(mr_data[lbl], dtype=float)
-            w = np.array(mw_data[lbl], dtype=float)
-            valid = ~(np.isnan(m) | np.isnan(w))
-            mp_arr, wp_arr = m[valid], w[valid]
-            m_med = np.nanmedian(m)
-            w_med = np.nanmedian(w)
-            cnt = len(mp_arr)
-            if cnt >= 3 and not np.all(mp_arr == wp_arr):
-                _stat, _p = _wilcoxon(mp_arr, wp_arr, alternative='two-sided')
-                if   _p < 0.001: sig = "***"
-                elif _p < 0.01:  sig = "**"
-                elif _p < 0.05:  sig = "*"
-                else:            sig = "ns"
-                print(f"  {lbl:>10s}  MR={m_med:>14{fmt}}  MW={w_med:>14{fmt}}  "
-                      f"n={cnt}  p={_p:.4f} {sig}")
-            elif cnt > 0:
-                print(f"  {lbl:>10s}  MR={m_med:>14{fmt}}  MW={w_med:>14{fmt}}  (n={cnt})")
-            else:
-                print(f"  {lbl:>10s}  No data")
-
     print(f"\nResults saved to {exp_dir}/")
+    print(f"Plot with: python sensitivity/plot_out_of_sample.py --csv {csv_path}")
     tee.close()
     sys.stdout = sys.__stdout__
     return exp_dir
@@ -306,4 +213,4 @@ if __name__ == "__main__":
     print(f"  Instance: {INSTANCE_PATH}")
     print("=" * 65)
     exp_dir = run_out_of_sample()
-    print(f"\nDone!  Open {exp_dir}/ for violin+boxplots.")
+    print(f"\nDone! Data are in {exp_dir}/experiment.csv")

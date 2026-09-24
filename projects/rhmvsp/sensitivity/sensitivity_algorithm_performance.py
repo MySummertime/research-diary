@@ -1,7 +1,7 @@
 """
 Sensitivity: Algorithm Performance Comparison (BAP vs Branch-and-Cut vs Benders Decomposition).
 
-Grid: (Instance × α_T × α_max) × (BAP vs Branch-and-Cut vs Benders Decomposition)
+Grid: (Instance × α_T × α_R) × (BAP vs Branch-and-Cut vs Benders Decomposition)
 
 For each combination:
   - Solve with BAP (full stabilization)                 → time, iter, cost
@@ -14,35 +14,32 @@ different instance sizes and parameter settings.
 import sys, os, json, time, csv, copy
 from datetime import datetime
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle as MPLRect
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import RHMVSPConfig
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver, BAPNode
+from src.utils.numeric_format import format_alpha_R, format_alpha_T
+from sensitivity.parameter_grids import ALPHA_R_ALGORITHM_LEVELS, ALPHA_T_ALGORITHM_LEVELS
 
 # ── Colour constants (used in _plot_dual_algorithm) ─────────────────────────
 
 # ── Experiment grid ─────────────────────────────────────────────────────────
-# NOTE: medium/large commented out — only small instances for current experiments
 INSTANCES = [
     # (tag, path, size_label)
     ("small_inst1", "data_performance/small/instance_1.json",  "small"),
     ("small_inst2", "data_performance/small/instance_2.json",  "small"),
-    # ("medium_inst1", "data_performance/medium/instance_1.json", "medium"),
-    # ("medium_inst2", "data_performance/medium/instance_2.json", "medium"),
-    # ("large_inst1", "data_performance/large/instance_1.json",  "large"),
-    # ("large_inst2", "data_performance/large/instance_2.json",  "large"),
+    ("medium_inst1", "data_performance/medium/instance_1.json", "medium"),
+    ("medium_inst2", "data_performance/medium/instance_2.json", "medium"),
+    ("large_inst1", "data_performance/large/instance_1.json",  "large"),
+    ("large_inst2", "data_performance/large/instance_2.json",  "large"),
 ]
 
-# Same (α_T, α_max) grid for ALL instances
-ALPHA_T_VALS   = [0.5, 0.8]
-ALPHA_MAX_VALS = [0.015, 0.03, 0.05]
+# Reliability is controlled at the main-experiment setting so that the
+# independent variables are algorithm and instance size only.
+ALPHA_T_VALS = ALPHA_T_ALGORITHM_LEVELS
+ALPHA_R_VALS = ALPHA_R_ALGORITHM_LEVELS
 TIME_LIMIT = 3600  # generous for Benders Decomposition
 
 
@@ -52,8 +49,8 @@ def _run_bap(instance, config, logger) -> dict:
     solver = BAPSolver(config, instance, logger)
     sol = solver.solve()
     elapsed = time.time() - t0
-    sol["solve_wall_time"] = elapsed
-    sol["solve_cpu_time"] = elapsed
+    sol["solve_wall_Time"] = elapsed
+    sol["solve_cpu_Time"] = elapsed
     sol["solver"] = "bap"
     return sol
 
@@ -66,8 +63,8 @@ def _run_bap_nostab(instance, config, logger) -> dict:
     solver = BAPSolver(cfg, instance, logger)
     sol = solver.solve()
     elapsed = time.time() - t0
-    sol["solve_wall_time"] = elapsed
-    sol["solve_cpu_time"] = elapsed
+    sol["solve_wall_Time"] = elapsed
+    sol["solve_cpu_Time"] = elapsed
     sol["solver"] = "branch_and_cut"
     return sol
 
@@ -184,10 +181,10 @@ def _run_benders(instance, config, logger) -> dict:
 
     # ── 4. Augment with timing info ────────────────────────────────────────
     total_time = time.time() - solve_t0
-    sol["solve_wall_time"] = total_time
-    sol["solve_cpu_time"] = total_time
-    sol["enumeration_time"] = enum_time
-    sol["mip_solve_time"] = mip_time
+    sol["solve_wall_Time"] = total_time
+    sol["solve_cpu_Time"] = total_time
+    sol["enumeration_Time"] = enum_time
+    sol["mip_solve_Time"] = mip_time
     sol["solver"] = "benders"
     sol.setdefault("gap_pct", 0.0)
     sol.setdefault("iterations", 1)
@@ -202,13 +199,13 @@ def _extract_metrics(sol: dict, solver_tag: str) -> dict:
     return {
         "solver": solver_tag,
         "status": sol.get("status", "unknown"),
-        "time": sol.get("solve_wall_time", 0.0),
+        "time": sol.get("solve_wall_Time", 0.0),
         "iter": sol.get("iterations", 0),
         "cost": sol.get("total_cost") if ok else None,
-        "R_risk": sol.get("R_net_risk") if ok else None,
-        "R_time": sol.get("R_net_time") if ok else None,
-        "raw_risk": sol.get("raw_net_risk", 0.0) if ok else None,
-        "raw_time": sol.get("raw_net_time", 0.0) if ok else None,
+        "network_risk_reliability": sol.get("network_risk_reliability") if ok else None,
+        "network_time_reliability": sol.get("network_time_reliability") if ok else None,
+        "network_risk": sol.get("network_risk", 0.0) if ok else None,
+        "network_time": sol.get("network_time", 0.0) if ok else None,
     }
 
 
@@ -216,7 +213,7 @@ def _extract_metrics(sol: dict, solver_tag: str) -> dict:
 
 
 def run_algorithm_performance():
-    """Main experiment: BAP vs Compact MIP across (Scale × α_T × α_max)."""
+    """Main experiment: BAP vs Compact MIP across (Scale × α_T × α_R)."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     exp_dir = os.path.join("results", f"alg_perf_{timestamp}")
     os.makedirs(exp_dir, exist_ok=True)
@@ -230,7 +227,7 @@ def run_algorithm_performance():
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow([
-            "Instance", "Instance_Size", "alpha_T", "alpha_max",
+            "Instance", "Instance_Size", "alpha_T", "alpha_R",
             "BAP_Time", "BAP_Iter", "BAP_Cost", "BAP_Status",
             "BnC_Time", "BnC_Iter", "BnC_Cost", "BnC_Status",
             "BD_Time", "BD_Iter", "BD_Cost", "BD_Status",
@@ -246,7 +243,7 @@ def run_algorithm_performance():
     bap_iters, bd_iters, bnc_iters = [], [], []
     gap_times_ns = []
 
-    total = len(INSTANCES) * len(ALPHA_T_VALS) * len(ALPHA_MAX_VALS)
+    total = len(INSTANCES) * len(ALPHA_T_VALS) * len(ALPHA_R_VALS)
     done = 0
 
     for inst_tag, instance_path, inst_size in INSTANCES:
@@ -258,16 +255,16 @@ def run_algorithm_performance():
             base_instance = json.load(f)
 
         for aT in ALPHA_T_VALS:
-            for a_max in ALPHA_MAX_VALS:
+            for a_R in ALPHA_R_VALS:
                 done += 1
-                label = f"{inst_tag} (α_T={aT}, α_max={a_max})"
+                label = f"{inst_tag} (α_T={aT}, α_R={a_R})"
                 x_labels.append(label)
                 print(f"\n[{done}/{total}] {label}")
 
                 cfg = RHMVSPConfig()
                 cfg.alpha_T = aT
-                cfg.alpha_max = a_max
-                cfg.time_limit = 120
+                cfg.alpha_R = a_R
+                cfg.time_limit = TIME_LIMIT
                 cfg.solver_name = "gurobi"
 
                 inst = json.loads(json.dumps(base_instance))
@@ -286,16 +283,9 @@ def run_algorithm_performance():
                 m_bnc = _extract_metrics(sol_bnc, "branch_and_cut")
                 from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol_bnc, inst, f"BnC {label}")
 
-                # ── Run Benders Decomposition (only for small_inst1) ────
-                run_bd = (inst_tag == "small_inst1")
-                if run_bd:
-                    print("  Solving with Benders Decomposition...")
-                    sol_bd = _run_benders(inst, cfg, logger)
-                else:
-                    print("  Skipping Benders Decomposition (small_inst1 only)...")
-                    sol_bd = {"status": "skipped", "total_cost": None,
-                            "solve_wall_time": 0.0, "iterations": 0,
-                            "enumeration_time": 0.0, "mip_solve_time": 0.0}
+                # ── Run Benders Decomposition ───────────────────────────
+                print("  Solving with Benders Decomposition...")
+                sol_bd = _run_benders(inst, cfg, logger)
                 m_bd = _extract_metrics(sol_bd, "benders")
 
                 # ── Compute gaps ────────────────────────────────────────
@@ -333,13 +323,13 @@ def run_algorithm_performance():
                 bnc_routes = format_routing_summary(sol_bnc, inst)
                 bd_routes  = format_routing_summary(sol_bd, inst)
                 row = [
-                    inst_tag, inst_size, aT, a_max,
+                    inst_tag, inst_size, aT, a_R,
                     f"{m_bap['time']:.2f}", str(m_bap["iter"]),
-                    _fmt(m_bap["cost"], ",.0f"), m_bap["status"],
+                    _fmt(m_bap["cost"], ",.2f"), m_bap["status"],
                     f"{m_bnc['time']:.2f}", str(m_bnc["iter"]),
-                    _fmt(m_bnc["cost"], ",.0f"), m_bnc["status"],
+                    _fmt(m_bnc["cost"], ",.2f"), m_bnc["status"],
                     f"{m_bd['time']:.2f}", str(m_bd["iter"]),
-                    _fmt(m_bd["cost"], ",.0f"), m_bd["status"],
+                    _fmt(m_bd["cost"], ",.2f"), m_bd["status"],
                     f"{sol_bd.get('enumeration_time', 0):.2f}",
                     f"{sol_bd.get('mip_solve_time', 0):.2f}",
                     _fmt(gap_t_bnc, ".2f"),
@@ -350,9 +340,9 @@ def run_algorithm_performance():
                 ]
                 rows.append(row)
 
-                bap_s = f"¥{m_bap['cost']:,.0f}" if m_bap["cost"] else m_bap["status"]
-                bnc_s = f"¥{m_bnc['cost']:,.0f}" if m_bnc["cost"] else m_bnc["status"]
-                bd_s  = f"¥{m_bd['cost']:,.0f}" if m_bd["cost"] else m_bd["status"]
+                bap_s = f"¥{m_bap['cost']:,.2f}" if m_bap["cost"] else m_bap["status"]
+                bnc_s = f"¥{m_bnc['cost']:,.2f}" if m_bnc["cost"] else m_bnc["status"]
+                bd_s  = f"¥{m_bd['cost']:,.2f}" if m_bd["cost"] else m_bd["status"]
                 print(f"  BAP:     Time={m_bap['time']:.1f}s  Iter={m_bap['iter']}  Cost={bap_s}")
                 print(f"  BnC:     Time={m_bnc['time']:.1f}s  Iter={m_bnc['iter']}  Cost={bnc_s}")
                 print(f"  BD:     Time={m_bd['time']:.1f}s  Iter={m_bd['iter']}  Cost={bd_s}")
@@ -368,24 +358,20 @@ def run_algorithm_performance():
         csv.writer(f).writerows(rows)
     print(f"CSV saved \u2192 {csv_path}")
 
-    # ── Plotting ─────────────────────────────────────────────────────────────
-    from sensitivity.plot_algorithm_performance import plot_radar
-    
-    print("\nGenerating plots from CSV...")
-    plot_radar(csv_path, exp_dir)
+    print(f"\nPlot with: python sensitivity/plot_algorithm_performance.py --csv {csv_path}")
 
     # ── Summary table (Wang-style) ──────────────────────────────────────────
     print("\n" + "=" * 90)
     print("ALGORITHM PERFORMANCE: BAP vs Branch-and-Cut vs Benders Decomposition")
     print(f"Results: {exp_dir}/")
     print("=" * 90)
-    hdr = (f"{'Inst':>8s} {'α_T':>5s} {'α_max':>7s} "
+    hdr = (f"{'Inst':>8s} {'α_T':>5s} {'α_R':>7s} "
            f"{'BAP_T':>7s} {'BnC_T':>7s} {'BD_T':>8s} "
            f"{'G_BnC%':>7s} {'G_BD%':>7s}")
     print(hdr)
     print("-" * 70)
     for row in rows:
-        print(f"{row[0]:>8s} {row[2]:>5.1f} {row[3]:>7.3f} "
+        print(f"{row[0]:>8s} {format_alpha_T(row[2]):>8s} {format_alpha_R(row[3]):>10s} "
               f"{row[4]:>7s} {row[8]:>7s} {row[12]:>8s} "
               f"{row[17]:>7s} {row[19]:>7s}")
 

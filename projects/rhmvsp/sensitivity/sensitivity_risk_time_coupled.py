@@ -1,116 +1,34 @@
 """
-Sensitivity Analysis: α_max × α_T Coupled Experiment.
+Sensitivity Analysis: α_R × α_T Coupled Experiment.
 
-Systematically vary both risk reliability limit (α_max) and time reliability
+Systematically vary both risk reliability limit (α_R) and time reliability
 threshold (α_T) jointly to explore the coupled trade-off surface between:
   - Total logistics cost
   - Network risk reliability  (R_risk)
   - Network time reliability  (R_time)
 
-α_max controls the arc accident belief threshold (risk constraint).
+α_R controls the arc accident belief threshold (risk constraint).
 α_T controls the time reliability threshold (time constraint).
 Both are hard constraints in the pricing problem; tightening either reduces
 the feasible route set and increases cost.
 
 Produce:
   1. A CSV table  summarising every grid point (Cost, R_risk, R_time, Gap_pct)
-  2. Three bubble heatmaps: Cost, R_risk, R_time over the (α_max, α_T) grid
+  2. Three bubble heatmaps: Cost, R_risk, R_time over the (α_R, α_T) grid
 """
 import sys, os, json, csv
 from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import numpy as np
-from matplotlib.colors import LinearSegmentedColormap, PowerNorm
-
 from config import RHMVSPConfig
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
 from src.utils.logging import Logger
-from sensitivity.plot_helpers import set_style
+from src.utils.numeric_format import format_alpha_R, format_alpha_T, format_csv_value
+from sensitivity.parameter_grids import ALPHA_R_SCAN, ALPHA_T_SCAN
 
 # ---- Experiment grids ----
-ALPHA_T_VALS    = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.8]
-ALPHA_MAX_VALS  = [0.945, 0.950, 0.955, 0.960, 0.965, 0.970, 0.975, 0.980, 0.985]
-
-# Heatmap palette extracted from docs/colour set3.txt.
-# Ordered from low to high values to match the reference colour bar.
-SET3_HEATMAP_COLOURS = [
-    '#19171A',  # Near Black
-    '#455073',  # Deep Slate Blue
-    '#B6E1ED',  # Light Cyan
-    '#F1DDB2',  # Pale Beige
-    '#F2BB77',  # Warm Orange
-]
-
-# Values below 1 expand colour differences near the lower and middle part of
-# the range, making neighbouring values easier to distinguish visually.
-HEATMAP_CONTRAST_GAMMA = 0.55
-
-
-def _set3_heatmap_cmap():
-    """Return the continuous five-colour map used by these heatmaps."""
-    return LinearSegmentedColormap.from_list(
-        'set3_heatmap', SET3_HEATMAP_COLOURS, N=256
-    )
-
-
-def _plot_heatmap(alpha_t_vals, alpha_max_vals, matrix, metric_name,
-                  fmt_func=None, save_path=None):
-    """Render a 2-D bubble scatter chart using the set3 colourmap."""
-    fmt = fmt_func if fmt_func else lambda v: f'{v:.2f}'
-
-    xlabels = [f'{v:.3f}' for v in alpha_max_vals]
-    ylabels = [f'{v:.2f}' for v in alpha_t_vals]
-
-    set_style()
-    cmap = _set3_heatmap_cmap()
-    fig, ax = plt.subplots(figsize=(max(6, len(xlabels) * 0.9),
-                                    max(4, len(ylabels) * 0.6)))
-
-    vmin = np.nanmin(matrix)
-    vmax = np.nanmax(matrix)
-    if vmin == vmax:
-        vmax = vmin + 1e-9
-    norm = PowerNorm(gamma=HEATMAP_CONTRAST_GAMMA, vmin=vmin, vmax=vmax)
-
-    # Marker area in points².  420 remains below the horizontal and vertical
-    # grid spacing for the current figure sizing, so neighbouring bubbles do
-    # not overlap while appearing more prominent than the previous size.
-    bubble_size = 420
-
-    for i in range(len(ylabels)):
-        for j in range(len(xlabels)):
-            val = matrix[i, j]
-            if np.isfinite(val):
-                ax.scatter(j, i, s=bubble_size, c=[cmap(norm(val))],
-                           edgecolors='none', zorder=2)
-
-    ax.set_xticks(np.arange(len(xlabels)))
-    ax.set_xticklabels(xlabels, fontsize=10)
-    ax.set_yticks(np.arange(len(ylabels)))
-    ax.set_yticklabels(ylabels, fontsize=10)
-    ax.set_xlabel(r'$\alpha_{max}$ (Risk Reliability Threshold)', fontsize=13)
-    ax.set_ylabel(r'$\alpha_T$ (Time Reliability Threshold)', fontsize=13)
-    ax.set_xlim(-0.5, len(xlabels) - 0.5)
-    ax.set_ylim(-0.5, len(ylabels) - 0.5)
-    ax.tick_params(direction='in')
-
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, shrink=0.85, pad=0.02)
-    cbar.set_label(metric_name, fontsize=12)
-    cbar.ax.tick_params(labelsize=10)
-
-    plt.tight_layout()
-    if save_path:
-        for ext in ["png", "tiff"]:
-            fig.savefig(f"{save_path}.{ext}", dpi=600, bbox_inches='tight', format=ext)
-    plt.close(fig)
-    print(f"  Heatmap [{metric_name}] saved → {save_path}.png / .tiff")
-
+ALPHA_T_VALS = ALPHA_T_SCAN
+ALPHA_R_VALS = ALPHA_R_SCAN
 
 # ======================================================================
 #                       MAIN EXPERIMENT
@@ -118,7 +36,7 @@ def _plot_heatmap(alpha_t_vals, alpha_max_vals, matrix, metric_name,
 def run_risk_time_coupled(instance_path="data_real_case/instance.json",
                           time_limit=3600,
                           output_root="results"):
-    """Run the α_max × α_T coupled experiment."""
+    """Run the α_R × α_T coupled experiment."""
     with open(instance_path) as f:
         instance = json.load(f)
 
@@ -148,19 +66,23 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
     bench_logger.info("Benchmark: constant model (no time-varying risk)")
 
     bench_cost = bench_rrisk = bench_rtime = None
-    bench_raw_risk = bench_raw_time = None
+    bench_network_risk = bench_network_time = None
     try:
         solver_bench = BAPSolver(cfg_bench, inst_bench, bench_logger)
         sol_bench = solver_bench.solve()
         if sol_bench and sol_bench.get("status") != "infeasible":
             bench_cost  = sol_bench.get("total_cost", 0)
-            bench_rrisk = sol_bench.get("R_net_risk", 0)
-            bench_rtime = sol_bench.get("R_net_time", 0)
-            bench_raw_risk = sol_bench.get("raw_net_risk", 0.0)
-            bench_raw_time = sol_bench.get("raw_net_time", 0.0)
-            bench_logger.info(f"  Benchmark Cost={bench_cost:,.0f}  R_risk={bench_rrisk:.4f}"
-                              f"  R_time={bench_rtime:.4f}  RawRisk={bench_raw_risk:.2f}"
-                              f"  RawTime={bench_raw_time:.2f}h")
+            bench_rrisk = sol_bench.get("network_risk_reliability", 0)
+            bench_rtime = sol_bench.get("network_time_reliability", 0)
+            bench_network_risk = sol_bench.get("network_risk", 0.0)
+            bench_network_time = sol_bench.get("network_time", 0.0)
+            bench_logger.info(
+                f"  Benchmark Cost={bench_cost:,.2f}  "
+                f"R_risk={format_csv_value('risk_reliability', bench_rrisk)}  "
+                f"R_time={format_csv_value('time_reliability', bench_rtime)}  "
+                f"NetworkRisk={format_csv_value('network_risk', bench_network_risk)}  "
+                f"NetworkTime={format_csv_value('network_time', bench_network_time)}h"
+            )
             with open(os.path.join(bench_sub, "solution.json"), "w") as sf:
                 json.dump(sol_bench, sf, indent=2, default=str)
         else:
@@ -171,33 +93,35 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
         bench_logger.error(traceback.format_exc())
 
     print(f"Benchmark: Cost={bench_cost}  R_risk={bench_rrisk}  R_time={bench_rtime}"
-          f"  RawRisk={bench_raw_risk if bench_raw_risk is not None else 'N/A'}"
-          f"  RawTime={bench_raw_time if bench_raw_time is not None else 'N/A'}")
+          f"  NetworkRisk={bench_network_risk if bench_network_risk is not None else 'N/A'}"
+          f"  NetworkTime={bench_network_time if bench_network_time is not None else 'N/A'}")
 
     csv_path = os.path.join(exp_dir, "summary_coupled.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        cost_cols = ["deploy_cost","hub_cost","transport_cost","transfer_cost",
-                     "reposition_cost","total_prep_cost","idle_cost","unmet_penalty"]
-        w.writerow(["alpha_max", "alpha_T", "status",
+        cost_cols = ["transport_cost","transfer_cost",
+                     "reposition_cost","unmet_penalty"]
+        w.writerow(["alpha_R", "alpha_T", "status",
                      "cost"] + cost_cols +
-                    ["R_risk", "R_time", "Raw_Risk", "Raw_Time", "Gap_pct", "iterations",
+                    ["network_risk_reliability", "network_time_reliability", "Network_Risk", "Network_Time", "Gap_pct", "iterations",
                      "cost_bench", "R_risk_bench", "R_time_bench",
-                     "Raw_Risk_bench", "Raw_Time_bench",
+                     "Network_Risk_bench", "Network_Time_bench",
                      "Cost_Gap%", "R_risk_Gap%", "R_time_Gap%",
                      "Routes"])
 
     results = []
-    n = len(ALPHA_MAX_VALS) * len(ALPHA_T_VALS)
+    n = len(ALPHA_R_VALS) * len(ALPHA_T_VALS)
     idx = 0
-    for a_max in ALPHA_MAX_VALS:
+    for a_R in ALPHA_R_VALS:
         for aT in ALPHA_T_VALS:
             idx += 1
-            print(f"[{idx}/{n}]  α_max={a_max:.3f}  α_T={aT:.2f} ... ", end="", flush=True)
+            a_R_text = format_alpha_R(a_R)
+            aT_text = format_alpha_T(aT)
+            print(f"[{idx}/{n}]  α_R={a_R_text}  α_T={aT_text} ... ", end="", flush=True)
 
             cfg = RHMVSPConfig()
             cfg.alpha_T = aT          # sweep variable
-            cfg.alpha_max = 1.0 - a_max
+            cfg.alpha_R = a_R
             if time_limit:
                 cfg.time_limit = time_limit
             cfg.solver_name = "gurobi"
@@ -206,16 +130,16 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
             for od in inst.get("od_pairs", []):
                 od["alpha_T_od"] = cfg.alpha_T
 
-            sub = os.path.join(exp_dir, f"aMax={a_max:.3f}_aT={aT:.2f}")
+            sub = os.path.join(exp_dir, f"aR={a_R_text}_aT={aT_text}")
             os.makedirs(sub, exist_ok=True)
             logger = Logger(level="INFO", log_file=None)
 
-            rec: dict = {"aT": aT, "a_max": a_max}
+            rec: dict = {"aT": aT, "a_R": a_R}
 
             try:
                 solver = BAPSolver(cfg, inst, logger)
                 sol = solver.solve()
-                from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol, inst, f"aMax={a_max}_aT={aT}")
+                from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol, inst, f"aR={a_R}_aT={aT}")
                 routes_str = format_routing_summary(sol, inst)
 
                 if sol and sol.get("status") != "infeasible":
@@ -223,26 +147,27 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
                     rec.update({
                         "status": sol.get("status", "optimal"),
                         "cost": sol.get("total_cost", 0),
-                        "deploy_cost": sol.get("deploy_cost", 0),
-                        "hub_cost": sol.get("hub_cost", 0),
                         "transport_cost": sol.get("transport_cost", 0),
                         "transfer_cost": sol.get("transfer_cost", 0),
                         "reposition_cost": sol.get("reposition_cost", 0),
-                        "total_prep_cost": sol.get("total_prep_cost", 0),
-                        "idle_cost": sol.get("idle_cost", 0),
                         "unmet_penalty": sol.get("unmet_penalty", 0),
-                        "R_risk": sol.get("R_net_risk", 0),
-                        "R_time": sol.get("R_net_time", 0),
-                        "raw_risk": sol.get("raw_net_risk", 0.0),
-                        "raw_time": sol.get("raw_net_time", 0.0),
+                        "network_risk_reliability": sol.get("network_risk_reliability", 0),
+                        "network_time_reliability": sol.get("network_time_reliability", 0),
+                        "network_risk": sol.get("network_risk", 0.0),
+                        "network_time": sol.get("network_time", 0.0),
                         "gap_pct": sol.get("gap_pct", 0.0),
                         "iterations": sol.get("iterations", 0),
                     })
                     with open(os.path.join(sub, "solution.json"), "w") as sf:
                         json.dump(sol, sf, indent=2, default=str)
-                    print(f"Cost={rec['cost']:,.0f}  R_risk={rec['R_risk']:.4f}"
-                          f"  R_time={rec['R_time']:.4f}  RawRisk={rec['raw_risk']:.2f}"
-                          f"  RawTime={rec['raw_time']:.2f}h  Gap={rec['gap_pct']:.4f}%")  # noqa: E501
+                    print(
+                        f"Cost={rec['cost']:,.2f}  "
+                        f"R_risk={format_csv_value('risk_reliability', rec['network_risk_reliability'])}  "
+                        f"R_time={format_csv_value('time_reliability', rec['network_time_reliability'])}  "
+                        f"NetworkRisk={format_csv_value('network_risk', rec['network_risk'])}  "
+                        f"NetworkTime={format_csv_value('network_time', rec['network_time'])}h  "
+                        f"Gap={format_csv_value('gap_pct', rec['gap_pct'])}%"
+                    )
                 else:
                     rec["status"] = "infeasible"
                     print("INFEASIBLE")
@@ -258,8 +183,8 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
                 w = csv.writer(f)
                 ok = rec.get("status") not in ("infeasible", "error")
                 rc = rec.get("cost", 0)   if ok else 0.0
-                rr = rec.get("R_risk", 0) if ok else 0.0
-                rt = rec.get("R_time", 0) if ok else 0.0
+                rr = rec.get("network_risk_reliability", 0) if ok else 0.0
+                rt = rec.get("network_time_reliability", 0) if ok else 0.0
 
                 if ok and bench_cost and bench_cost > 0:
                     cost_g  = f"{(rc - bench_cost)  / bench_cost  * 100:+.2f}"
@@ -268,25 +193,25 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
                 else:
                     cost_g = rr_g = rt_g = ""
 
-                row = [f"{a_max:.3f}", f"{aT:.2f}",
+                row = [a_R_text, aT_text,
                     rec.get("status", "?"),
-                    f"{rc:.0f}"  if ok else ""]
+                    f"{rc:.2f}"  if ok else ""]
                 for col in cost_cols:
-                    row.append(f"{rec.get(col, 0):.0f}" if ok else "")
-                raw_r = rec.get("raw_risk", 0) if ok else 0.0
-                raw_t = rec.get("raw_time", 0) if ok else 0.0
+                    row.append(f"{rec.get(col, 0):.2f}" if ok else "")
+                raw_r = rec.get("network_risk", 0) if ok else 0.0
+                raw_t = rec.get("network_time", 0) if ok else 0.0
                 row += [
-                    f"{rr:.4f}"  if ok else "",
-                    f"{rt:.4f}"  if ok else "",
-                    f"{raw_r:.4f}"  if ok else "",
-                    f"{raw_t:.4f}"  if ok else "",
-                    f"{rec.get('gap_pct', 0):.4f}" if ok else "",
+                    format_csv_value("risk_reliability", rr) if ok else "",
+                    format_csv_value("time_reliability", rt) if ok else "",
+                    format_csv_value("network_risk", raw_r) if ok else "",
+                    format_csv_value("network_time", raw_t) if ok else "",
+                    format_csv_value("gap_pct", rec.get("gap_pct", 0)) if ok else "",
                     rec.get("iterations", "") if ok else "",
-                    f"{bench_cost:.0f}"  if bench_cost  else "",
-                    f"{bench_rrisk:.4f}" if bench_rrisk else "",
-                    f"{bench_rtime:.4f}" if bench_rtime else "",
-                    f"{bench_raw_risk:.4f}" if bench_raw_risk else "",
-                    f"{bench_raw_time:.4f}" if bench_raw_time else "",
+                    f"{bench_cost:.2f}"  if bench_cost  else "",
+                    format_csv_value("risk_reliability", bench_rrisk) if bench_rrisk else "",
+                    format_csv_value("time_reliability", bench_rtime) if bench_rtime else "",
+                    format_csv_value("network_risk", bench_network_risk) if bench_network_risk else "",
+                    format_csv_value("network_time", bench_network_time) if bench_network_time else "",
                     cost_g, rr_g, rt_g,
                     rec.get("routes", ""),
                 ]
@@ -294,49 +219,8 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
 
     print(f"\nCSV saved → {csv_path}")
 
-    # ========== Build matrices & heatmaps ==========
-    cost_matrix  = np.full((len(ALPHA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
-    r_risk_matrix = np.full((len(ALPHA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
-    r_time_matrix = np.full((len(ALPHA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
-    raw_risk_matrix = np.full((len(ALPHA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
-    raw_time_matrix = np.full((len(ALPHA_T_VALS), len(ALPHA_MAX_VALS)), np.nan)
-
-    for r in results:
-        if r.get("status") not in ("infeasible", "error"):
-            i = ALPHA_T_VALS.index(r["aT"])
-            j = ALPHA_MAX_VALS.index(r["a_max"])
-            cost_matrix[i, j] = r.get("cost", 0)
-            r_risk_matrix[i, j] = r.get("R_risk", 0)
-            r_time_matrix[i, j] = r.get("R_time", 0)
-            raw_risk_matrix[i, j] = r.get("raw_risk", 0)
-            raw_time_matrix[i, j] = r.get("raw_time", 0)
-
-    _plot_heatmap(ALPHA_T_VALS, ALPHA_MAX_VALS, cost_matrix,
-                  "Total Cost (CNY)",
-                  fmt_func=lambda v: f'{v/1000:.0f}k' if v >= 1000 else f'{v:.0f}',
-                  save_path=os.path.join(exp_dir, "heatmap_cost"))
-
-    _plot_heatmap(ALPHA_T_VALS, ALPHA_MAX_VALS, r_risk_matrix,
-                  r"Risk Reliability ($R_{risk}$)",
-                  fmt_func=lambda v: f'{v:.3f}',
-                  save_path=os.path.join(exp_dir, "heatmap_R_risk"))
-
-    _plot_heatmap(ALPHA_T_VALS, ALPHA_MAX_VALS, r_time_matrix,
-                  r"Time Reliability ($R_{time}$)",
-                  fmt_func=lambda v: f'{v:.3f}',
-                  save_path=os.path.join(exp_dir, "heatmap_R_time"))
-
-    _plot_heatmap(ALPHA_T_VALS, ALPHA_MAX_VALS, raw_risk_matrix,
-                  "Risk",
-                  fmt_func=lambda v: f'{v:.1f}',
-                  save_path=os.path.join(exp_dir, "heatmap_raw_risk"))
-
-    _plot_heatmap(ALPHA_T_VALS, ALPHA_MAX_VALS, raw_time_matrix,
-                  "Time (h)",
-                  fmt_func=lambda v: f'{v:.1f}',
-                  save_path=os.path.join(exp_dir, "heatmap_raw_time"))
-
     print(f"\nAll outputs saved in: {exp_dir}")
+    print(f"Plot with: python sensitivity/plot_risk_time_coupled.py --csv {csv_path}")
     tee.close()
     sys.stdout = sys.__stdout__
     return results
@@ -345,7 +229,7 @@ def run_risk_time_coupled(instance_path="data_real_case/instance.json",
 if __name__ == "__main__":
     print("=" * 60)
     print("RISK–TIME COUPLED SENSITIVITY ANALYSIS")
-    print("α_max × α_T  →  Cost / R_risk / R_time Bubble Heatmaps")
+    print("α_R × α_T  →  Cost / R_risk / R_time Bubble Heatmaps")
     print("=" * 60)
     run_risk_time_coupled(time_limit=3600)
     print("Done.")

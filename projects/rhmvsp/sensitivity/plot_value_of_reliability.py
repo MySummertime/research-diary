@@ -1,9 +1,10 @@
 """
 Standalone plotting script for Value of Reliability experiment.
 
-Reads an existing value_of_reliability.csv and generates:
-  1. A 3-panel grouped bar chart: MR vs MW for Cost, Raw Risk, Raw Time
-  2. A lollipop gap chart: stem + circle markers, size = |gap|, color = sign
+Reads an existing value_of_reliability.csv and generates three independent
+horizontal dumbbell plots comparing MR and MW for cost, risk, and time.
+Each connecting line is annotated with the percentage difference of MR
+relative to MW.
 
 Usage:
     conda run -n rhmvsp python sensitivity/plot_value_of_reliability.py
@@ -33,6 +34,14 @@ def _parse_cost(val: str):
     if val is None or val.strip().upper() == "N/A":
         return None
     return float(val.replace(",", ""))
+
+
+def _float_column(row: dict, *names: str) -> float:
+    for name in names:
+        value = row.get(name)
+        if value not in (None, ""):
+            return float(value)
+    raise KeyError(f"Missing any of columns: {', '.join(names)}")
 
 
 def plot_from_csv(csv_path: str, output_dir: str = None):
@@ -65,146 +74,113 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
 
     # ── Parse ────────────────────────────────────────────────────────────
     x_labels = [
-        f"({r['alpha_T'].strip()}, {r['alpha_max'].strip()})" for r in rows
+        f"({r['alpha_T'].strip()}, {r['alpha_R'].strip()})"
+        for r in rows
     ]
-    x_idx = np.arange(len(x_labels))
-
     mr_costs   = [_parse_cost(r["MR_Cost"]) or 0 for r in rows]
     mw_costs   = [_parse_cost(r["MW_Cost"]) or 0 for r in rows]
-    mr_raw_risk = [float(r["MR_RawRisk"]) for r in rows]
-    mw_raw_risk = [float(r["MW_RawRisk"]) for r in rows]
-    mr_raw_time = [float(r["MR_RawTime"]) for r in rows]
-    mw_raw_time = [float(r["MW_RawTime"]) for r in rows]
+    mr_network_risk = [_float_column(r, "MR_NetworkRisk", "MR_RawRisk") for r in rows]
+    mw_network_risk = [_float_column(r, "MW_NetworkRisk", "MW_RawRisk") for r in rows]
+    mr_network_time = [_float_column(r, "MR_NetworkTime", "MR_RawTime") for r in rows]
+    mw_network_time = [_float_column(r, "MW_NetworkTime", "MW_RawTime") for r in rows]
 
-    # Recompute gaps from raw data (MR = baseline), regardless of CSV column
+    # Every metric uses MW as denominator and MR-MW for the sign.
     def _gap(mr, mw):
-        if mr is not None and mw is not None and mr != 0:
-            return (mw - mr) / abs(mr) * 100
+        if mr is not None and mw is not None and mw != 0:
+            return (mr - mw) / abs(mw) * 100
         return 0.0
-    gap_cost     = [_gap(mr_costs[i], mw_costs[i]) for i in range(len(x_labels))]
-    gap_raw_risk = [_gap(mr_raw_risk[i], mw_raw_risk[i]) for i in range(len(x_labels))]
-    gap_raw_time = [_gap(mr_raw_time[i], mw_raw_time[i]) for i in range(len(x_labels))]
-    gap_r_risk   = [_gap(float(r["MR_R_risk"] or 0), float(r["MW_R_risk"] or 0)) for r in rows]
-    gap_r_time   = [_gap(float(r["MR_R_time"] or 0), float(r["MW_R_time"] or 0)) for r in rows]
-
-    # ── Plot 1: 3-panel grouped bar (Cost, RawRisk, RawTime) ────────────
-    set_style()
-    bar_width = 0.3
-
-    fig, axes = plt.subplots(3, 1, figsize=(8, 10),
-                              gridspec_kw={'hspace': 0.45},
-                              constrained_layout=True)
-
-    panels = [
-        (mr_costs,  mw_costs,  "Total Cost (CNY)"),
-        (mr_raw_risk, mw_raw_risk,  r"Risk"),
-        (mr_raw_time, mw_raw_time,  r"Time"),
+    gap_cost = [_gap(mr_costs[i], mw_costs[i]) for i in range(len(x_labels))]
+    gap_network_risk = [
+        _gap(mr_network_risk[i], mw_network_risk[i])
+        for i in range(len(x_labels))
     ]
+    gap_network_time = [
+        _gap(mr_network_time[i], mw_network_time[i])
+        for i in range(len(x_labels))
+    ]
+    # ── Three independent horizontal dumbbell plots ─────────────────────
+    def _dumbbell(mr_data, mw_data, gaps, x_label, filename, scientific=False):
+        """Compare MR designs with one shared no-reliability MW baseline."""
+        set_style()
+        mr = np.asarray(mr_data, dtype=float)
+        mw = np.asarray(mw_data, dtype=float)
+        y_pos = np.arange(len(x_labels))
 
-    for idx, (mr_data, mw_data, ylabel) in enumerate(panels):
-        ax = axes[idx]
-        ax.bar(x_idx - bar_width / 2, mr_data, width=bar_width,
-               color=C_MR, alpha=0.8, label="MR")
-        ax.bar(x_idx + bar_width / 2, mw_data, width=bar_width,
-               color=C_MW, alpha=0.8, label="MW")
-        ax.set_xticks(x_idx)
-        ax.set_xticklabels(x_labels if idx == 2 else [], fontsize=9)
-        ax.set_ylabel(ylabel, fontsize=12)
-        ax.tick_params(axis='y', direction='in', labelsize=10)
-        ax.yaxis.grid(True, linestyle='--', color='gray', alpha=0.4)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.legend(frameon=False, fontsize=10, loc='lower center',
+        mw_baseline = float(mw[0])
+        if not np.allclose(mw, mw_baseline, rtol=1e-9, atol=1e-12):
+            raise ValueError(
+                f"MW must be a common baseline for {filename}; observed values: {mw.tolist()}"
+            )
+
+        fig, ax = plt.subplots(figsize=(7.4, 4.8))
+
+        ax.axvline(mw_baseline, color=C_MW, linestyle="--", linewidth=1.5,
+                   label="MW", zorder=1)
+        for y, mr_value, gap in zip(y_pos, mr, gaps):
+            ax.plot([mr_value, mw_baseline], [y, y], color="#8A8A8A",
+                    linewidth=1.25, zorder=2)
+            ax.text(
+                (mr_value + mw_baseline) / 2.0, y - 0.16, f"{gap:+.2f}%",
+                ha="center", va="bottom", fontsize=8.5,
+                color="#4A4A4A", zorder=4,
+            )
+        ax.scatter(mr, y_pos, color=C_MR, marker="o", s=52,
+                   edgecolor="white", linewidth=0.6, label="MR", zorder=3)
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(x_labels, fontsize=10)
+        ax.set_ylim(len(x_labels) - 0.5, -0.5)
+        ax.set_ylabel(r"$(\alpha_T,\;\alpha_R)$", fontsize=13)
+        ax.set_xlabel(x_label, fontsize=13)
+        ax.tick_params(axis="both", direction="in", labelsize=10)
+        ax.xaxis.grid(True, linestyle="--", color="gray", alpha=0.35)
+        ax.set_axisbelow(True)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.legend(frameon=False, fontsize=10, loc="lower center",
                   bbox_to_anchor=(0.5, 1.02), ncol=2)
 
-    axes[2].set_xlabel(r"($\alpha_T$, $\alpha_{max}$)", fontsize=12)
+        # Tight range that preserves the absolute scale while exposing pairs.
+        bounds = np.concatenate([mr, mw])
+        span = float(bounds.max() - bounds.min())
+        margin = span * 0.12 if span > 0 else max(abs(float(bounds[0])) * 0.05, 1.0)
+        ax.set_xlim(float(bounds.min() - margin), float(bounds.max() + margin))
+        if scientific:
+            ax.ticklabel_format(axis="x", style="sci", scilimits=(0, 0),
+                                useMathText=False)
 
-    base_name = os.path.join(output_dir, "value_of_reliability")
-    for ext in ["png", "tiff"]:
-        fig.savefig(f"{base_name}.{ext}", dpi=600, bbox_inches='tight', format=ext)
-    plt.close(fig)
-    print(f"  Saved → {base_name}.png/.tiff")
+        plt.tight_layout()
+        save_path = os.path.join(output_dir, filename)
+        for ext in ["png", "tiff"]:
+            fig.savefig(f"{save_path}.{ext}", dpi=600, transparent=True,
+                        bbox_inches="tight", format=ext)
+        plt.close(fig)
+        print(f"  Saved → {save_path}.png/.tiff")
 
-    # ── Plot 2: Gap lollipop chart ───────────────────────────────────────
-    fig2, ax2 = plt.subplots(figsize=(9, 5))
-    n_gaps = len(x_labels)
-
-    # One metric per lollipop "track", separated vertically by metric.
-    # Cost, Raw Risk, Raw Time, R_risk, R_time
-    gap_names  = ["Cost", "Risk", "Time", "Risk reliability", "Time reliability"]
-    gap_all    = [gap_cost, gap_raw_risk, gap_raw_time, gap_r_risk, gap_r_time]
-
-    # Build a 2D grid: rows = metrics, columns = (α_T, α_max)
-    n_metrics = len(gap_names)
-    gap_arr = np.array(gap_all)  # shape (n_metrics, n_gaps)
-
-    # ── Plot 2: Single lollipop chart (5 metrics per (α_T, α_max) cluster) ─
-    gap_names  = ["Cost", "Risk", "Time", "Risk reliability", "Time reliability"]
-    gap_all    = [gap_cost, gap_raw_risk, gap_raw_time, gap_r_risk, gap_r_time]
-    gap_arr    = np.array(gap_all)  # shape (5, 6)
-
-    fig2, ax2 = plt.subplots(figsize=(8, 5))
-
-    n_metrics = len(gap_names)
-    # Colours from palette, one per metric
-    metric_colors = [COLOURS["C1"], COLOURS["C2"], COLOURS["C3"],
-                     COLOURS["C4"], COLOURS["C5"]]
-
-    # Cluster layout: 6 clusters, each with 5 lollipops
-    cluster_w = 0.7
-    bar_w2    = cluster_w / n_metrics
-    offsets2  = np.linspace(-cluster_w/2 + bar_w2/2,
-                             cluster_w/2 - bar_w2/2, n_metrics)
-
-    for mi in range(n_metrics):
-        vals = gap_arr[mi]
-        x_pos = np.arange(n_gaps) + offsets2[mi]
-        # Stem lines
-        for gi in range(n_gaps):
-            ax2.plot([x_pos[gi], x_pos[gi]], [0, vals[gi]],
-                     color=metric_colors[mi], linewidth=0.8, alpha=0.4,
-                     solid_capstyle='round')
-        # Lollipop heads (size ∝ |gap|, min s=200)
-        sizes = np.maximum(150, np.abs(vals) * 20)
-        ax2.scatter(x_pos, vals, s=sizes, c=metric_colors[mi],
-                    alpha=0.85, edgecolors='white', linewidth=0.3,
-                    label=gap_names[mi], zorder=3)
-
-    ax2.axhline(0, color='black', linewidth=0.7)
-    ax2.set_xticks(np.arange(n_gaps))
-    ax2.set_xticklabels(x_labels, fontsize=9)
-    ax2.set_ylabel("Gap (%)  (MR - MW) / |MW|", fontsize=12)
-    ax2.tick_params(axis='y', direction='in', labelsize=10)
-    ax2.yaxis.grid(True, linestyle='--', color='gray', alpha=0.3)
-    ax2.spines['top'].set_visible(False)
-    ax2.spines['right'].set_visible(False)
-    ax2.set_xlabel(r"($\alpha_T$, $\alpha_{max}$)", fontsize=11)
-    ax2.legend(frameon=False, fontsize=8, loc='lower center',
-               bbox_to_anchor=(0.5, 1.02), ncol=5)
-
-    gaps_name = os.path.join(output_dir, "value_of_reliability_gaps")
-    for ext in ["png", "tiff"]:
-        fig2.savefig(f"{gaps_name}.{ext}", dpi=600, bbox_inches='tight', format=ext)
-    plt.close(fig2)
-    print(f"  Saved → {gaps_name}.png/.tiff")
+    _dumbbell(mr_costs, mw_costs, gap_cost, "Cost", "value_of_reliability_cost",
+              scientific=True)
+    _dumbbell(mr_network_risk, mw_network_risk, gap_network_risk, "Risk",
+              "value_of_reliability_risk")
+    _dumbbell(mr_network_time, mw_network_time, gap_network_time, "Time (h)",
+              "value_of_reliability_time")
 
     # ── Summary ──────────────────────────────────────────────────────────
     print("\n" + "=" * 70)
-    print("VALUE OF RELIABILITY: Average metrics across (α_T, α_max) grid")
+    print("VALUE OF RELIABILITY: Average metrics across (α_T, α_R) grid")
     print("=" * 70)
     print(f"{'Metric':>15s} {'MR (avg)':>12s} {'MW (avg)':>12s} {'Gap (avg)':>10s}")
     print("-" * 55)
     avg_mr_cost = np.mean(mr_costs)
     avg_mw_cost = np.mean(mw_costs)
     avg_gap_cost = np.mean(gap_cost)
-    print(f"{'Cost (CNY)':>15s} {avg_mr_cost:>12,.0f} {avg_mw_cost:>12,.0f} {avg_gap_cost:>10.2f}%")
-    avg_mr_rr = np.mean(mr_raw_risk)
-    avg_mw_rr = np.mean(mw_raw_risk)
-    avg_gap_rr = np.mean(gap_raw_risk)
-    print(f"{'Raw Risk':>15s} {avg_mr_rr:>12.2f} {avg_mw_rr:>12.2f} {avg_gap_rr:>10.2f}%")
-    avg_mr_rt = np.mean(mr_raw_time)
-    avg_mw_rt = np.mean(mw_raw_time)
-    avg_gap_rt = np.mean(gap_raw_time)
+    print(f"{'Cost (CNY)':>15s} {avg_mr_cost:>12,.2f} {avg_mw_cost:>12,.2f} {avg_gap_cost:>10.2f}%")
+    avg_mr_rr = np.mean(mr_network_risk)
+    avg_mw_rr = np.mean(mw_network_risk)
+    avg_gap_rr = np.mean(gap_network_risk)
+    print(f"{'Accident Belief':>15s} {avg_mr_rr:>12.8f} {avg_mw_rr:>12.8f} {avg_gap_rr:>10.2f}%")
+    avg_mr_rt = np.mean(mr_network_time)
+    avg_mw_rt = np.mean(mw_network_time)
+    avg_gap_rt = np.mean(gap_network_time)
     print(f"{'Raw Time (h)':>15s} {avg_mr_rt:>12.2f} {avg_mw_rt:>12.2f} {avg_gap_rt:>10.2f}%")
 
     print(f"\nAll plots saved to: {output_dir}/")

@@ -15,12 +15,17 @@ import os
 import sys
 from collections import defaultdict
 
+# A script run by path has ``sensitivity/`` rather than the repository root
+# on sys.path.  Add the root before importing project packages.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle as MPLRect
 import numpy as np
+from src.utils.numeric_format import format_alpha_R, format_alpha_T
 
 # Set font to Times New Roman globally
 plt.rcParams['font.family'] = 'serif'
@@ -39,7 +44,6 @@ COLORS = {
     "lime": "#DDE4B6"
 }
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sensitivity.plot_helpers import set_style, COLOURS
 
 
@@ -94,7 +98,16 @@ def plot_radar(csv_path: str, output_dir: str = None):
 
         for row in size_rows:
             inst_num = row['Instance'].split('_')[1].replace('inst', '')
-            labels.append(f"i{inst_num}({float(row['alpha_T']):.1f}, {float(row['alpha_max']):.3f})")
+            # Older experiment exports named this risk parameter ``alpha_max``.
+            # New exports use ``alpha_R``; accept both so the default archived
+            # result remains plot-ready.
+            risk_column = "alpha_R" if row.get("alpha_R") else "alpha_max"
+            risk_value = float(row[risk_column])
+            risk_label = r"$\alpha_R$" if risk_column == "alpha_R" else r"$\alpha_{max}$"
+            labels.append(
+                f"i{inst_num}({format_alpha_T(float(row['alpha_T']))}, "
+                f"{risk_label}={format_alpha_R(risk_value)})"
+            )
             
             opt_bap_t = float(row["Optimized_BAP_Time"]) if row["Optimized_BAP_Time"] != "N/A" else np.nan
             std_bap_t = float(row["Standard_BAP_Time"]) if row["Standard_BAP_Time"] != "N/A" else np.nan
@@ -135,10 +148,10 @@ def plot_radar(csv_path: str, output_dir: str = None):
         ax.set_yticklabels([f"{t}x" for t in ticks], color="gray", size=9)
 
         # Draw lines
-        ax.plot(angles_closed, opt_bap_ratios_c, color=COLORS["terracotta"], linewidth=3, linestyle='-', label='Opt. BAP')
-        ax.plot(angles_closed, std_bap_ratios_c, color=COLORS["sand"], linewidth=3, marker='o', markersize=6, label='Std. BAP')
-        ax.plot(angles_closed, bnc_ratios_c, color=COLORS["celadon"], linewidth=3, marker='s', markersize=6, label='BnC')
-        ax.plot(angles_closed, bd_ratios_c, color=COLORS["sage"], linewidth=3, marker='^', markersize=6, label='BD')
+        ax.plot(angles_closed, opt_bap_ratios_c, color=COLORS["terracotta"], linewidth=2, linestyle='-', label='AB-B&P')
+        ax.plot(angles_closed, std_bap_ratios_c, color=COLORS["sand"], linewidth=2, marker='o', markersize=4, label='Std. B&P')
+        ax.plot(angles_closed, bnc_ratios_c, color=COLORS["celadon"], linewidth=2, marker='s', markersize=4, label='BnC')
+        ax.plot(angles_closed, bd_ratios_c, color=COLORS["sage"], linewidth=2, marker='^', markersize=4, label='BD')
 
         # Angles for ticks
         ax.set_xticks(angles)
@@ -162,7 +175,7 @@ def plot_radar(csv_path: str, output_dir: str = None):
         
         save_path = os.path.join(output_dir, f"algorithm_performance_radar_{size}")
         for ext in ["png", "tiff"]:
-            fig.savefig(f"{save_path}.{ext}", dpi=600, bbox_inches='tight', format=ext)
+            fig.savefig(f"{save_path}.{ext}", dpi=600, transparent=True, bbox_inches='tight', format=ext)
         plt.close(fig)
         print(f"Saved radar chart to {save_path}.png")
 

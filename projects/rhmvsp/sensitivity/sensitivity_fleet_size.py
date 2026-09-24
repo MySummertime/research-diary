@@ -12,25 +12,21 @@ import sys, os, json, csv
 from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import numpy as np
-
-from config import RHMVSPConfig
+from config import RHMVSPConfig, default_empty_reposition_hub_fleet
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
 from src.utils.logging import Logger
-from sensitivity.plot_helpers import dual_y_axis_with_cost_bar, set_style
-
-# ── Colour constants ──────────────────────────────────────────────────────────
-from sensitivity.plot_helpers import COLOURS
+from src.utils.numeric_format import format_csv_value
+from sensitivity.parameter_grids import BASELINE_ALPHA_R
 
 # ── Experiment parameters ─────────────────────────────────────────────────────
 INSTANCE_PATH = "data_real_case/instance.json"
 
-# Base fleet sizes used by the main experiment instance
-BASE_FLEET = {"1": 40, "5": 10, "38": 24}
+# Fallback fleet centres used by the main experiment instance.
+BASE_FLEET = default_empty_reposition_hub_fleet()
 
-# Scale factors: multiply base fleet by these factors
-# 0.5 = half fleet (very tight), 1.0 = base fleet, 2.0 = double fleet (loose)
-FLEET_SCALE_VALUES = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5, 2.0, 3.0]
+# Absolute number of vehicles available at each provincial fleet centre.
+# The main experiment uses 50 vehicles at every centre.
+FLEET_SIZE_VALUES = [10, 20, 30, 40, 50, 60, 70, 80]
 
 
 def _run_single(config, inst, logger):
@@ -44,13 +40,13 @@ def _run_single(config, inst, logger):
 
     status = sol.get("status", "unknown")
     ok = status != "infeasible"
-    cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "transfer_cost",
-                 "reposition_cost", "total_prep_cost", "idle_cost", "unmet_penalty"]
+    cost_cols = ["transport_cost", "transfer_cost",
+                 "reposition_cost", "unmet_penalty"]
     result = {"cost": sol.get("total_cost") if ok else None,
-              "R_risk": sol.get("R_net_risk", 0) if ok else None,
-              "R_time": sol.get("R_net_time", 0) if ok else None,
-              "raw_risk": sol.get("raw_net_risk", 0.0) if ok else None,
-              "raw_time": sol.get("raw_net_time", 0.0) if ok else None,
+              "network_risk_reliability": sol.get("network_risk_reliability", 0) if ok else None,
+              "network_time_reliability": sol.get("network_time_reliability", 0) if ok else None,
+              "network_risk": sol.get("network_risk", 0.0) if ok else None,
+              "network_time": sol.get("network_time", 0.0) if ok else None,
               "status": status, "elapsed": round(elapsed, 2),
               "vehicles_used": sol.get("num_vehicles_used", 0),
               "repositions": sol.get("num_repositions", 0),
@@ -74,73 +70,65 @@ def run_fleet_size_sensitivity():
     tee = Tee(os.path.join(exp_dir, "experiment.log"))
     sys.stdout = tee
 
+    fleet_hubs = tuple(
+        str(hub_id)
+        for hub_id in base_instance.get("hub_fleet_size", BASE_FLEET)
+    )
+
     # Save experiment metadata
     meta = {
-        "base_fleet": BASE_FLEET,
-        "scale_values": FLEET_SCALE_VALUES,
+        "main_experiment_fleet_size": 50,
+        "fleet_hubs": fleet_hubs,
+        "fleet_size_values": FLEET_SIZE_VALUES,
         "instance": INSTANCE_PATH,
     }
     with open(os.path.join(exp_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
-    group_labels = [f"{s:.1f}x" for s in FLEET_SCALE_VALUES]
-    cost_data = {l: [] for l in group_labels}
-    r_risk_data = {l: [] for l in group_labels}
-    r_time_data = {l: [] for l in group_labels}
-    raw_risk_data = {l: [] for l in group_labels}
-    raw_time_data = {l: [] for l in group_labels}
-
-    total = len(FLEET_SCALE_VALUES)
+    total = len(FLEET_SIZE_VALUES)
     done = 0
 
     # CSV header
     csv_path = os.path.join(exp_dir, "experiment.csv")
-    cost_cols = ["deploy_cost", "hub_cost", "transport_cost", "transfer_cost",
-                 "reposition_cost", "total_prep_cost", "idle_cost", "unmet_penalty"]
+    cost_cols = ["transport_cost", "transfer_cost",
+                 "reposition_cost", "unmet_penalty"]
     with open(csv_path, "w", newline="") as f:
         csv.writer(f).writerow(
-             ["group_label", "fleet_scale", "fleet_1", "fleet_5", "fleet_38",
+             ["group_label", "fleet_size", "fleet_1", "fleet_12", "fleet_38",
              "model", "cost"] + cost_cols +
-            ["R_risk", "R_time", "Raw_Risk", "Raw_Time",
+            ["network_risk_reliability", "network_time_reliability", "Network_Risk", "Network_Time",
              "vehicles_used", "repositions", "status", "elapsed_s", "Routes"]
         )
 
-    for scale in FLEET_SCALE_VALUES:
-        label = f"{scale:.1f}x"
-        fleet_1 = int(BASE_FLEET["1"] * scale)
-        fleet_5 = int(BASE_FLEET["5"] * scale)
-        fleet_38 = int(BASE_FLEET["38"] * scale)
+    for fleet_size in FLEET_SIZE_VALUES:
+        label = str(fleet_size)
+        fleet_by_hub = {hub_id: fleet_size for hub_id in fleet_hubs}
 
-        print(f"\n=== Fleet Scale: {scale:.1f}x (Hub1={fleet_1}, Hub5={fleet_5}, Hub38={fleet_38}) ===")
+        print(f"\n=== Fleet Size: {fleet_size} vehicles per centre ({fleet_by_hub}) ===")
 
         config = RHMVSPConfig()
         config.alpha_T = 0.8
-        config.alpha_max = 0.05
+        config.alpha_R = BASELINE_ALPHA_R
         config.time_limit = 3600
         config.solver_name = "gurobi"
 
         inst = json.loads(json.dumps(base_instance))
-        inst["hub_fleet_size"] = {"1": fleet_1, "5": fleet_5, "38": fleet_38}
+        inst["hub_fleet_size"] = fleet_by_hub
 
         logger = Logger(level="INFO", log_file=None)
         r = _run_single(config, inst, logger)
         done += 1
 
-        # Store results
-        if r["cost"] is not None:
-            cost_data[label].append(r["cost"])
-            r_risk_data[label].append(r["R_risk"])
-            r_time_data[label].append(r["R_time"])
-            raw_risk_data[label].append(r["raw_risk"])
-            raw_time_data[label].append(r["raw_time"])
-
         with open(csv_path, "a", newline="") as f:
-            row = [label, scale, fleet_1, fleet_5, fleet_38,
-                   "BAP", r["cost"]]
+            row = [label, fleet_size, fleet_by_hub.get("1"),
+                   fleet_by_hub.get("12"), fleet_by_hub.get("38"),
+                   "BAP", format_csv_value("cost", r["cost"])]
             for col in cost_cols:
-                row.append(r.get(col) if r["cost"] is not None else None)
-            row += [r.get("R_risk"), r.get("R_time"),
-                    r.get("raw_risk"), r.get("raw_time"),
+                row.append(format_csv_value(col, r.get(col)) if r["cost"] is not None else "")
+            row += [format_csv_value("network_risk_reliability", r.get("network_risk_reliability")),
+                    format_csv_value("network_time_reliability", r.get("network_time_reliability")),
+                    format_csv_value("network_risk", r.get("network_risk")),
+                    format_csv_value("network_time", r.get("network_time")),
                     r.get("vehicles_used"), r.get("repositions"),
                     r["status"], r["elapsed"], r.get("routes", "")]
             csv.writer(f).writerow(row)
@@ -148,66 +136,18 @@ def run_fleet_size_sensitivity():
         # Progress
         c_str = f"CNY {r['cost']:,.0f}" if r["cost"] is not None else r["status"]
         v_str = str(r.get("vehicles_used", "N/A"))
-        rr = r.get('R_risk')
-        rt = r.get('R_time')
-        rr_str = f"{rr:.4f}" if rr is not None else "N/A"
-        rt_str = f"{rt:.4f}" if rt is not None else "N/A"
+        rr = r.get('network_risk_reliability')
+        rt = r.get('network_time_reliability')
+        rr_str = format_csv_value("risk_reliability", rr) if rr is not None else "N/A"
+        rt_str = format_csv_value("time_reliability", rt) if rt is not None else "N/A"
         print(f"  [{done}/{total}]  Cost={c_str}  R_risk={rr_str}  "
               f"R_time={rt_str}  Vehicles={v_str}  "
               f"({r['elapsed']:.1f}s)")
 
     print(f"CSV saved → {csv_path}")
 
-    # ── Plot dual Y-axis chart ──────────────────────────────────────────────
-    x_vals = [float(s.replace("x", "")) for s in group_labels]
-    r_risk_vals = [np.mean(r_risk_data[l]) if r_risk_data[l] else 0 for l in group_labels]
-    r_time_vals = [np.mean(r_time_data[l]) if r_time_data[l] else 0 for l in group_labels]
-    cost_vals = [np.mean(cost_data[l]) if cost_data[l] else 0 for l in group_labels]
-
-    dual_y_axis_with_cost_bar(
-        x_label=r"Fleet Scale Factor",
-        x_vals=x_vals,
-        r_risk_vals=r_risk_vals,
-        r_time_vals=r_time_vals,
-        cost_vals=cost_vals,
-        save_path=os.path.join(exp_dir, "fleet_sensitivity"),
-        y1_label=r'$R_{risk}$',
-        y2_label=r'$R_{time}$',
-        y1_title=r'Network Reliability',
-        y2_title=r'Total Cost (CNY)',
-    )
-    print(f"\nChart saved to: {exp_dir}/fleet_sensitivity.png/.tiff")
-
-    # ── Plot dual Y-axis chart (Raw Metrics) ────────────────────────────────
-    raw_risk_vals = [np.mean(raw_risk_data[l]) if raw_risk_data[l] else 0 for l in group_labels]
-    raw_time_vals = [np.mean(raw_time_data[l]) if raw_time_data[l] else 0 for l in group_labels]
-
-    dual_y_axis_with_cost_bar(
-        x_label=r"Fleet Scale Factor",
-        x_vals=x_vals,
-        r_risk_vals=raw_risk_vals,
-        r_time_vals=raw_time_vals,
-        cost_vals=cost_vals,
-        save_path=os.path.join(exp_dir, "fleet_sensitivity_raw"),
-        y1_label=r'Risk',
-        y2_label=r'Time (h)',
-        y1_title=r'Risk / Time',
-        y2_title=r'Total Cost (CNY)',
-    )
-    print(f"Chart saved to: {exp_dir}/fleet_sensitivity_raw.png/.tiff")
-
-    # Summary
-    print("\n=== Summary ===")
-    print(f"{'Scale':>8s} {'Fleet':>15s} {'Cost':>14s} {'R_risk':>8s} {'R_time':>8s} {'Vehicles':>10s}")
-    for label in group_labels:
-        if cost_data[label]:
-            c = np.mean(cost_data[label])
-            rr = np.mean(r_risk_data[label])
-            rt = np.mean(r_time_vals[group_labels.index(label):group_labels.index(label)+1])
-            fleet_str = f"{int(BASE_FLEET['1']*float(label.replace('x','')))}+{int(BASE_FLEET['5']*float(label.replace('x','')))}+{int(BASE_FLEET['38']*float(label.replace('x','')))}"
-            print(f"{label:>8s} {fleet_str:>15s} {c:>14,.0f} {rr:>8.4f} {rt:>8.4f}")
-
     print(f"\nResults saved to {exp_dir}/")
+    print(f"Plot with: python sensitivity/plot_fleet_size.py --csv {csv_path}")
     tee.close()
     sys.stdout = sys.__stdout__
     return exp_dir
@@ -217,4 +157,4 @@ if __name__ == "__main__":
     print("Fleet Size Sensitivity Analysis")
     print("=" * 50)
     exp_dir = run_fleet_size_sensitivity()
-    print(f"\nDone!  Open {exp_dir}/fleet_sensitivity.png and fleet_sensitivity_raw.png")
+    print(f"\nDone! Data are in {exp_dir}/experiment.csv")

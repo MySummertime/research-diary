@@ -5,9 +5,9 @@ Compares the MR model (with risk + time reliability constraints) against
 the MW model (without reliability constraints), quantifying the cost of
 ensuring reliability.
 
-For each (α_T, α_max) combination:
-  - MR (Model with Reliability)     → total_cost, raw_risk, raw_time
-  - MW (Model Without reliability)  → total_cost, raw_risk, raw_time
+For each (α_T, α_R) combination:
+  - MR (Model with Reliability)     → total_cost, network_risk, network_time
+  - MW (Model Without reliability)  → total_cost, network_risk, network_time
   - Gap(%) for each metric
 
 Reference: Wang et al. (2025) §5.3 — compares full robust model [RM] vs
@@ -15,33 +15,22 @@ demand-only model [RM-D], reporting Gap-N and Gap-W percentages.
 """
 import sys, os, json, time, csv
 from datetime import datetime
-from collections import defaultdict
-
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import RHMVSPConfig
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
 from src.utils.logging import Logger
-from sensitivity.plot_helpers import set_style, COLOURS, dual_y_axis_with_cost_bar
+from src.utils.numeric_format import format_alpha_R, format_alpha_T, format_csv_value
+from sensitivity.parameter_grids import VALUE_OF_RELIABILITY_PARAM_GRID
 from sensitivity.utils import update_od_deadlines as _update_od_deadlines
-
-# ── Colour constants ────────────────────────────────────────────────────────
-C_FULL  = COLOURS["C1"]  # Warm Terracotta — MR (Model with Reliability)
-C_NOREL = COLOURS["C2"]  # Celadon Green  — MW (Model Without reliability)
 
 # ── Experiment parameters ───────────────────────────────────────────────────
 INSTANCE_PATH = "data_real_case/instance.json"
 
-# Parameter grid: (α_T, α_max) combinations
-PARAM_GRID = [
-    (0.5, 0.015), (0.5, 0.03), (0.5, 0.05),
-    (0.8, 0.015), (0.8, 0.03), (0.8, 0.05),
-]
+# Parameter grid: (alpha_T, alpha_R) combinations.
+# alpha_R is the risk reliability threshold used directly as R >= alpha_R.
+PARAM_GRID = VALUE_OF_RELIABILITY_PARAM_GRID
 
 
 def _run_single(config, inst, logger) -> dict:
@@ -59,11 +48,10 @@ def _run_single(config, inst, logger) -> dict:
         "status": sol.get("status", "unknown"),
         "time": round(elapsed, 2),
         "cost": sol.get("total_cost") if ok else None,
-        "R_risk": sol.get("R_net_risk") if ok else None,
-        "R_time": sol.get("R_net_time") if ok else None,
-        "raw_risk": sol.get("raw_net_risk", 0.0) if ok else None,
-        "raw_time": sol.get("raw_net_time", 0.0) if ok else None,
-        "deploy_cost": sol.get("deploy_cost") if ok else None,
+        "network_risk_reliability": sol.get("network_risk_reliability") if ok else None,
+        "network_time_reliability": sol.get("network_time_reliability") if ok else None,
+        "network_risk": sol.get("network_risk", 0.0) if ok else None,
+        "network_time": sol.get("network_time", 0.0) if ok else None,
         "transport_cost": sol.get("transport_cost") if ok else None,
         "transfer_cost": sol.get("transfer_cost") if ok else None,
         "routes": route_sum,
@@ -79,8 +67,8 @@ def run_value_of_reliability():
     Main experiment: MR (Model with Reliability) vs MW (Model Without reliability).
 
     MW configuration:
-      - skip_risk_constraint = True  (pricing skips R >= beta_od check)
-      - alpha_T = 0.01              (time windows effectively disabled)
+      - skip_risk_constraint = True  (pricing skips R >= alpha_R check)
+      - alpha_T = 0.0               (time-reliability threshold disabled)
     """
     with open(INSTANCE_PATH) as f:
         base_instance = json.load(f)
@@ -99,7 +87,8 @@ def run_value_of_reliability():
         "param_grid": [(aT, am) for aT, am in PARAM_GRID],
         "norel_config": {
             "skip_risk_constraint": True,
-            "alpha_T": 0.01,
+            "alpha_T": 0.0,
+            "alpha_R": 0.0,
         },
     }
     with open(os.path.join(exp_dir, "meta.json"), "w") as f:
@@ -110,12 +99,12 @@ def run_value_of_reliability():
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow([
-            "alpha_T", "alpha_max",
+            "alpha_T", "alpha_R",
             "MR_Status", "MR_Time", "MR_Cost",
-            "MR_R_risk", "MR_R_time", "MR_RawRisk", "MR_RawTime",
+            "MR_R_Risk", "MR_R_Time", "MR_NetworkRisk", "MR_NetworkTime",
             "MW_Status", "MW_Time", "MW_Cost",
-            "MW_R_risk", "MW_R_time", "MW_RawRisk", "MW_RawTime",
-            "Gap_Cost(%)", "Gap_RawRisk(%)", "Gap_RawTime(%)",
+            "MW_R_Risk", "MW_R_Time", "MW_NetworkRisk", "MW_NetworkTime",
+            "Gap_Cost(%)", "Gap_NetworkRisk(%)", "Gap_NetworkTime(%)",
             "Gap_R_risk(%)", "Gap_R_time(%)",
             "MR_Routes", "MW_Routes",
         ])
@@ -126,10 +115,15 @@ def run_value_of_reliability():
 
     total = len(PARAM_GRID)
     done = 0
+    alpha_T_values = [item[0] for item in PARAM_GRID]
+    alpha_R_values = [item[1] for item in PARAM_GRID]
 
-    for aT, a_max in PARAM_GRID:
+    for aT, a_R in PARAM_GRID:
         done += 1
-        label = f"({aT:.1f}, {a_max:.3f})"
+        label = (
+            f"({format_alpha_T(aT)}, "
+            f"{format_alpha_R(a_R)})"
+        )
         group_labels.append(label)
         print(f"\n[{done}/{total}] {label}")
 
@@ -139,7 +133,7 @@ def run_value_of_reliability():
         # ── Full Model ─────────────────────────────────────────────────────
         cfg_full = RHMVSPConfig()
         cfg_full.alpha_T = aT
-        cfg_full.alpha_max = a_max
+        cfg_full.alpha_R = a_R
         cfg_full.time_limit = 3600
         cfg_full.solver_name = "gurobi"
 
@@ -153,8 +147,8 @@ def run_value_of_reliability():
 
         # ── No-Reliability Model ──────────────────────────────────────────
         cfg_norel = RHMVSPConfig()
-        cfg_norel.alpha_T = 0.01        # weak threshold, reasonable mid-point estimate
-        cfg_norel.alpha_max = a_max     # still set for reference
+        cfg_norel.alpha_T = 0.0
+        cfg_norel.alpha_R = 0.0
         cfg_norel.skip_risk_constraint = True  # disable risk reliability in pricing
         cfg_norel.time_limit = 3600
         cfg_norel.solver_name = "gurobi"
@@ -167,35 +161,34 @@ def run_value_of_reliability():
         r_norel = _run_single(cfg_norel, inst_norel, logger2)
         norel_metrics.append(r_norel)
 
-        # ── Compute gaps (MR = baseline) ──────────────────────────────────
-        def _gap_mr_baseline(mr_val, mw_val):
-            """Gap = (MW - MR) / |MR| * 100 — positive means MW is larger than MR."""
-            if mr_val is not None and mw_val is not None and mr_val != 0:
-                return (mw_val - mr_val) / abs(mr_val) * 100
+        # ── Compute gaps (MW = baseline) ──────────────────────────────────
+        def _gap_mw_baseline(mr_val, mw_val):
+            """Gap = (MR - MW) / |MW| * 100 for every reported metric."""
+            if mr_val is not None and mw_val is not None and mw_val != 0:
+                return (mr_val - mw_val) / abs(mw_val) * 100
             return None
 
-        # Cost: positive → MW costs more (reliability penalty of MW)
-        gap_cost = _gap_mr_baseline(r_full["cost"], r_norel["cost"])
-        # Raw risk/time: positive → MW has higher raw risk/time (MR reduces them)
-        gap_raw_risk = _gap_mr_baseline(r_full["raw_risk"], r_norel["raw_risk"])
-        gap_raw_time = _gap_mr_baseline(r_full["raw_time"], r_norel["raw_time"])
-        # Reliability: positive → MW has better reliability (unexpected, but possible)
-        gap_r_risk = _gap_mr_baseline(r_full["R_risk"], r_norel["R_risk"])
-        gap_r_time = _gap_mr_baseline(r_full["R_time"], r_norel["R_time"])
+        # Every exported gap uses MW as the denominator and MR-MW for its sign.
+        gap_cost = _gap_mw_baseline(r_full["cost"], r_norel["cost"])
+        gap_network_risk = _gap_mw_baseline(r_full["network_risk"], r_norel["network_risk"])
+        gap_network_time = _gap_mw_baseline(r_full["network_time"], r_norel["network_time"])
+        gap_r_risk = _gap_mw_baseline(r_full["network_risk_reliability"], r_norel["network_risk_reliability"])
+        gap_r_time = _gap_mw_baseline(r_full["network_time_reliability"], r_norel["network_time_reliability"])
 
         def _f(v, fmt):
             return f"{v:{fmt}}" if v is not None else "N/A"
 
         row = [
-            aT, a_max,
-            r_full["status"], f"{r_full['time']:.2f}", _f(r_full["cost"], ",.0f"),
-            _f(r_full["R_risk"], ".4f"), _f(r_full["R_time"], ".4f"),
-            _f(r_full["raw_risk"], ".2f"), _f(r_full["raw_time"], ".2f"),
-            r_norel["status"], f"{r_norel['time']:.2f}", _f(r_norel["cost"], ",.0f"),
-            _f(r_norel["R_risk"], ".4f"), _f(r_norel["R_time"], ".4f"),
-            _f(r_norel["raw_risk"], ".2f"), _f(r_norel["raw_time"], ".2f"),
-            _f(gap_cost, ".4f"), _f(gap_raw_risk, ".4f"), _f(gap_raw_time, ".4f"),
-            _f(gap_r_risk, ".4f"), _f(gap_r_time, ".4f"),
+            format_alpha_T(aT),
+            format_alpha_R(a_R),
+            r_full["status"], f"{r_full['time']:.2f}", _f(r_full["cost"], ",.2f"),
+            format_csv_value("risk_reliability", r_full["network_risk_reliability"]), format_csv_value("time_reliability", r_full["network_time_reliability"]),
+            format_csv_value("network_risk", r_full["network_risk"]), format_csv_value("network_time", r_full["network_time"]),
+            r_norel["status"], f"{r_norel['time']:.2f}", _f(r_norel["cost"], ",.2f"),
+            format_csv_value("risk_reliability", r_norel["network_risk_reliability"]), format_csv_value("time_reliability", r_norel["network_time_reliability"]),
+            format_csv_value("network_risk", r_norel["network_risk"]), format_csv_value("network_time", r_norel["network_time"]),
+            _f(gap_cost, ".2f"), _f(gap_network_risk, ".2f"), _f(gap_network_time, ".2f"),
+            _f(gap_r_risk, ".2f"), _f(gap_r_time, ".2f"),
             r_full.get("routes", ""), r_norel.get("routes", ""),
         ]
 
@@ -204,42 +197,38 @@ def run_value_of_reliability():
 
         # Print summary
         print(f"CSV saved \u2192 {csv_path}")
-        f_str = f"¥{r_full['cost']:,.0f}" if r_full['cost'] else r_full['status']
-        n_str = f"¥{r_norel['cost']:,.0f}" if r_norel['cost'] else r_norel['status']
-        print(f"  MR:  Cost={f_str}  R_risk={_f(r_full['R_risk'],'.4f')}  R_time={_f(r_full['R_time'],'.4f')}")
-        print(f"  MW: Cost={n_str}  R_risk={_f(r_norel['R_risk'],'.4f')}  R_time={_f(r_norel['R_time'],'.4f')}")
-        print(f"  Raw MR:  Risk={_f(r_full['raw_risk'],'.2f')}  Time={_f(r_full['raw_time'],'.2f')}h")
-        print(f"  Raw MW: Risk={_f(r_norel['raw_risk'],'.2f')}  Time={_f(r_norel['raw_time'],'.2f')}h")
+        f_str = f"¥{r_full['cost']:,.2f}" if r_full['cost'] else r_full['status']
+        n_str = f"¥{r_norel['cost']:,.2f}" if r_norel['cost'] else r_norel['status']
+        print(f"  MR:  Cost={f_str}  R_risk={format_csv_value('risk_reliability', r_full['network_risk_reliability'])}  R_time={format_csv_value('time_reliability', r_full['network_time_reliability'])}")
+        print(f"  MW: Cost={n_str}  R_risk={format_csv_value('risk_reliability', r_norel['network_risk_reliability'])}  R_time={format_csv_value('time_reliability', r_norel['network_time_reliability'])}")
+        print(f"  Raw MR:  Risk={format_csv_value('network_risk', r_full['network_risk'])}  Time={format_csv_value('network_time', r_full['network_time'])}h")
+        print(f"  Raw MW: Risk={format_csv_value('network_risk', r_norel['network_risk'])}  Time={format_csv_value('network_time', r_norel['network_time'])}h")
         if gap_cost is not None:
             print(f"  Gap_Cost={gap_cost:.2f}%  Gap_R_risk={gap_r_risk:.2f}%  Gap_R_time={gap_r_time:.2f}%")
 
-    # ── Plotting ─────────────────────────────────────────────────────────────
-    from sensitivity.plot_value_of_reliability import plot_from_csv
-    
-    print("\nGenerating plots from CSV...")
-    plot_from_csv(csv_path, exp_dir)
+    print(f"\nPlot with: python sensitivity/plot_value_of_reliability.py --csv {csv_path}")
 
     # ── Summary ──────────────────────────────────────────────────────────────
     print("\n" + "=" * 90)
     print("VALUE OF RELIABILITY: MR (Model with Reliability) vs MW (Model Without)")
     print(f"Results: {exp_dir}/")
     print("=" * 90)
-    hdr = (f"{'α_T':>5s} {'α_max':>7s} "
+    hdr = (f"{'α_T':>5s} {'α_R':>7s} "
            f"{'MR_Cost':>12s} {'MW_Cost':>12s} {'Gap_Cost%':>10s} "
-           f"{'MR_RawRisk':>10s} {'MW_RawRisk':>10s} "
-           f"{'MR_RawTime':>10s} {'MW_RawTime':>10s}")
+           f"{'MR_NetworkRisk':>10s} {'MW_NetworkRisk':>10s} "
+           f"{'MR_NetworkTime':>10s} {'MW_NetworkTime':>10s}")
     print(hdr)
     print("-" * 90)
-    for i, (aT, a_max) in enumerate(PARAM_GRID):
+    for i, (aT, a_R) in enumerate(PARAM_GRID):
         f = full_metrics[i]
         n = norel_metrics[i]
-        def _sv(m, k, fmt):
+        def _sv(m, k):
             v = m.get(k)
-            return f"{v:{fmt}}" if v is not None else "N/A"
-        print(f"{aT:>5.1f} {a_max:>7.3f} "
-              f"{_sv(f,'cost',',.0f'):>12s} {_sv(n,'cost',',.0f'):>12s} "
-              f"{_sv(f,'raw_risk','.2f'):>10s} {_sv(n,'raw_risk','.2f'):>10s} "
-              f"{_sv(f,'raw_time','.2f'):>10s} {_sv(n,'raw_time','.2f'):>10s}")
+            return format_csv_value(k, v) if v is not None else "N/A"
+        print(f"{format_alpha_T(aT):>8s} {format_alpha_R(a_R):>10s} "
+              f"{_sv(f,'cost'):>12s} {_sv(n,'cost'):>12s} "
+              f"{_sv(f,'network_risk'):>10s} {_sv(n,'network_risk'):>10s} "
+              f"{_sv(f,'network_time'):>10s} {_sv(n,'network_time'):>10s}")
 
     tee.close()
     sys.stdout = sys.__stdout__
@@ -248,7 +237,7 @@ def run_value_of_reliability():
 
 if __name__ == "__main__":
     print("Value of Reliability: MR (Model with Reliability) vs MW (Model Without)")
-    print(f"  Grid: {len(PARAM_GRID)} (α_T, α_max) combinations")
+    print(f"  Grid: {len(PARAM_GRID)} (α_T, α_R) combinations")
     print(f"  Instance: {INSTANCE_PATH}")
     print("=" * 60)
     exp_dir = run_value_of_reliability()
