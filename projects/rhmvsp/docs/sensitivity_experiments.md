@@ -1,44 +1,15 @@
 # Sensitivity Experiments — Independent Variable Values
 
-## 1. `sensitivity_alpha_max.py`
+The main experiment uses `alpha_R = 0.90`, `alpha_T = 0.80`, and 50 vehicles at each provincial fleet centre.
 
-| Independent Variable | Fixed Parameters | Values                                                                         |
-| -------------------- | ---------------- | ------------------------------------------------------------------------------ |
-| **α_max**            | α_T=0.8, δ_T=0.8 | `[0.01, 0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.10]` (10 values) |
+| Experiment               | Independent-variable values                                          | Fixed reliability settings                    |
+| ------------------------ | -------------------------------------------------------------------- | --------------------------------------------- |
+| Risk reliability         | `alpha_R = [0.88, 0.90, 0.92, 0.94, 0.96, 0.98]`                     | `alpha_T = 0.80`                              |
+| Time reliability         | `alpha_T = [0.50, 0.60, 0.70, 0.80, 0.90]`                           | `alpha_R = 0.90`                              |
+| Fleet size               | `[10, 20, 30, 40, 50, 60, 70, 80]` vehicles per centre               | `alpha_R = 0.90`, `alpha_T = 0.80`            |
+| Coupled reliability      | Cartesian product of the risk and time grids above (30 combinations) | —                                             |
+| Value of reliability     | `(alpha_T, alpha_R) = [(0.60, 0.905), (0.85, 0.920), (0.95, 0.935)]` | Low, medium, and high reliability designs     |
+| Algorithm performance    | `alpha_T = [0.70, 0.90]` × `alpha_R = [0.90, 0.94, 0.98]`            | 6 combinations per instance                   |
+| Out-of-sample evaluation | `alpha_T = [0.75, 0.95]` × `alpha_R = [0.905, 0.920, 0.935]`         | 6 combinations, 200 scenarios per combination |
 
-## 2. `sensitivity_alpha_T.py`
-
-| Independent Variable | Fixed Parameters    | Values                                                           |
-| -------------------- | ------------------- | ---------------------------------------------------------------- |
-| **α_T**              | α_max=0.05, δ_T=0.8 | `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]` (10 values) |
-
-## 3. `sensitivity_risk_time_coupled.py`
-
-| Independent Variable | Fixed Parameters | Values                                                                         |
-| -------------------- | ---------------- | ------------------------------------------------------------------------------ |
-| **α_max**            | α_T=0.80         | `[0.01, 0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.10]` (10 values) |
-| **δ_T**              | (same)           | `[0.01, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.5]` (10 values)             |
-
-Grid: 10 × 10 = 100 combinations.
-
-## 4. `sensitivity_value_of_fuzzy_time.py`
-
-| Independent Variable | Fixed Parameters    | Values                                                             |
-| -------------------- | ------------------- | ------------------------------------------------------------------ |
-| **δ_T**              | α_max=0.05, α_T=0.8 | `[0.01, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.5]` (10 values) |
-
-## 5. `sensitivity_out_of_sample.py`
-
-| Independent Variable | Fixed Parameters | Values                                             |
-| -------------------- | ---------------- | -------------------------------------------------- |
-| **δ_T**              | α_T=0.8          | `[0.5, 0.5, 0.6, 0.6, 0.7, 0.7, 0.8, 0.8]`         |
-| **α_max**            | (same)           | `[0.02, 0.05, 0.02, 0.05, 0.02, 0.05, 0.02, 0.05]` |
-
-8 groups × 200 Monte Carlo scenarios × 2 models (BAP + LP).
-
-## 6. `sensitivity_algorithm_performance.py`
-
-| Independent Variable | Fixed Parameters             | Values                               |
-| -------------------- | ---------------------------- | ------------------------------------ |
-| **Instance Scale**   | α_max=0.05, α_T=0.8, δ_T=0.8 | `small` (medium/large commented out) |
-| Instances per scale  | —                            | 2 (instance_1, instance_2)           |
+The reliability grids exclude the degenerate endpoints zero and one. The risk grid is concentrated around the expected plan-risk-reliability range produced by the synthetic component beliefs, while the time grid spans moderate to high uncertain-measure requirements.
