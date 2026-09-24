@@ -135,10 +135,10 @@ def dual_y_axis(x_label: str, x_vals, r_risk_vals, r_time_vals,
                 save_path: str,
                 c1: str = ColorPalette.SENSITIVITY_RISK_LINE,
                 c2: str = ColorPalette.SENSITIVITY_TIME_LINE,
-                y1_label: str = r'Risk Reliability ($R_{risk}$)',
-                y2_label: str = r'Time Reliability ($R_{time}$)',
-                y1_title: str = r'Network Risk Reliability ($R_{risk}$)',
-                y2_title: str = r'Network Time Reliability ($R_{time}$)'):
+                y1_label: str = 'Risk reliability',
+                y2_label: str = 'Time reliability',
+                y1_title: str = 'Risk reliability',
+                y2_title: str = 'Time reliability'):
     """
     Dual Y-axis line chart: R_risk (left), R_time (right) vs x_vals.
     Uses categorical x-positions + adaptive decimal labels so that
@@ -307,7 +307,7 @@ def three_subplots(x_label: str, x_vals, cost_vals, r_time_vals,
     # Mid: R_time
     ax_time.plot(x_vals, r_time_vals, color=c_time, marker='s', markersize=5,
                  linewidth=1.8, zorder=5)
-    ax_time.set_ylabel(r'$R_{time}$', fontsize=13)
+    ax_time.set_ylabel('Time reliability', fontsize=13)
     ax_time.tick_params(axis='y', direction='in', labelsize=11)
     ax_time.yaxis.grid(True, linestyle='--', color='gray', alpha=0.5)
     ax_time.spines['top'].set_visible(False)
@@ -316,7 +316,7 @@ def three_subplots(x_label: str, x_vals, cost_vals, r_time_vals,
     # Bottom: R_risk
     ax_risk.plot(x_vals, r_risk_vals, color=c_risk, marker='o', markersize=5,
                  linewidth=1.8, zorder=5)
-    ax_risk.set_ylabel(r'$R_{risk}$', fontsize=13)
+    ax_risk.set_ylabel('Risk reliability', fontsize=13)
     ax_risk.set_xlabel(x_label, fontsize=14)
     ax_risk.tick_params(axis='x', direction='in', labelsize=11)
     ax_risk.tick_params(axis='y', direction='in', labelsize=11)

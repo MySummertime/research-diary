@@ -8,30 +8,57 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap, PowerNorm
+from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.patches import FancyBboxPatch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sensitivity.plot_helpers import set_style
 
-COLOURS = ["#19171A", "#455073", "#B6E1ED", "#F1DDB2", "#F2BB77"]
+# High-contrast extension of the paper palette: deep celadon -> warm ivory ->
+# terracotta.  Interior stops keep the pale midpoint narrow so cells remain
+# legible at final print size.
+HEATMAP_COLOURS = [
+    (0.00, "#527F76"),
+    (0.28, "#94C1B7"),
+    (0.47, "#D4E2E0"),
+    (0.50, "#F3EFE6"),
+    (0.53, "#E8D7C9"),
+    (0.76, "#D58A74"),
+    (1.00, "#C26B48"),
+]
 
 
 def _plot_heatmap(x_values, y_values, matrix, metric_name, save_path):
     set_style()
-    cmap = LinearSegmentedColormap.from_list("set3_heatmap", COLOURS, N=256)
+    cmap = LinearSegmentedColormap.from_list(
+        "paper_bluecyan_ivory_terracotta", HEATMAP_COLOURS, N=256
+    )
     finite = matrix[np.isfinite(matrix)]
     if not finite.size:
         return
     vmin, vmax = float(finite.min()), float(finite.max())
     if vmin == vmax:
         vmax = vmin + 1e-9
-    norm = PowerNorm(gamma=0.55, vmin=vmin, vmax=vmax)
+    norm = Normalize(vmin=vmin, vmax=vmax)
     fig, ax = plt.subplots(figsize=(max(6, len(x_values) * 0.9), max(4, len(y_values) * 0.6)))
     for i in range(len(y_values)):
         for j in range(len(x_values)):
             if np.isfinite(matrix[i, j]):
-                ax.scatter(j, i, s=420, c=[cmap(norm(matrix[i, j]))], edgecolors="none")
+                cell = FancyBboxPatch(
+                    (j - 0.42, i - 0.42), 0.84, 0.84,
+                    boxstyle="round,pad=0,rounding_size=0.14",
+                    facecolor=cmap(norm(matrix[i, j])),
+                    edgecolor="none",
+                    linewidth=0,
+                    alpha=1.0,
+                )
+                ax.add_patch(cell)
+    ax.set_xlim(-0.55, len(x_values) - 0.45)
+    ax.set_ylim(-0.55, len(y_values) - 0.45)
+    # Preserve one display unit in x for one display unit in y so the
+    # equal-width/equal-height patches render as true rounded squares.
+    ax.set_aspect("equal", adjustable="box")
     ax.set_xticks(range(len(x_values)), [f"{v:.2f}" for v in x_values])
     ax.set_yticks(range(len(y_values)), [f"{v:g}" for v in y_values])
     ax.set_xlabel(r"$\alpha_R$")
@@ -59,8 +86,8 @@ def plot_from_csv(csv_path: str, output_dir: str | None = None) -> None:
         raise ValueError(f"No plottable rows in {csv_path}")
     specs = [
         (("cost",), "Cost", "heatmap_cost"),
-        (("network_risk_reliability", "R_risk"), r"Risk reliability ($R_{risk}$)", "heatmap_R_Risk"),
-        (("network_time_reliability", "R_time"), r"Time reliability ($R_{time}$)", "heatmap_R_Time"),
+        (("network_risk_reliability", "R_risk"), "Risk reliability", "heatmap_R_Risk"),
+        (("network_time_reliability", "R_time"), "Time reliability", "heatmap_R_Time"),
         (("Network_Risk", "Raw_Risk"), "Risk", "heatmap_network_risk"),
         (("Network_Time", "Raw_Time"), "Time (h)", "heatmap_raw_Time"),
     ]

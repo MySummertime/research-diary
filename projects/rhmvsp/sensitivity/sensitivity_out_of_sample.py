@@ -1,216 +1,217 @@
-"""
-Sensitivity Analysis: Out-of-Sample Test (MR vs MW).
+"""Fixed-plan out-of-sample evaluation of MR designs and one MW baseline."""
+from __future__ import annotations
 
-Design (solve-on-original, evaluate-on-perturbed):
-  1. Solve MR (Model with Reliability) on ORIGINAL instance → S_mr
-  2. Solve MW (Model Without reliability) on ORIGINAL → S_mw
-  3. Generate N Monte Carlo perturbed scenarios (demand + time + risk)
-  4. Re-solve both models on each perturbed scenario
-  5. Compare total cost distribution via violin + boxplot
-
-Reference: Wang et al. (2025) §5.6 — out-of-sample tests comparing [RM]
-(robust model) vs [DM] (deterministic model) with 200 scenarios.
-"""
-import sys, os, json
+import csv
+import json
+import os
+import sys
 from datetime import datetime
+
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import numpy as np
-import csv
-
 from config import RHMVSPConfig
+from sensitivity.parameter_grids import ALPHA_R_OOS_LEVELS, ALPHA_T_OOS_LEVELS
+from sensitivity.utils import format_routing_summary, update_od_deadlines
+from src.core.scenario_sampler import sample_scenario
+from src.core.uncertainty import TrapezoidalFuzzy, UncertaintyEngine
 from src.solvers.branch_and_price import BranchAndPriceController as BAPSolver
 from src.utils.logging import Logger
 from src.utils.numeric_format import format_alpha_R, format_alpha_T, format_csv_value
-from src.core.scenario_sampler import sample_scenario
-from sensitivity.parameter_grids import ALPHA_R_OOS_LEVELS, ALPHA_T_OOS_LEVELS
-from sensitivity.utils import update_od_deadlines as _update_od_deadlines
 
-# ── Experiment parameters ───────────────────────────────────────────────────
-N_SCENARIOS = 200          # scenarios per group (Wang uses 200)
+N_SCENARIOS = 200
+SCENARIO_SEED = RHMVSPConfig.seed
 INSTANCE_PATH = "data_real_case/instance.json"
-
-# Parameter combinations (alpha_T, alpha_R).
-# alpha_R is the risk reliability threshold used directly as R >= alpha_R.
-PARAM_GRID = [
-    (alpha_T, alpha_R)
-    for alpha_T in ALPHA_T_OOS_LEVELS
-    for alpha_R in ALPHA_R_OOS_LEVELS
-]
+PARAM_GRID = [(a_t, a_r) for a_t in ALPHA_T_OOS_LEVELS for a_r in ALPHA_R_OOS_LEVELS]
 
 
-def _run_single(config, inst, model_tag):
-    """Run one BAP solve and return dict with metrics."""
-    logger = Logger(level="INFO", log_file=None)
-    solver = BAPSolver(config, json.loads(json.dumps(inst)), logger)
+def _solve_nominal(config, instance, model):
+    """Optimize an ex-ante plan once, before any scenario is observed."""
+    solver = BAPSolver(config, json.loads(json.dumps(instance)), Logger(level="INFO", log_file=None))
+    solution = solver.solve()
+    if solution.get("status") in ("infeasible", "error", None):
+        raise RuntimeError(f"Nominal {model} solve failed: {solution.get('status')}")
+    solution["model"] = model
+    solution["routes"] = format_routing_summary(solution, instance)
+    return solution
 
-    import time
-    t0 = time.time()
-    sol = solver.solve()
-    from sensitivity.utils import print_od_routing, format_routing_summary; print_od_routing(sol, inst, model_tag)
-    elapsed = time.time() - t0
 
-    status = sol.get("status", "unknown")
-    ok = status not in ("infeasible", "error", None)
+def _arc_index(instance):
+    return {(int(a["i"]), int(a["j"]), int(a["mode"])): a for a in instance["network"]["arcs"]}
+
+
+def _evaluate_route(route, scenario, config):
+    """Evaluate one frozen route using scenario-realized time and risk."""
+    arcs_by_key = _arc_index(scenario)
+    transfers = {int(x["node_id"]): x for x in scenario["network"].get("transfer_nodes", [])}
+    engine = UncertaintyEngine(config)
+    departure = float(route.get("departure_time", 0.0))
+    clock = departure
+    supports, reliabilities = [], []
+    previous_mode, continuous_drive = None, 0.0
+
+    for ref in route.get("arcs", []):
+        key = (int(ref["i"]), int(ref["j"]), int(ref["mode"]))
+        arc = arcs_by_key.get(key)
+        if arc is None:
+            return {"valid": False}
+        mode = key[2]
+        if previous_mode is not None and not (previous_mode == mode == 1):
+            transfer_time = config.transfer_time_hours(previous_mode, mode)
+            supports.append((transfer_time,) * 4)
+            node = transfers.get(key[0])
+            if node:
+                belief = "gamma_rr" if previous_mode == mode == 2 else "gamma_ir"
+                reliabilities.append(1.0 - float(node.get(belief, 0.0)))
+            clock += transfer_time
+            continuous_drive = 0.0
+
+        a = float(arc.get("time_a", 0.0))
+        b = float(arc.get("time_b", a))
+        c = float(arc.get("time_c", b))
+        d = float(arc.get("time_d", c))
+        support = (a, b, c, d)
+        supports.append(support)
+        duration = sum(support) / 4.0
+        reliabilities.append(engine.arc_reliability(
+            float(arc.get("alpha", 0.0)), clock,
+            time_dependent=True, fuzzy_duration=support,
+        ))
+        clock += duration
+        if mode == 1:
+            rest, continuous_drive = engine.road_drive_transition(continuous_drive, duration)
+            supports.append((rest,) * 4)
+            clock += rest
+        else:
+            continuous_drive = 0.0
+        previous_mode = mode
+
+    if not supports:
+        return {"valid": False}
+    totals = [departure + sum(values) for values in zip(*supports)]
+    deadline = min(float(scenario["od_pairs"][int(route["od_idx"])]["time_window_end"]), float(config.T_max))
+    time_reliability = TrapezoidalFuzzy(*totals).uncertain_measure_leq(deadline)
+    risk_reliability = min(reliabilities) if reliabilities else 1.0
+    return {"valid": True, "risk_reliability": risk_reliability,
+            "time_reliability": time_reliability, "risk": 1.0 - risk_reliability,
+            "time": totals[-1]}
+
+
+def _evaluate_fixed_plan(solution, scenario, config, alpha_t, alpha_r):
+    """Evaluate frozen route/capacity decisions without re-optimization."""
+    routes = solution.get("transport_routes", [])
+    route_results = [_evaluate_route(route, scenario, config) for route in routes]
+    valid = [result for result in route_results if result.get("valid")]
+    capacity = {int(x["od_idx"]): float(x.get("delivered", 0.0))
+                for x in solution.get("s2_allocation_details", [])}
+    total_demand = total_delivered = unmet = 0.0
+    for od_idx, od in enumerate(scenario["od_pairs"]):
+        demand = float(od["demand"])
+        delivered = min(demand, capacity.get(od_idx, 0.0))
+        total_demand += demand
+        total_delivered += delivered
+        unmet += demand - delivered
+    fixed_cost = sum(float(solution.get(k, 0.0) or 0.0)
+                     for k in ("transport_cost", "transfer_cost", "reposition_cost"))
+    has_valid_transport = bool(routes) and len(valid) == len(routes)
+    risk_rel = min((x["risk_reliability"] for x in valid), default=None)
+    time_rel = min((x["time_reliability"] for x in valid), default=None)
+    service_failure = unmet > config.tolerance or len(valid) != len(routes)
     return {
-        "cost": sol.get("total_cost") if ok else None,
-        "network_risk_reliability": sol.get("network_risk_reliability") if ok else None,
-        "network_time_reliability": sol.get("network_time_reliability") if ok else None,
-        "network_risk": sol.get("network_risk", 0.0) if ok else None,
-        "network_time": sol.get("network_time", 0.0) if ok else None,
-        "status": status,
-        "elapsed": round(elapsed, 2),
-        "model": model_tag,
-        "routes": format_routing_summary(sol, inst),
+        "cost": fixed_cost + config.c_unmet_penalty * unmet,
+        "transport_cost": float(solution.get("transport_cost", 0.0) or 0.0),
+        "transfer_cost": float(solution.get("transfer_cost", 0.0) or 0.0),
+        "reposition_cost": float(solution.get("reposition_cost", 0.0) or 0.0),
+        "unmet_penalty": config.c_unmet_penalty * unmet,
+        "network_risk_reliability": risk_rel,
+        "network_time_reliability": time_rel,
+        # Risk, time, and their reliabilities are undefined when the nominal
+        # plan dispatches no valid transport route.  Do not encode that state
+        # as the fictitious extremes risk=1 or time=0.
+        "network_risk": max((x["risk"] for x in valid), default=None),
+        "network_time": max((x["time"] for x in valid), default=None),
+        "unmet_demand": unmet,
+        "delivery_ratio": total_delivered / total_demand if total_demand else 1.0,
+        "service_failure": int(service_failure),
+        "risk_violation": (int(risk_rel + config.tolerance < alpha_r)
+                           if has_valid_transport else None),
+        "time_violation": (int(time_rel + config.tolerance < alpha_t)
+                           if has_valid_transport else None),
+        "status": ("no_feasible_transport_plan" if not has_valid_transport
+                   else "service_failure" if service_failure else "evaluated"),
     }
+
+
+RESULT_FIELDS = ["cost", "transport_cost", "transfer_cost", "reposition_cost",
+                 "unmet_penalty", "network_risk_reliability", "network_time_reliability",
+                 "network_risk", "network_time", "unmet_demand", "delivery_ratio",
+                 "service_failure", "risk_violation", "time_violation"]
+
+
+def _write_row(writer, label, alpha_t, alpha_r, scenario_id, model, result):
+    writer.writerow([label,
+                     format_csv_value("alpha_T", alpha_t) if alpha_t is not None else "",
+                     format_csv_value("alpha_R", alpha_r) if alpha_r is not None else "",
+                     scenario_id, model,
+                     *[format_csv_value(field, result[field]) for field in RESULT_FIELDS],
+                     result["status"]])
 
 
 def run_out_of_sample():
-    """
-    Out-of-sample robustness test: MR (Model with Reliability) vs MW (Model Without).
-
-    For each (alpha_T, alpha_R) group:
-      1. Solve MR (with reliability constraints) on original → S_mr
-      2. Solve MW (skip risk + time reliability) on original → S_mw
-      3. Generate N Monte Carlo perturbed scenarios (demand + time + risk)
-      4. Re-solve both models on each perturbed scenario
-      5. Compare total cost distribution via violin + boxplot
-
-    The MW model ignores risk and time reliability constraints during
-    optimization. Its solutions are cheaper but may violate safety/time
-    requirements under uncertainty. The MR model accounts for these
-    constraints, providing more robust solutions.
-    """
-
-    with open(INSTANCE_PATH) as f:
-        base_instance = json.load(f)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    exp_dir = os.path.join("results", f"out_of_sample_{timestamp}")
+    with open(INSTANCE_PATH, encoding="utf-8") as handle:
+        base_instance = json.load(handle)
+    exp_dir = os.path.join("results", f"out_of_sample_{datetime.now():%Y%m%d_%H%M%S}")
     os.makedirs(exp_dir, exist_ok=True)
 
-    from src.utils.logging import Tee
-    tee = Tee(os.path.join(exp_dir, "experiment.log"))
-    sys.stdout = tee
+    plans = []
+    for alpha_t, alpha_r in PARAM_GRID:
+        config = RHMVSPConfig()
+        config.alpha_T, config.alpha_R = alpha_t, alpha_r
+        config.time_limit, config.solver_name = 120, "gurobi"
+        nominal = json.loads(json.dumps(base_instance))
+        update_od_deadlines(nominal, config)
+        label = f"({format_alpha_T(alpha_t)}, {format_alpha_R(alpha_r)})"
+        plans.append((label, alpha_t, alpha_r, config, _solve_nominal(config, nominal, "MR")))
 
-    # Save experiment metadata
-    meta = {
-        "n_scenarios": N_SCENARIOS,
-        "param_grid": [(aT, am) for aT, am in PARAM_GRID],
-        "instance": INSTANCE_PATH,
-        "mw_config": {
-            "skip_risk_constraint": True,
-            "alpha_T": 0.0,
-            "alpha_R": 0.0,
-        },
-    }
-    with open(os.path.join(exp_dir, "meta.json"), "w") as f:
-        json.dump(meta, f, indent=2)
+    mw_config = RHMVSPConfig()
+    mw_config.alpha_T = mw_config.alpha_R = 0.0
+    mw_config.skip_risk_constraint = True
+    mw_config.time_limit, mw_config.solver_name = 120, "gurobi"
+    nominal_mw = json.loads(json.dumps(base_instance))
+    update_od_deadlines(nominal_mw, mw_config)
+    mw_solution = _solve_nominal(mw_config, nominal_mw, "MW")
 
-    alpha_T_values = [item[0] for item in PARAM_GRID]
-    alpha_R_values = [item[1] for item in PARAM_GRID]
-    group_labels = [
-        f"({format_alpha_T(aT)}, {format_alpha_R(aM)})"
-        for aT, aM in PARAM_GRID
-    ]
-    total = len(PARAM_GRID) * N_SCENARIOS * 2
-    done = 0
+    with open(os.path.join(exp_dir, "nominal_plans.json"), "w", encoding="utf-8") as handle:
+        json.dump({"MR": {x[0]: x[4] for x in plans}, "MW": mw_solution}, handle, indent=2)
+    with open(os.path.join(exp_dir, "meta.json"), "w", encoding="utf-8") as handle:
+        json.dump({"design": "fixed-plan common-scenario out-of-sample evaluation",
+                   "n_scenarios": N_SCENARIOS, "scenario_seed": SCENARIO_SEED,
+                   "param_grid": PARAM_GRID, "mw_is_common_baseline": True,
+                   "instance": INSTANCE_PATH}, handle, indent=2)
 
-    # CSV header
+    scenarios = []
+    rng = np.random.default_rng(SCENARIO_SEED)
+    for _ in range(N_SCENARIOS):
+        scenarios.append(sample_scenario(base_instance, rng))
     csv_path = os.path.join(exp_dir, "experiment.csv")
-    cost_cols = ["transport_cost", "transfer_cost",
-                 "reposition_cost", "unmet_penalty"]
-    with open(csv_path, "w", newline="") as f:
-        csv.writer(f).writerow(
-            ["group_label", "alpha_T", "alpha_R", "scenario_id",
-             "model", "cost"] + cost_cols +
-            ["network_risk_reliability", "network_time_reliability", "Network_Risk", "Network_Time", "status", "elapsed_s", "Routes"]
-        )
-
-    for aT, a_R in PARAM_GRID:
-        label = f"({format_alpha_T(aT)}, {format_alpha_R(a_R)})"
-        print(
-            f"\n=== α_T={format_alpha_T(aT)},  "
-            f"α_R={format_alpha_R(a_R)} ==="
-        )
-
-        for s_id in range(N_SCENARIOS):
-            print(f"  [Scenario {s_id+1}/{N_SCENARIOS}] ...", end=" ", flush=True)
-            seed = 1000 * int(aT * 100) + int(a_R * 1000) + s_id
-            rng = np.random.default_rng(seed=seed)
-
-            # ── One shared perturbed scenario (paired design) ────────────────
-            scen = sample_scenario(base_instance, rng)
-
-            # ── MR (Model with Reliability) ─────────────────────────────────
-            cfg_mr = RHMVSPConfig()
-            cfg_mr.alpha_T = aT
-            cfg_mr.alpha_R = a_R
-            cfg_mr.time_limit = 120
-            cfg_mr.solver_name = "gurobi"
-
-            scen_mr = json.loads(json.dumps(scen))
-            _update_od_deadlines(scen_mr, cfg_mr)
-            r_mr = _run_single(cfg_mr, scen_mr, "mr")
-            done += 1
-
-            with open(csv_path, "a", newline="") as f:
-                row = [label, format_csv_value("alpha_T", aT), format_csv_value("alpha_R", a_R), s_id, "MR", format_csv_value("cost", r_mr["cost"])]
-                for col in cost_cols:
-                    row.append(format_csv_value(col, r_mr.get(col)) if r_mr["cost"] is not None else "")
-                row += [format_csv_value("network_risk_reliability", r_mr.get("network_risk_reliability")),
-                        format_csv_value("network_time_reliability", r_mr.get("network_time_reliability")),
-                        format_csv_value("network_risk", r_mr.get("network_risk")),
-                        format_csv_value("network_time", r_mr.get("network_time")),
-                        r_mr["status"], format_csv_value("elapsed_s", r_mr["elapsed"]), r_mr.get("routes", "")]
-                csv.writer(f).writerow(row)
-
-            # ── MW (Model Without reliability) ──────────────────────────────
-            cfg_mw = RHMVSPConfig()
-            cfg_mw.alpha_T = 0.0
-            cfg_mw.alpha_R = 0.0
-            cfg_mw.skip_risk_constraint = True  # disable risk reliability
-            cfg_mw.time_limit = 120
-            cfg_mw.solver_name = "gurobi"
-
-            scen_mw = json.loads(json.dumps(scen))
-            _update_od_deadlines(scen_mw, cfg_mw)
-            r_mw = _run_single(cfg_mw, scen_mw, "mw")
-            done += 1
-
-            with open(csv_path, "a", newline="") as f:
-                row = [label, format_csv_value("alpha_T", aT), format_csv_value("alpha_R", a_R), s_id, "MW", format_csv_value("cost", r_mw["cost"])]
-                for col in cost_cols:
-                    row.append(format_csv_value(col, r_mw.get(col)) if r_mw["cost"] is not None else "")
-                row += [format_csv_value("network_risk_reliability", r_mw.get("network_risk_reliability")),
-                        format_csv_value("network_time_reliability", r_mw.get("network_time_reliability")),
-                        format_csv_value("network_risk", r_mw.get("network_risk")),
-                        format_csv_value("network_time", r_mw.get("network_time")),
-                        r_mw["status"], format_csv_value("elapsed_s", r_mw["elapsed"]), r_mw.get("routes", "")]
-                csv.writer(f).writerow(row)
-
-            # Progress
-            def _f(v, fmt, default="N/A"):
-                return f"{v:{fmt}}" if v is not None else default
-            mr_str = f"CNY {r_mr['cost']:,.0f}" if r_mr["cost"] is not None else r_mr["status"]
-            mw_str = f"CNY {r_mw['cost']:,.0f}" if r_mw["cost"] is not None else r_mw["status"]
-            print(f"  [{done:3d}/{total}]  MR={mr_str:>14s}  MW={mw_str:>14s}  "
-                  f"({r_mr['elapsed']:.1f}s / {r_mw['elapsed']:.1f}s)")
-
-    print(f"CSV saved → {csv_path}")
-
-    print(f"\nResults saved to {exp_dir}/")
-    print(f"Plot with: python sensitivity/plot_out_of_sample.py --csv {csv_path}")
-    tee.close()
-    sys.stdout = sys.__stdout__
+    with open(csv_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["group_label", "alpha_T", "alpha_R", "scenario_id", "model",
+                         "cost", "transport_cost", "transfer_cost", "reposition_cost",
+                         "unmet_penalty", "network_risk_reliability",
+                         "network_time_reliability", "Network_Risk", "Network_Time",
+                         "unmet_demand", "delivery_ratio", "service_failure",
+                         "risk_violation", "time_violation", "status"])
+        for scenario_id, scenario in enumerate(scenarios):
+            mw_result = _evaluate_fixed_plan(mw_solution, scenario, mw_config, 0.0, 0.0)
+            _write_row(writer, "MW baseline", None, None, scenario_id, "MW", mw_result)
+            for label, alpha_t, alpha_r, config, solution in plans:
+                result = _evaluate_fixed_plan(solution, scenario, config, alpha_t, alpha_r)
+                _write_row(writer, label, alpha_t, alpha_r, scenario_id, "MR", result)
+    print(f"Fixed-plan out-of-sample results saved to {csv_path}")
     return exp_dir
 
 
 if __name__ == "__main__":
-    print("Out-of-Sample Test: MR (Model with Reliability) vs MW (Model Without)")
-    print(f"  N={N_SCENARIOS} scenarios × {len(PARAM_GRID)} groups")
-    print(f"  Instance: {INSTANCE_PATH}")
-    print("=" * 65)
-    exp_dir = run_out_of_sample()
-    print(f"\nDone! Data are in {exp_dir}/experiment.csv")
+    run_out_of_sample()

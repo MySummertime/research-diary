@@ -114,18 +114,18 @@ def plot_from_csv(csv_path: str, output_dir: str = None):
 
         fig, ax = plt.subplots(figsize=(7.4, 4.8))
 
-        ax.axvline(mw_baseline, color=C_MW, linestyle="--", linewidth=1.5,
+        ax.axvline(mw_baseline, color=C_MW, linestyle="--", linewidth=4,
                    label="MW", zorder=1)
         for y, mr_value, gap in zip(y_pos, mr, gaps):
             ax.plot([mr_value, mw_baseline], [y, y], color="#8A8A8A",
-                    linewidth=1.25, zorder=2)
+                    linewidth=2.5, zorder=2)
             ax.text(
                 (mr_value + mw_baseline) / 2.0, y - 0.16, f"{gap:+.2f}%",
-                ha="center", va="bottom", fontsize=8.5,
+                ha="center", va="bottom", fontsize=14,
                 color="#4A4A4A", zorder=4,
             )
-        ax.scatter(mr, y_pos, color=C_MR, marker="o", s=52,
-                   edgecolor="white", linewidth=0.6, label="MR", zorder=3)
+        ax.scatter(mr, y_pos, color=C_MR, marker="o", s=110,
+                   edgecolor="white", linewidth=1.0, label="MR", zorder=3)
 
         ax.set_yticks(y_pos)
         ax.set_yticklabels(x_labels, fontsize=10)

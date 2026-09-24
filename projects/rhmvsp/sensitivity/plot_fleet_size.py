@@ -27,7 +27,7 @@ def plot_from_csv(csv_path: str, output_dir: str | None = None) -> None:
         r_risk_vals=[float(r["network_risk_reliability"]) for r in rows],
         r_time_vals=[float(r["network_time_reliability"]) for r in rows],
         save_path=os.path.join(output_dir, "fleet_sensitivity"),
-        y1_label=r"$R_{risk}$", y2_label=r"$R_{time}$",
+        y1_label="Risk reliability", y2_label="Time reliability",
         y1_title="Risk reliability", y2_title="Time reliability")
     dual_y_axis(
         x_label="Fleet size", x_vals=x,
